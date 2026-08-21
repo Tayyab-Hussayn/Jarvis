@@ -74,7 +74,6 @@ export function ActivityView() {
 
   return (
     <Screen
-      title="Activity"
       subtitle="Everything Brahma actually did — read this first when something looks wrong."
       actions={<Button onClick={() => void load(prefix)}>Refresh</Button>}
     >
@@ -91,12 +90,36 @@ export function ActivityView() {
               </Chip>
             ))}
           </div>
-          <Input
-            value={search}
-            onChange={setSearch}
-            placeholder="Filter…"
-            className="ml-auto w-48"
-          />
+          <div className="ml-auto flex items-center gap-2">
+            {(prefix || search) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPrefix("");
+                  setSearch("");
+                }}
+                className="rounded-[var(--radius-full)] border px-2.5 py-1 text-[length:var(--text-xs)]"
+                style={{
+                  borderColor: "var(--accent)",
+                  color: "var(--accent)",
+                  background: "var(--accent-dim)",
+                }}
+                title="Clear filters"
+              >
+                {[prefix && "type", search && "text"].filter(Boolean).length} filter
+                {[prefix, search].filter(Boolean).length > 1 ? "s" : ""} · clear
+              </button>
+            )}
+            <span className="text-[length:var(--text-xs)] text-[var(--text-faint)]">
+              {visible.length} of {entries.length}
+            </span>
+            <Input
+              value={search}
+              onChange={setSearch}
+              placeholder="Filter…"
+              className="w-44"
+            />
+          </div>
         </div>
 
         {error && <Empty>Could not read the audit log: {error}</Empty>}

@@ -52,11 +52,10 @@ export function AppsView({ run }: { run: RunSkill }) {
     });
   }, [data, search, category]);
 
-  if (error) return <Screen title="Apps"><Empty>Could not read apps: {error}</Empty></Screen>;
+  if (error) return <Screen><Empty>Could not read apps: {error}</Empty></Screen>;
 
   return (
     <Screen
-      title="Apps"
       subtitle={`${data?.apps.length ?? 0} desktop entries · packages and games`}
       actions={
         <>

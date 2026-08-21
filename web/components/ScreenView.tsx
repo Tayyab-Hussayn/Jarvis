@@ -25,7 +25,6 @@ export function ScreenView({ run }: { run: RunSkill }) {
 
   return (
     <Screen
-      title="Screen & Web"
       subtitle="Look at the display, drive input, search the web."
     >
       <div className="space-y-4 overflow-y-auto pb-6">

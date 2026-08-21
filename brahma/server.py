@@ -405,8 +405,15 @@ def _state_snapshot() -> dict[str, Any]:
             "available": _provider_available(provider),
             "cooling": llm._is_cooling(provider.name),
         })
+    import socket as _socket
+
+    hostname = ""
+    with contextlib.suppress(Exception):
+        hostname = _socket.gethostname()
+
     return {
         "assistant_name": config.get("assistant_name", "Brahma"),
+        "hostname": hostname,
         "skills": len(registry.all_skills()),
         "provider": config.get("llm.provider", ""),
         "model": config.get("llm.cline_model", ""),
@@ -519,6 +526,31 @@ def _apps_snapshot() -> dict[str, Any]:
     }
 
 
+# psutil's cpu_percent measures usage *since the previous call on the same
+# object*, so the very first call always returns 0.0. Without priming, a
+# freshly started server served a process table where every row was 0.0 —
+# "sort by CPU" degenerated to PID order and the screen filled with idle
+# kernel threads. Keeping the Process objects alive between requests is what
+# makes the reading real; rebuilding them each time resets the measurement.
+_PROC_CACHE: dict[int, Any] = {}
+_PROC_LOCK = threading.Lock()
+
+
+def prime_cpu_counters() -> None:
+    """Take the throwaway first sample so the first real request has numbers."""
+    try:
+        import psutil
+    except ImportError:
+        return
+    with contextlib.suppress(Exception):
+        psutil.cpu_percent(interval=None)
+    with _PROC_LOCK:
+        for proc in psutil.process_iter():
+            with contextlib.suppress(Exception):
+                proc.cpu_percent(interval=None)
+                _PROC_CACHE[proc.pid] = proc
+
+
 def _processes_snapshot(*, sort: str = "cpu", limit: int = 40) -> dict[str, Any]:
     try:
         import psutil
@@ -526,24 +558,41 @@ def _processes_snapshot(*, sort: str = "cpu", limit: int = 40) -> dict[str, Any]
         return {"available": False, "processes": []}
 
     rows: list[dict[str, Any]] = []
-    for proc in psutil.process_iter(
-        ["pid", "name", "username", "cpu_percent", "memory_percent", "status"]
-    ):
-        try:
-            info = proc.info
-            rows.append({
-                "pid": info.get("pid"),
-                "name": info.get("name") or "",
-                "user": info.get("username") or "",
-                "cpu": round(float(info.get("cpu_percent") or 0), 1),
-                "memory": round(float(info.get("memory_percent") or 0), 1),
-                "status": info.get("status") or "",
-            })
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
+    seen: set[int] = set()
+
+    with _PROC_LOCK:
+        for proc in psutil.process_iter(["pid"]):
+            pid = proc.info.get("pid")
+            if pid is None:
+                continue
+            seen.add(pid)
+            # Reuse the cached object so cpu_percent has a previous sample to
+            # measure against. A brand-new process legitimately reads 0.0 once.
+            cached = _PROC_CACHE.get(pid)
+            if cached is None:
+                cached = proc
+                _PROC_CACHE[pid] = proc
+            try:
+                with cached.oneshot():
+                    rows.append({
+                        "pid": pid,
+                        "name": cached.name(),
+                        "user": cached.username(),
+                        "cpu": round(cached.cpu_percent(interval=None), 1),
+                        "memory": round(cached.memory_percent(), 1),
+                        "status": cached.status(),
+                    })
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                _PROC_CACHE.pop(pid, None)
+                continue
+
+        # Drop cache entries for processes that have exited, or the dict grows
+        # without bound on a long-running server.
+        for dead in [pid for pid in _PROC_CACHE if pid not in seen]:
+            _PROC_CACHE.pop(dead, None)
 
     key = "memory" if sort == "memory" else "cpu"
-    rows.sort(key=lambda r: r[key], reverse=True)
+    rows.sort(key=lambda r: (r[key], r["cpu"]), reverse=True)
     return {"available": True, "total": len(rows), "processes": rows[:limit]}
 
 
@@ -655,6 +704,9 @@ def serve(
     url = f"http://{host}:{port}/?token={token}"
 
     registry.load_skills()
+    # Take the throwaway first CPU sample now rather than serving zeros to the
+    # first request that asks.
+    prime_cpu_counters()
     app = create_app(token)
 
     print(f"Brahma Echo web UI on {url}")

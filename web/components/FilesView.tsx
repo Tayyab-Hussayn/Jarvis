@@ -17,7 +17,6 @@ export function FilesView({ run }: { run: RunSkill }) {
 
   return (
     <Screen
-      title="Files"
       subtitle="Browse, search and measure. Deletions and moves always ask first."
     >
       <div className="space-y-4 overflow-y-auto pb-6">

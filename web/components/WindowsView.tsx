@@ -34,12 +34,12 @@ export function WindowsView({ run }: { run: RunSkill }) {
     reload();
   };
 
-  if (error) return <Screen title="Windows"><Empty>Could not read windows: {error}</Empty></Screen>;
-  if (!data) return <Screen title="Windows"><Empty>Reading windows…</Empty></Screen>;
+  if (error) return <Screen><Empty>Could not read windows: {error}</Empty></Screen>;
+  if (!data) return <Screen><Empty>Reading windows…</Empty></Screen>;
 
   if (!data.available) {
     return (
-      <Screen title="Windows">
+      <Screen>
         <Empty>
           No supported compositor detected{data.error ? ` — ${data.error}` : ""}. Window
           control needs Hyprland, Sway, or an X11 session with wmctrl.
@@ -54,7 +54,6 @@ export function WindowsView({ run }: { run: RunSkill }) {
 
   return (
     <Screen
-      title="Windows"
       subtitle={`${data.windows.length} open across ${data.workspaces.length} workspaces · ${data.backend}`}
       actions={
         <>

@@ -129,29 +129,42 @@ export function Stat({
           <span className="text-[length:var(--text-sm)] text-[var(--text-muted)]">{unit}</span>
         )}
       </div>
-      {detail && (
-        <div className="mt-1 text-[length:var(--text-xs)] text-[var(--text-muted)]">{detail}</div>
-      )}
-      {spark && spark.length > 1 && <Sparkline values={spark} colour={colour} />}
-      {percent !== undefined && (
-        <div
-          className="mt-3 h-1.5 overflow-hidden rounded-[var(--radius-full)] bg-[var(--surface-sunken)]"
-          role="progressbar"
-          aria-valuenow={Math.round(percent)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label={label}
-        >
-          <div
-            className="h-full rounded-[var(--radius-full)]"
-            style={{
-              width: `${Math.min(100, Math.max(0, percent))}%`,
-              background: colour,
-              transition: `width var(--motion-base) var(--ease)`,
-            }}
-          />
-        </div>
-      )}
+      <div className="mt-1 min-h-[1.15rem] text-[length:var(--text-xs)] text-[var(--text-muted)]">
+        {detail}
+      </div>
+
+      {/* Every card reserves the same meter area whether or not it has data.
+          Previously CPU had a sparkline + bar, Disk a bar only and Uptime
+          neither, so one row of cards showed three different anatomies — and
+          the sparkline cards visibly reflowed seconds after load as history
+          accumulated. Reserving the space keeps the row stable and uniform. */}
+      <div className="mt-2.5 h-8">
+        {spark && spark.length >= 5 ? (
+          <Sparkline values={spark} colour={colour} />
+        ) : (
+          <div className="flex h-full items-end">
+            {percent !== undefined && (
+            <div
+              className="h-1.5 w-full overflow-hidden rounded-[var(--radius-full)] bg-[var(--surface-sunken)]"
+              role={percent !== undefined ? "progressbar" : undefined}
+              aria-valuenow={percent !== undefined ? Math.round(percent) : undefined}
+              aria-valuemin={percent !== undefined ? 0 : undefined}
+              aria-valuemax={percent !== undefined ? 100 : undefined}
+              aria-label={percent !== undefined ? label : undefined}
+            >
+              <div
+                className="h-full rounded-[var(--radius-full)]"
+                style={{
+                  width: `${Math.min(100, Math.max(0, percent))}%`,
+                  background: colour,
+                  transition: `width var(--motion-base) var(--ease)`,
+                }}
+              />
+            </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -169,7 +182,7 @@ export function Sparkline({ values, colour }: { values: number[]; colour: string
     .join(" ");
   return (
     <svg
-      className="mt-2 h-8 w-full"
+      className="h-8 w-full"
       viewBox="0 0 100 100"
       preserveAspectRatio="none"
       aria-hidden

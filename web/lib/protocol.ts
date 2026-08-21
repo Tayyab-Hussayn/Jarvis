@@ -44,6 +44,7 @@ export interface ProviderState {
 
 export interface StateSnapshot {
   assistant_name: string;
+  hostname: string;
   skills: number;
   provider: string;
   model: string;

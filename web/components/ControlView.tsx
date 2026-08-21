@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { useResource, useSkill, type RunSkill } from "@/lib/useApi";
+import { useSkill, type RunSkill } from "@/lib/useApi";
 import type { SystemSnapshot } from "@/lib/protocol";
 import { Button, Input, Panel, Stat } from "./ui";
 import { ActionRow, SkillOutput } from "./SkillOutput";
@@ -65,9 +65,14 @@ function Slider({
   );
 }
 
-export function ControlView({ run }: { run: RunSkill }) {
+export function ControlView({
+  run,
+  system,
+}: {
+  run: RunSkill;
+  system: SystemSnapshot | null;
+}) {
   const skill = useSkill(run);
-  const { data: system } = useResource<SystemSnapshot>("/api/system", 5000);
   const [volume, setVolume] = useState(50);
   const [brightness, setBrightness] = useState(80);
   const [loaded, setLoaded] = useState(false);
@@ -94,7 +99,6 @@ export function ControlView({ run }: { run: RunSkill }) {
 
   return (
     <Screen
-      title="Control"
       subtitle="Audio, display, network and power. Shutdown and logout always confirm."
     >
       <div className="space-y-4 overflow-y-auto pb-6">

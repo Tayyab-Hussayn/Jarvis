@@ -40,7 +40,8 @@ body {
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
+  /* No border-radius here: forcing one made the ring disagree with pills and
+     cards. Letting it inherit the element's own radius keeps it correct. */
 }
 
 /* Numerals in stats and tables must not jitter as values tick. */
@@ -66,6 +67,17 @@ body {
   }
   50% {
     opacity: 0.3;
+  }
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 

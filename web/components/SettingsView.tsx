@@ -3,31 +3,196 @@
 /**
  * Configures the *assistant*. Control configures the machine.
  *
- * Key material never reaches this page — the server redacts it to `***`, and
+ * This screen used to be read-only, which quietly undermined the whole
+ * premise — an assistant you cannot configure from its own interface is not
+ * one you are in control of. Scalar values are now editable in place.
+ *
+ * Key material never reaches the browser: the server redacts it to `***`, and
  * `_deep_merge` drops that placeholder on write so saving cannot overwrite a
- * real key with the mask.
+ * real key with the mask. Redacted fields are rendered locked for the same
+ * reason — there is nothing here to edit, only something to destroy.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/session";
-import { Button, Empty, Field, Panel } from "./ui";
+import { Button, Chip, Empty, Input, Panel, SectionTitle } from "./ui";
 import { Screen } from "./Shell";
 
-type Settings = Record<string, unknown>;
+type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
+type Settings = Record<string, Json>;
 
-function flatten(value: unknown, prefix = ""): [string, string][] {
-  if (value === null || value === undefined) return [[prefix, "—"]];
-  if (typeof value !== "object") return [[prefix, String(value)]];
-  if (Array.isArray(value)) return [[prefix, value.length ? value.join(", ") : "—"]];
-  return Object.entries(value as Settings).flatMap(([key, inner]) =>
-    flatten(inner, prefix ? `${prefix}.${key}` : key),
+const ACRONYMS = new Set([
+  "tts", "stt", "llm", "cpu", "gpu", "api", "url", "id", "ui", "os", "ip",
+  "cli", "ttl", "vad",
+]);
+
+/** `breaker_cooldown_seconds` -> `Breaker cooldown seconds`, `tts_voice` -> `TTS voice`. */
+function humanise(key: string): string {
+  return key
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .split(" ")
+    .map((word, index) => {
+      if (ACRONYMS.has(word.toLowerCase())) return word.toUpperCase();
+      return index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word;
+    })
+    .join(" ");
+}
+
+const GROUP_NAMES: Record<string, string> = {
+  llm: "Language model",
+  stt: "Speech to text",
+  tts: "Text to speech",
+  ui: "Interface",
+};
+
+function groupName(key: string): string {
+  return GROUP_NAMES[key] ?? humanise(key);
+}
+
+interface Row {
+  path: string[];
+  key: string;
+  value: Json;
+}
+
+/** Flatten to editable leaves, keeping the path so a patch can be rebuilt. */
+function leaves(value: Json, path: string[] = []): Row[] {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return Object.entries(value).flatMap(([k, v]) => leaves(v, [...path, k]));
+  }
+  return [{ path, key: path[path.length - 1] ?? "", value }];
+}
+
+/** Rebuild a nested patch object from a dotted path. */
+function nest(path: string[], value: Json): Settings {
+  return path.reduceRight<Json>((acc, key) => ({ [key]: acc }), value) as Settings;
+}
+
+function displayValue(value: Json): string {
+  if (value === null || value === undefined || value === "") return "";
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value);
+}
+
+function EditableRow({
+  row,
+  onSave,
+  saving,
+}: {
+  row: Row;
+  onSave: (path: string[], value: Json) => void;
+  saving: boolean;
+}) {
+  const original = displayValue(row.value);
+  const [draft, setDraft] = useState(original);
+  const [editing, setEditing] = useState(false);
+
+  useEffect(() => setDraft(original), [original]);
+
+  const locked = row.value === "***";
+  const isBool = typeof row.value === "boolean";
+  const isList = Array.isArray(row.value);
+  const dirty = draft !== original;
+
+  const commit = () => {
+    if (!dirty) {
+      setEditing(false);
+      return;
+    }
+    let next: Json = draft;
+    if (typeof row.value === "number") {
+      const parsed = Number(draft);
+      next = Number.isNaN(parsed) ? draft : parsed;
+    } else if (isList) {
+      next = draft.split(",").map((v) => v.trim()).filter(Boolean);
+    }
+    onSave(row.path, next);
+    setEditing(false);
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-4 py-1.5">
+      <span className="min-w-0 shrink-0 text-[length:var(--text-sm)] text-[var(--text-muted)]">
+        {humanise(row.key)}
+      </span>
+
+      {locked ? (
+        <span
+          className="text-[length:var(--text-xs)]"
+          style={{ color: "var(--moderate)" }}
+          title="Stored on disk; never sent to the browser"
+        >
+          set · hidden
+        </span>
+      ) : isBool ? (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => onSave(row.path, !row.value)}
+          role="switch"
+          aria-checked={row.value === true}
+          aria-label={humanise(row.key)}
+          className="relative h-5 w-9 shrink-0 rounded-[var(--radius-full)] disabled:opacity-50"
+          style={{
+            background: row.value ? "var(--accent)" : "var(--surface-sunken)",
+            border: "1px solid var(--border-strong)",
+            transition: "background var(--motion-fast) var(--ease)",
+          }}
+        >
+          <span
+            className="absolute top-1/2 block h-3.5 w-3.5 -translate-y-1/2 rounded-full"
+            style={{
+              left: row.value ? "calc(100% - 1.05rem)" : "0.15rem",
+              background: row.value ? "var(--accent-contrast)" : "var(--text-faint)",
+              transition: "left var(--motion-fast) var(--ease)",
+            }}
+          />
+        </button>
+      ) : editing ? (
+        <span className="flex min-w-0 flex-1 items-center justify-end gap-2">
+          <input
+            autoFocus
+            value={draft}
+            disabled={saving}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+              if (e.key === "Escape") {
+                setDraft(original);
+                setEditing(false);
+              }
+            }}
+            className="w-full max-w-xs rounded-[var(--radius-sm)] border border-[var(--accent)] bg-[var(--surface-sunken)] px-2 py-1 text-right font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] outline-none"
+          />
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          title="Click to edit"
+          className="min-w-0 truncate rounded-[var(--radius-sm)] border border-transparent px-2 py-0.5 text-right font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-sunken)]"
+          style={{
+            transition: "all var(--motion-fast) var(--ease)",
+            // An unset value rendered as blank space made the row look broken.
+            color: original ? "var(--text)" : "var(--text-faint)",
+          }}
+        >
+          {original || "not set"}
+        </button>
+      )}
+    </div>
   );
 }
 
 export function SettingsView() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState("");
+  const [search, setSearch] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -43,71 +208,146 @@ export function SettingsView() {
     void load();
   }, [load]);
 
-  if (error) {
+  const save = useCallback(
+    async (path: string[], value: Json) => {
+      setSaving(true);
+      try {
+        const data = await api<{ settings: Settings }>("/api/settings", {
+          method: "POST",
+          body: JSON.stringify(nest(path, value)),
+        });
+        setSettings(data.settings);
+        setSaved(path.join("."));
+        setError("");
+        setTimeout(() => setSaved(""), 2000);
+      } catch (exc) {
+        setError(exc instanceof Error ? exc.message : String(exc));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [],
+  );
+
+  const groups = useMemo(() => {
+    if (!settings) return [];
+    const query = search.trim().toLowerCase();
+    const out: { name: string; key: string; rows: Row[] }[] = [];
+
+    const scalars = Object.entries(settings).filter(
+      ([, v]) => v === null || typeof v !== "object" || Array.isArray(v),
+    );
+    if (scalars.length) {
+      out.push({
+        name: "General",
+        key: "general",
+        rows: scalars.flatMap(([k, v]) => leaves(v, [k])),
+      });
+    }
+    for (const [k, v] of Object.entries(settings)) {
+      if (v !== null && typeof v === "object" && !Array.isArray(v)) {
+        out.push({ name: groupName(k), key: k, rows: leaves(v, [k]) });
+      }
+    }
+    if (!query) return out;
+    return out
+      .map((g) => ({
+        ...g,
+        rows: g.rows.filter(
+          (r) =>
+            r.key.toLowerCase().includes(query) ||
+            g.name.toLowerCase().includes(query),
+        ),
+      }))
+      .filter((g) => g.rows.length > 0);
+  }, [settings, search]);
+
+  if (error && !settings) {
     return (
-      <Screen title="Settings">
+      <Screen>
         <Empty>Could not read settings: {error}</Empty>
       </Screen>
     );
   }
   if (!settings) {
     return (
-      <Screen title="Settings">
+      <Screen>
         <Empty>Loading…</Empty>
       </Screen>
     );
   }
 
-  const groups = Object.entries(settings).filter(
-    ([, value]) => typeof value === "object" && value !== null && !Array.isArray(value),
-  );
-  const scalars = Object.entries(settings).filter(
-    ([, value]) => typeof value !== "object" || value === null || Array.isArray(value),
-  );
-
   return (
     <Screen
-      title="Settings"
-      subtitle="How the assistant itself is configured. Edited at ~/.config/brahma-echo/settings.json."
-      actions={<Button onClick={() => void load()}>Reload</Button>}
+      subtitle="Stored at ~/.config/brahma-echo/settings.json. Changes save immediately."
+      actions={
+        <>
+          {saved && (
+            <Chip active tone="var(--accent)">
+              saved {humanise(saved.split(".").pop() ?? "")}
+            </Chip>
+          )}
+          <Input
+            value={search}
+            onChange={setSearch}
+            placeholder="Search settings…"
+            className="w-52"
+          />
+          <Button onClick={() => void load()}>Reload</Button>
+        </>
+      }
     >
-      <div className="grid gap-4 overflow-y-auto pb-6 lg:grid-cols-2">
-        {scalars.length > 0 && (
-          <Panel title="General">
-            <dl className="space-y-1.5">
-              {scalars.flatMap(([key, value]) =>
-                flatten(value, key).map(([path, shown]) => (
-                  <Field key={path} label={path} value={shown} />
-                )),
-              )}
-            </dl>
-          </Panel>
+      <div className="min-h-0 overflow-y-auto pb-6">
+        {error && (
+          <div
+            className="mb-4 rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"
+            style={{
+              borderLeftColor: "var(--critical)",
+              background: "var(--critical-dim)",
+              color: "var(--critical)",
+            }}
+          >
+            {error}
+          </div>
         )}
 
-        {groups.map(([group, value]) => (
-          <Panel key={group} title={group}>
-            <dl className="space-y-1.5">
-              {flatten(value).map(([path, shown]) => (
-                <Field
-                  key={path}
-                  label={path}
-                  value={shown}
-                  tone={shown === "***" ? "var(--moderate)" : undefined}
-                />
-              ))}
-            </dl>
-          </Panel>
-        ))}
+        {groups.length === 0 ? (
+          <Empty>Nothing matches “{search}”.</Empty>
+        ) : (
+          // `items-start` so a 2-row panel does not stretch to match a
+          // 14-row one beside it, which left a large empty box.
+          <div className="grid items-start gap-4 lg:grid-cols-2">
+            {groups.map((group) => (
+              <Panel key={group.key} title={group.name}>
+                <div className="divide-y divide-[var(--border)]">
+                  {group.rows.map((row) => (
+                    <EditableRow
+                      key={row.path.join(".")}
+                      row={row}
+                      onSave={save}
+                      saving={saving}
+                    />
+                  ))}
+                </div>
+              </Panel>
+            ))}
+          </div>
+        )}
 
-        <Panel title="Editing" className="lg:col-span-2">
+        <div className="mt-4">
+          <SectionTitle>Notes</SectionTitle>
           <p className="text-[length:var(--text-sm)] text-[var(--text-muted)]">
-            This screen is read-only for now. Values marked{" "}
-            <span style={{ color: "var(--moderate)" }}>***</span> are credentials
-            the server refuses to send to the browser at all. Edit
-            settings.json directly, or ask Brahma in the Console — it has skills
-            for the model and provider.
+            Values shown as{" "}
+            <span style={{ color: "var(--moderate)" }}>set · hidden</span> are
+            credentials the server refuses to send to the browser. Editing them
+            here is not possible by design; change them in{" "}
+            <code className="font-[family-name:var(--font-mono)]">
+              ~/.config/brahma-echo/api_keys.json
+            </code>
+            . Some changes — provider and model in particular — take effect on the
+            next request.
           </p>
-        </Panel>
+        </div>
       </div>
     </Screen>
   );

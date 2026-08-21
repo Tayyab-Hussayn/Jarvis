@@ -7,6 +7,7 @@ import { useResource, useSkill, type RunSkill } from "@/lib/useApi";
 import { bytes, duration } from "@/lib/format";
 import { Button, Chip, Empty, Field, Input, Panel, SectionTitle, Stat } from "./ui";
 import { ActionRow, SkillOutput } from "./SkillOutput";
+import { Icon } from "./icons";
 import { Screen } from "./Shell";
 
 const POLL_MS = 3000;
@@ -40,8 +41,13 @@ function useHistory(value: number | undefined, length = SPARK_POINTS): number[] 
   return series;
 }
 
-export function SystemView({ run }: { run: RunSkill }) {
-  const { data: system, error } = useResource<SystemSnapshot>("/api/system", POLL_MS);
+export function SystemView({
+  run,
+  system,
+}: {
+  run: RunSkill;
+  system: SystemSnapshot | null;
+}) {
   const { data: state } = useResource<StateSnapshot>("/api/state");
   const procs = useResource<{ processes: ProcessRow[]; total: number }>(
     "/api/processes?sort=cpu&limit=30",
@@ -54,10 +60,9 @@ export function SystemView({ run }: { run: RunSkill }) {
   const cpuHistory = useHistory(system?.cpu_percent);
   const memHistory = useHistory(system?.memory?.percent);
 
-  if (error) return <Screen title="System"><Empty>Could not read system state: {error}</Empty></Screen>;
-  if (!system) return <Screen title="System"><Empty>Reading system state…</Empty></Screen>;
+  if (!system) return <Screen><Empty>Reading system state…</Empty></Screen>;
   if (!system.available) {
-    return <Screen title="System"><Empty>psutil is not installed.</Empty></Screen>;
+    return <Screen><Empty>psutil is not installed.</Empty></Screen>;
   }
 
   const rows = (procs.data?.processes ?? [])
@@ -66,8 +71,6 @@ export function SystemView({ run }: { run: RunSkill }) {
 
   return (
     <Screen
-      title="System"
-      subtitle={state?.environment.summary}
       actions={
         <>
           <Button onClick={() => void skill.call("system_status", { detailed: true })}>
@@ -158,7 +161,7 @@ export function SystemView({ run }: { run: RunSkill }) {
                   {rows.map((proc) => (
                     <tr
                       key={proc.pid}
-                      className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]"
+                      className="group/row border-t border-[var(--border)] hover:bg-[var(--surface-raised)]"
                     >
                       <td className="max-w-[18rem] truncate px-4 py-1.5 font-[family-name:var(--font-mono)]">
                         {proc.name}
@@ -183,10 +186,12 @@ export function SystemView({ run }: { run: RunSkill }) {
                             await skill.call("kill_process", { target: String(proc.pid) });
                             procs.reload();
                           }}
-                          className="text-[var(--text-faint)] hover:text-[var(--critical)]"
-                          title={`Kill ${proc.name} (${proc.pid})`}
+                          aria-label={`Kill ${proc.name} (pid ${proc.pid})`}
+                          title={`Kill ${proc.name} (${proc.pid}) — asks first`}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] border border-transparent text-[var(--text-faint)] opacity-0 hover:border-[var(--critical)] hover:text-[var(--critical)] focus-visible:opacity-100 group-hover/row:opacity-100"
+                          style={{ transition: "all var(--motion-fast) var(--ease)" }}
                         >
-                          kill
+                          <Icon name="trash" size={14} />
                         </button>
                       </td>
                     </tr>
@@ -229,26 +234,59 @@ export function SystemView({ run }: { run: RunSkill }) {
             </ActionRow>
           </Panel>
 
-          <Panel title="Machine">
+          {/* Machine identity, after the Cardiology reference's patient card:
+              a portrait block that says whose data this is, then the vitals
+              beside it. Here it answers "which machine am I in control of". */}
+          <Panel title="This machine" padded={false}>
             {state && (
-              <dl className="space-y-1.5">
-                <Field label="Distro" value={state.environment.distro} />
-                <Field label="Kernel" value={state.environment.kernel} />
-                <Field
-                  label="Session"
-                  value={`${state.environment.desktop} (${state.environment.session_type})`}
-                />
-                <Field label="Compositor" value={state.environment.compositor} />
-                <Field label="Audio" value={state.environment.audio} />
-                <Field
-                  label="Swap"
-                  value={
-                    system.swap
-                      ? `${bytes(system.swap.used)} / ${bytes(system.swap.total)}`
-                      : "—"
-                  }
-                />
-              </dl>
+              <>
+                <div className="flex items-center gap-3.5 border-b border-[var(--border)] p-4">
+                  <div
+                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[var(--radius)] text-[length:var(--text-lg)] font-bold"
+                    style={{
+                      background: "var(--accent-dim)",
+                      color: "var(--accent)",
+                      border: "1px solid var(--accent-line)",
+                    }}
+                  >
+                    {(state.hostname || state.environment.distro || "?")
+                      .charAt(0)
+                      .toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-[length:var(--text-base)] font-semibold">
+                      {state.hostname || "this machine"}
+                    </div>
+                    <div className="truncate text-[length:var(--text-xs)] text-[var(--text-muted)]">
+                      {state.environment.distro} · up {duration(system.uptime_seconds)}
+                    </div>
+                  </div>
+                  <span
+                    className="ml-auto shrink-0 rounded-[var(--radius-full)] px-2 py-0.5 text-[length:var(--text-xs)] font-medium"
+                    style={{ background: "var(--accent-dim)", color: "var(--accent)" }}
+                  >
+                    {state.skills} skills
+                  </span>
+                </div>
+                <dl className="space-y-1.5 p-4">
+                  <Field label="Kernel" value={state.environment.kernel} />
+                  <Field
+                    label="Session"
+                    value={`${state.environment.desktop} (${state.environment.session_type})`}
+                  />
+                  <Field label="Compositor" value={state.environment.compositor} />
+                  <Field label="Audio" value={state.environment.audio} />
+                  <Field label="Packages" value={state.environment.package_manager} />
+                  <Field
+                    label="Swap"
+                    value={
+                      system.swap
+                        ? `${bytes(system.swap.used)} / ${bytes(system.swap.total)}`
+                        : "—"
+                    }
+                  />
+                </dl>
+              </>
             )}
           </Panel>
         </div>

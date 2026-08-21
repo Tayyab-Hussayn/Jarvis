@@ -723,3 +723,47 @@ def test_run_frame_rejects_a_second_request_while_busy(client):
             if frame["t"] == "turn_end":
                 break
     assert any("already running" in m for m in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# Snapshot correctness
+# ---------------------------------------------------------------------------
+
+def test_processes_snapshot_reports_real_cpu_on_first_call():
+    """psutil's cpu_percent returns 0.0 until it has a previous sample.
+
+    Without priming, a freshly started server served a process table where
+    every row read 0.0 — so "sort by CPU" degenerated to PID order and the
+    screen filled with idle kernel threads. The flagship view lied on load.
+    """
+    import time
+
+    from brahma import server
+
+    server._PROC_CACHE.clear()
+    server.prime_cpu_counters()
+    time.sleep(0.3)          # let something, anything, use a slice of CPU
+
+    snapshot = server._processes_snapshot(limit=50)
+    assert snapshot["available"]
+    assert snapshot["processes"], "no processes returned"
+    assert any(p["cpu"] > 0 for p in snapshot["processes"]), (
+        "every process reported 0.0% CPU — the counters were not primed"
+    )
+
+
+def test_processes_snapshot_prunes_dead_entries():
+    """The cache must not grow without bound on a long-running server."""
+    from brahma import server
+
+    server._PROC_CACHE.clear()
+    server._PROC_CACHE[-1] = object()      # a pid that cannot exist
+    server._processes_snapshot(limit=5)
+    assert -1 not in server._PROC_CACHE
+
+
+def test_state_snapshot_carries_a_hostname():
+    """The top bar names the machine being controlled."""
+    from brahma import server
+
+    assert isinstance(server._state_snapshot()["hostname"], str)

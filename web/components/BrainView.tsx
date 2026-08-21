@@ -69,7 +69,6 @@ export function BrainView({ run }: { run: RunSkill }) {
 
   return (
     <Screen
-      title="Brain"
       subtitle={
         state.data
           ? `${state.data.provider} · ${state.data.skills} skills`

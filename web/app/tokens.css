@@ -59,8 +59,17 @@
   --error: var(--critical);
 
   /* -- type --------------------------------------------------------- */
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", monospace;
+  /* NEVER put `system-ui` or `ui-sans-serif` in this stack.
+     Chrome on Linux does not resolve `ui-sans-serif` to a real face, so it
+     falls through — and on a stock Arch/fontconfig setup `system-ui` resolves
+     to a MONOSPACE face. The result was the entire application rendering in a
+     terminal typeface. Verified by measuring glyph advances: `i` and `W` came
+     back identical under `system-ui`, exactly as under `monospace`.
+     Lead with concrete installed families instead. */
+  --font-sans: Inter, "Noto Sans", Cantarell, Roboto, "Liberation Sans",
+    "DejaVu Sans", "Segoe UI", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "DejaVu Sans Mono",
+    "Liberation Mono", ui-monospace, monospace;
   --text-xs: 0.6875rem;
   --text-sm: 0.8125rem;
   --text-base: 0.9375rem;
@@ -101,11 +110,10 @@
   --ease: cubic-bezier(0.2, 0, 0.2, 1);
 
   /* -- layout ------------------------------------------------------- */
-  --rail-width: 68px;
+  --rail-width: 60px;
+  --rail-width-open: 208px;
   --content-max: 84rem;
-  /* Clearance for the floating dock: its own height plus the gap it
-     sits above the viewport edge, or panels scroll underneath it. */
-  --dock-height: 84px;
+
 }
 
 /* Tailwind v4 reads its palette from these, so `bg-surface`, `text-muted`,

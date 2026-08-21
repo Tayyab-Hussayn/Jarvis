@@ -7,11 +7,13 @@ import type { Connection } from "@/lib/useBrahma";
 import { TurnGraph } from "./TurnGraph";
 import { Button, Empty } from "./ui";
 
+// Four short prompts in an even 2x2 grid. The previous set were full
+// sentences of uneven length and wrapped 3 + 1, leaving a ragged final row.
 const SUGGESTIONS = [
-  "What is using the most disk space in my home directory?",
-  "Which processes are eating CPU right now?",
-  "List my open windows",
-  "Are there any package updates?",
+  { label: "What's using my disk?", prompt: "What is using the most disk space in my home directory?" },
+  { label: "What's eating CPU?", prompt: "Which processes are eating CPU right now?" },
+  { label: "List open windows", prompt: "List my open windows" },
+  { label: "Any package updates?", prompt: "Are there any package updates?" },
 ];
 
 /**
@@ -27,6 +29,7 @@ export function Console({
   messages,
   busy,
   connection,
+  skills,
   onAsk,
   onRespond,
   onReset,
@@ -34,6 +37,7 @@ export function Console({
   messages: Message[];
   busy: boolean;
   connection: Connection;
+  skills?: number;
   onAsk: (text: string) => void;
   onRespond: (confirmId: string, approve: boolean) => void;
   onReset: () => void;
@@ -62,42 +66,50 @@ export function Console({
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollerRef} className="flex-1 space-y-8 overflow-y-auto pr-1 pb-4">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto pr-1">
         {turns.length === 0 ? (
-          <div className="flex h-full flex-col justify-center">
-            <Empty>
-              Ask Brahma something. It has real control over this machine —
-              destructive actions stop and ask you first.
-            </Empty>
-            <div className="mx-auto flex max-w-xl flex-wrap justify-center gap-2">
-              {SUGGESTIONS.map((text) => (
-                <button
-                  key={text}
-                  type="button"
-                  disabled={offline}
-                  onClick={() => onAsk(text)}
-                  className="rounded-[var(--radius-full)] border border-[var(--border)] px-3 py-1.5 text-[length:var(--text-xs)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] disabled:opacity-40"
-                  style={{ transition: "all var(--motion-fast) var(--ease)" }}
-                >
-                  {text}
-                </button>
-              ))}
+          <div className="flex h-full flex-col items-center justify-center">
+            <div className="w-full max-w-md text-center">
+              <h2 className="text-[length:var(--text-xl)] font-semibold tracking-[-0.01em]">
+                What should Brahma do?
+              </h2>
+              <p className="mx-auto mt-2 max-w-sm text-[length:var(--text-sm)] text-[var(--text-muted)]">
+                It has real control over this machine.
+                {typeof skills === "number" ? ` ${skills} skills available.` : ""}{" "}
+                Destructive actions stop and ask you first.
+              </p>
+              <div className="mt-6 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {SUGGESTIONS.map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    disabled={offline}
+                    onClick={() => onAsk(item.prompt)}
+                    className="rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface)] px-3.5 py-2.5 text-left text-[length:var(--text-sm)] text-[var(--text)] hover:border-[var(--accent)] hover:bg-[var(--accent-dim)] hover:text-[var(--accent)] disabled:opacity-40"
+                    style={{ transition: "all var(--motion-fast) var(--ease)" }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         ) : (
-          turns.map((message) => (
-            <TurnGraph
-              key={message.id}
-              message={message}
-              request={requestFor(messages, message.id)}
-              onRespond={onRespond}
-            />
-          ))
+          <div className="space-y-8 pb-4">
+            {turns.map((message) => (
+              <TurnGraph
+                key={message.id}
+                message={message}
+                request={requestFor(messages, message.id)}
+                onRespond={onRespond}
+              />
+            ))}
+          </div>
         )}
         <div ref={endRef} />
       </div>
 
-      <div className="pt-2">
+      <div className="border-t border-[var(--border)] pt-4">
         <div className="flex items-end gap-2">
           <textarea
             value={draft}

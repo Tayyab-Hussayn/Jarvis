@@ -8,6 +8,11 @@
  * directory-index lookups, which turns every deep-link refresh into a
  * trailing-slash question. One route sidesteps that, and the app is small
  * enough that per-screen code splitting would buy nothing.
+ *
+ * Layout is rail | (top bar / content). The floating dock is gone: it occluded
+ * panel content on every screen and competed with the composer. Its contents
+ * moved into the top bar, where they are always visible without covering
+ * anything.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -21,14 +26,24 @@ import { FilesView } from "@/components/FilesView";
 import { Palette } from "@/components/Palette";
 import { ScreenView } from "@/components/ScreenView";
 import { SettingsView } from "@/components/SettingsView";
-import { ConfirmOverlay, Dock, Rail, Screen, VIEWS, type ViewId } from "@/components/Shell";
+import {
+  ConfirmOverlay,
+  Rail,
+  TopBar,
+  VIEWS,
+  type ViewId,
+} from "@/components/Shell";
 import { SystemView } from "@/components/SystemView";
 import { WindowsView } from "@/components/WindowsView";
-import type { SkillInfo } from "@/lib/protocol";
+import type { SkillInfo, StateSnapshot, SystemSnapshot } from "@/lib/protocol";
 import { useResource } from "@/lib/useApi";
 import { useBrahma } from "@/lib/useBrahma";
 
-const IDS = new Set<string>([...VIEWS.map((v) => v.id), "settings"]);
+const IDS = new Set<string>(VIEWS.map((view) => view.id));
+const TITLES: Record<string, string> = Object.fromEntries(
+  VIEWS.map((view) => [view.id, view.label]),
+);
+const RAIL_KEY = "brahma.railExpanded";
 
 function useHashView(): [ViewId, (view: ViewId) => void] {
   const [view, setView] = useState<ViewId>("console");
@@ -68,7 +83,24 @@ export default function Page() {
 
   const [view, setView] = useHashView();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [railExpanded, setRailExpanded] = useState(false);
+
   const skills = useResource<{ skills: SkillInfo[] }>("/api/skills");
+  const state = useResource<StateSnapshot>("/api/state");
+  // Polled once here and shared with the top bar, so every screen shows the
+  // same vitals rather than each maintaining its own timer.
+  const system = useResource<SystemSnapshot>("/api/system", 3000);
+
+  useEffect(() => {
+    setRailExpanded(localStorage.getItem(RAIL_KEY) === "1");
+  }, []);
+
+  const toggleRail = useCallback(() => {
+    setRailExpanded((open) => {
+      localStorage.setItem(RAIL_KEY, open ? "0" : "1");
+      return !open;
+    });
+  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -81,72 +113,71 @@ export default function Page() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const unauthorized = connection === "unauthorized";
-
   return (
     <div className="flex h-dvh overflow-hidden">
-      <Rail view={view} onSelect={setView} skills={hello?.skills} />
+      <Rail
+        view={view}
+        onSelect={setView}
+        expanded={railExpanded}
+        onToggle={toggleRail}
+      />
 
-      <main className="relative min-w-0 flex-1 overflow-hidden">
-        <div
-          className="mx-auto flex h-full flex-col px-6 pt-5"
-          style={{ maxWidth: "var(--content-max)", paddingBottom: "var(--dock-height)" }}
-        >
-          {unauthorized && (
-            <div
-              className="mb-4 rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"
-              style={{
-                borderLeftColor: "var(--critical)",
-                background: "var(--critical-dim)",
-              }}
-            >
-              No valid token. Start the server with{" "}
-              <code className="font-[family-name:var(--font-mono)]">brahma serve</code> and
-              open the URL it prints — it carries the token.
-            </div>
-          )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar
+          title={TITLES[view] ?? "Brahma"}
+          hostname={state.data?.hostname}
+          environment={hello?.environment}
+          system={system.data}
+          connection={connection}
+          onPalette={() => setPaletteOpen(true)}
+        />
 
-          {view === "console" && (
-            <Screen
-              title="Console"
-              subtitle={hello?.environment}
-              actions={
-                <span className="text-[length:var(--text-xs)] text-[var(--text-faint)]">
-                  {hello ? `${hello.skills} skills available` : ""}
-                </span>
-              }
-            >
+        <main className="min-h-0 flex-1 overflow-hidden">
+          <div
+            key={view}
+            className="mx-auto flex h-full flex-col px-6 py-5"
+            style={{
+              maxWidth: "var(--content-max)",
+              animation: "view-in var(--motion-base) var(--ease)",
+            }}
+          >
+            {connection === "unauthorized" && (
+              <div
+                className="mb-4 rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"
+                style={{
+                  borderLeftColor: "var(--critical)",
+                  background: "var(--critical-dim)",
+                }}
+              >
+                No valid token. Start the server with{" "}
+                <code className="font-[family-name:var(--font-mono)]">brahma serve</code>{" "}
+                and open the URL it prints — it carries the token.
+              </div>
+            )}
+
+            {view === "console" && (
               <Console
                 messages={messages}
                 busy={busy}
                 connection={connection}
+                skills={hello?.skills}
                 onAsk={ask}
                 onRespond={respondToConfirm}
                 onReset={reset}
               />
-            </Screen>
-          )}
-
-          {view === "system" && <SystemView run={run} />}
-          {view === "windows" && <WindowsView run={run} />}
-          {view === "files" && <FilesView run={run} />}
-          {view === "apps" && <AppsView run={run} />}
-          {view === "control" && <ControlView run={run} />}
-          {view === "screen" && <ScreenView run={run} />}
-          {view === "activity" && <ActivityView />}
-          {view === "brain" && <BrainView run={run} />}
-          {view === "settings" && <SettingsView />}
-        </div>
-
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center px-4">
-          <Dock
-            connection={connection}
-            model={hello?.model}
-            busy={busy}
-            onPalette={() => setPaletteOpen(true)}
-          />
-        </div>
-      </main>
+            )}
+            {view === "system" && <SystemView run={run} system={system.data} />}
+            {view === "windows" && <WindowsView run={run} />}
+            {view === "files" && <FilesView run={run} />}
+            {view === "apps" && <AppsView run={run} />}
+            {view === "control" && <ControlView run={run} system={system.data} />}
+            {view === "screen" && <ScreenView run={run} />}
+            {view === "activity" && <ActivityView />}
+            {view === "brain" && <BrainView run={run} />}
+            {view === "settings" && <SettingsView />}
+          </div>
+        </main>
+      </div>
 
       <ConfirmOverlay
         confirms={panelConfirms}
