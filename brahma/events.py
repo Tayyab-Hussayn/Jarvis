@@ -1,0 +1,231 @@
+"""Event frames and the worker-thread ↔ event-loop bridge for the web UI.
+
+Transport-agnostic on purpose: nothing here imports FastAPI. ``server.py``
+owns the websocket; this module owns the two hard parts.
+
+**The threading model.** The agent loop is synchronous and blocking — skills
+shell out, poll windows and sleep. It therefore runs on a worker thread while
+the websocket lives on the asyncio event loop. Two things have to cross that
+boundary:
+
+1. Events, worker → loop. Pushed with ``loop.call_soon_threadsafe``; never
+   touch the asyncio queue from the worker directly.
+2. Confirmations, loop → worker. ``safety.Confirmer`` is a *blocking* call:
+   the skill thread stops inside ``safety.enforce()`` until it gets a verdict.
+   So the worker parks on a ``threading.Event`` while the browser is asked.
+
+**Silence is never approval.** A confirmation that times out, or whose session
+drops, resolves to ``False``. The default is deny at every exit from
+:meth:`Session.confirm`, including the exception paths.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import itertools
+import threading
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from . import audit, config
+from .safety import Danger
+
+# How long a confirmation card may sit unanswered before it is denied. A
+# generous default: the user may have walked away mid-turn, and re-asking is
+# cheap compared with silently killing a process they never approved.
+DEFAULT_CONFIRM_TIMEOUT = 120.0
+
+
+def frame(t: str, **fields: Any) -> dict[str, Any]:
+    """Build one wire frame. ``t`` is the discriminator the client switches on."""
+    return {"t": t, **fields}
+
+
+@dataclass
+class _Pending:
+    """A confirmation the browser has been asked about but not yet answered."""
+
+    event: threading.Event = field(default_factory=threading.Event)
+    approved: bool = False
+
+
+class Session:
+    """One connected client: an outbound queue plus its pending confirmations.
+
+    Created on the event loop, then handed to a worker thread. Every method is
+    documented with which side is expected to call it, because getting that
+    wrong is how this class breaks.
+    """
+
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        *,
+        confirm_timeout: float | None = None,
+        max_queue: int = 1000,
+    ) -> None:
+        self._loop = loop
+        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_queue)
+        self._pending: dict[str, _Pending] = {}
+        self._pending_lock = threading.Lock()
+        self._ids = itertools.count(1)
+        self._closed = threading.Event()
+        self.turn_id: str = ""
+        self.confirm_timeout = (
+            confirm_timeout
+            if confirm_timeout is not None
+            else float(config.get("web.confirm_timeout_seconds", DEFAULT_CONFIRM_TIMEOUT))
+        )
+
+    # -- outbound: worker thread -> event loop ---------------------------
+
+    def emit(self, t: str, **fields: Any) -> None:
+        """Queue a frame for the client. Safe from any thread."""
+        if self._closed.is_set():
+            return
+        payload = frame(t, **fields)
+        try:
+            self._loop.call_soon_threadsafe(self._offer, payload)
+        except RuntimeError:
+            # Loop already closed — the client is gone; drop the frame.
+            self._closed.set()
+
+    def _offer(self, payload: dict[str, Any]) -> None:
+        """Enqueue on the loop thread, dropping rather than blocking it."""
+        try:
+            self._queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            # A slow or wedged client must never stall the agent. Losing a
+            # progress frame is survivable; blocking the event loop is not.
+            pass
+
+    async def next_frame(self) -> dict[str, Any]:
+        """Await the next outbound frame. Event loop only."""
+        return await self._queue.get()
+
+    # -- confirmations: blocking on the worker, answered on the loop -----
+
+    def confirm(self, action: str, detail: str, danger: Danger) -> bool:
+        """A :data:`safety.Confirmer`. **Blocks the calling worker thread.**
+
+        Returns ``False`` on timeout, on a closed session, or if the client
+        answers "no" — deny is the default at every exit.
+        """
+        if self._closed.is_set():
+            return False
+
+        confirm_id = f"c{next(self._ids)}"
+        pending = _Pending()
+        with self._pending_lock:
+            self._pending[confirm_id] = pending
+
+        audit.record(
+            "web.confirm_requested",
+            confirm_id=confirm_id,
+            action=action,
+            danger=danger.name,
+            turn=self.turn_id,
+        )
+
+        self.emit(
+            "confirm_request",
+            id=self.turn_id,
+            confirm_id=confirm_id,
+            action=action,
+            detail=detail,
+            danger=danger.name,
+            timeout=self.confirm_timeout,
+        )
+
+        started = time.monotonic()
+        answered = pending.event.wait(timeout=self.confirm_timeout)
+        approved = bool(answered and pending.approved)
+
+        with self._pending_lock:
+            self._pending.pop(confirm_id, None)
+
+        audit.record(
+            "web.confirm_resolved",
+            confirm_id=confirm_id,
+            action=action,
+            danger=danger.name,
+            approved=approved,
+            timed_out=not answered,
+            waited_seconds=round(time.monotonic() - started, 2),
+        )
+
+        if not answered:
+            # Tell the client its card is dead, so it stops offering a button
+            # that no longer resolves anything.
+            self.emit(
+                "confirm_expired", id=self.turn_id, confirm_id=confirm_id,
+            )
+        return approved
+
+    def resolve_confirm(self, confirm_id: str, approve: bool) -> bool:
+        """Answer a pending confirmation. Returns False if it was unknown.
+
+        Called from the event loop when a ``confirm_reply`` frame arrives. An
+        unknown id means the card already timed out or was never issued —
+        report it rather than inventing an approval.
+        """
+        with self._pending_lock:
+            pending = self._pending.get(confirm_id)
+            if pending is None:
+                return False
+            # Set the verdict before waking the worker, or it can observe the
+            # default False and deny an action the user actually approved.
+            pending.approved = bool(approve)
+        pending.event.set()
+        return True
+
+    # -- teardown --------------------------------------------------------
+
+    def close(self) -> None:
+        """Release every blocked worker. Safe from any thread, idempotent."""
+        self._closed.set()
+        with self._pending_lock:
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for p in pending:
+            # approved stays False: a dropped connection cannot approve.
+            p.event.set()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Agent observer -> frames
+# ---------------------------------------------------------------------------
+
+def observer_for(session: Session) -> Any:
+    """Adapt :data:`agent.Observer` callbacks onto the wire protocol."""
+
+    def observe(kind: str, text: str, data: dict[str, Any]) -> None:
+        turn = session.turn_id
+        if kind == "tool":
+            session.emit(
+                "tool_call", id=turn,
+                call_id=data.get("call_id", ""),
+                name=data.get("name", ""),
+                args=data.get("args", {}),
+                display=text,
+            )
+        elif kind == "tool_result":
+            session.emit(
+                "tool_result", id=turn,
+                call_id=data.get("call_id", ""),
+                name=data.get("name", ""),
+                result=data.get("result", text),
+            )
+        elif kind == "thinking":
+            session.emit("thinking", id=turn, text=text)
+        elif kind == "answer":
+            session.emit("answer", id=turn, text=text)
+        elif kind == "error":
+            session.emit("error", id=turn, message=text)
+
+    return observe

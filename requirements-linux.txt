@@ -1,0 +1,79 @@
+# Brahma Echo — Linux dependencies.
+#
+# The Windows-only packages from the original requirements.txt are gone; see
+# the table below for what replaced each one. Everything that replaced them
+# is a native command-line tool installed via pacman, not a Python package,
+# which is why this list is shorter than the original.
+#
+#   REMOVED (Windows-only)   REPLACED BY (system package)
+#   ----------------------   ----------------------------------------
+#   pywin32 / winreg         (stdlib subprocess + freedesktop specs)
+#   pycaw, comtypes          wireplumber (wpctl) / libpulse (pactl)
+#   win10toast               libnotify (notify-send)
+#   pywinauto                hyprland (hyprctl) / sway / wmctrl
+#   pygetwindow              hyprland (hyprctl) / sway / wmctrl
+#   pyautogui                ydotool (Wayland) / xdotool (X11)
+#   pyperclip                wl-clipboard / xclip
+#   mss                      grim (Wayland) / maim (X11)
+#   winsound                 libnotify + mpv
+
+# --- Core ---------------------------------------------------------------
+requests>=2.31
+psutil>=5.9
+
+# --- LLM providers ------------------------------------------------------
+google-genai>=1.0
+
+# --- Voice --------------------------------------------------------------
+# edge-tts is the original's own TTS engine (voice en-US-GuyNeural). Only the
+# playback changed: mpv instead of the Windows winmm MCI calls.
+edge-tts>=6.1
+
+# Speech recognition. The Windows build had no local recogniser — voice input
+# went to the Gemini Live websocket, which needs a paid key. faster-whisper
+# runs on the CPU with no key at all, so voice works out of the box.
+faster-whisper>=1.1
+soundfile>=0.12
+
+# --- Web ----------------------------------------------------------------
+beautifulsoup4>=4.12
+ddgs>=9.0
+
+# --- Documents ----------------------------------------------------------
+# All four are pure-Python and were already cross-platform in the original.
+python-pptx>=0.6.23
+python-docx>=1.1
+openpyxl>=3.1
+reportlab>=4.0
+pillow>=10.0
+
+# --- Files --------------------------------------------------------------
+# Implements the freedesktop trash spec, so deletes are recoverable.
+send2trash>=1.8
+
+# --- Web UI (`brahma serve`) --------------------------------------------
+# Also covers the legacy brahma_connect gateway, which was never ported.
+fastapi>=0.110
+uvicorn[standard]>=0.27
+cryptography>=42.0
+qrcode[pil]>=7.4
+python-multipart>=0.0.9
+
+# --- Optional: nicer terminal output ------------------------------------
+rich>=13.0
+prompt_toolkit>=3.0
+
+# --- Testing ------------------------------------------------------------
+# The web transport tests drive an asyncio event loop directly.
+pytest>=8.0
+pytest-asyncio>=1.0
+
+# Needed only for `voice live` (the original Gemini Live pipeline).
+sounddevice>=0.4
+
+# --- Not installed by default -------------------------------------------
+# discord.py        — only if you use the Discord bridge
+# playwright        — only if you use browser automation
+# mediapipe         — hand tracking; has no Python 3.14 wheels yet
+# opencv-python     — camera capture; pulled in by mediapipe workflows
+# vosk              — alternative lighter speech recogniser

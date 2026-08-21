@@ -63,6 +63,21 @@ def _get_api_key() -> str:
         raise RuntimeError(f"Could not load API key: {e}")
 
 
+def _camera_backend() -> int:
+    """Pick the right OpenCV capture backend for this OS.
+
+    DirectShow (CAP_DSHOW) is Windows-only; on Linux the kernel interface is
+    Video4Linux2. Falling back to CAP_ANY lets OpenCV choose on anything else.
+    """
+    if sys.platform.startswith("linux"):
+        return getattr(cv2, "CAP_V4L2", cv2.CAP_ANY)
+    if sys.platform == "win32":
+        return getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY)
+    if sys.platform == "darwin":
+        return getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY)
+    return cv2.CAP_ANY
+
+
 def _get_camera_index() -> int:
     try:
         with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -76,7 +91,7 @@ def _get_camera_index() -> int:
     best_index = 0
 
     for idx in range(6):
-        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        cap = cv2.VideoCapture(idx, _camera_backend())
         if not cap.isOpened():
             cap.release()
             continue
@@ -146,7 +161,7 @@ def _capture_screenshot() -> bytes:
 
 def _capture_camera() -> bytes:
     camera_index = _get_camera_index()
-    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(camera_index, _camera_backend())
     if not cap.isOpened():
         raise RuntimeError(f"Camera could not be opened: index {camera_index}")
     for _ in range(10):

@@ -26,6 +26,9 @@ _run.out.txt
 _run.err.txt
 _discord_live_test.txt
 
+# Working notes — personal state, not shipped project content
+user-space/
+
 # Virtual environments
 .venv/
 venv/
@@ -47,3 +50,10 @@ dist/
 *.pyz
 *.zip
 *.whl
+
+# Frontend
+web/node_modules/
+web/.next/
+web/out/
+# Built static export, produced by `npm run build` in web/
+brahma/web-dist/
