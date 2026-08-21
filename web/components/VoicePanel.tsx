@@ -62,9 +62,13 @@ function Waveform({ active, colour }: { active: boolean; colour: string }) {
           key={i}
           className="w-[3px] rounded-[var(--radius-full)]"
           style={{
-            height: active ? undefined : "3px",
+            // A base height always, animated around rather than from zero.
+            // Driving height purely from the keyframes meant the bars vanished
+            // whenever the animation was not running — under reduced-motion,
+            // or in a paused compositor.
+            height: active ? "12px" : "4px",
             background: colour,
-            opacity: active ? 1 : 0.3,
+            opacity: active ? 1 : 0.35,
             animation: active
               ? `wave 900ms ease-in-out ${i * 90}ms infinite`
               : undefined,

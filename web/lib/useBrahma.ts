@@ -71,6 +71,10 @@ export function useBrahma() {
   const [voiceLines, setVoiceLines] = useState<VoiceLine[]>([]);
   const [voiceMode, setVoiceMode] = useState<"local" | "live">("local");
   const [voiceError, setVoiceError] = useState("");
+  // Stopping is not instant — the loop may be mid-utterance and only releases
+  // the microphone when it unwinds. Without this the UI would look frozen
+  // between the click and the server's `stopped` frame.
+  const [voiceStopping, setVoiceStopping] = useState(false);
   const voiceSeq = useRef(0);
 
   const socketRef = useRef<WebSocket | null>(null);
@@ -283,6 +287,7 @@ export function useBrahma() {
               break;
             case "stopped":
               setVoicePhase("off");
+              setVoiceStopping(false);
               push("note", "Voice session ended.");
               break;
             case "listening":
@@ -306,6 +311,7 @@ export function useBrahma() {
               break;
             case "error":
               setVoicePhase("error");
+              setVoiceStopping(false);
               setVoiceError(frame.text);
               push("note", frame.text);
               break;
@@ -371,6 +377,7 @@ export function useBrahma() {
       // The server stops the voice loop when the socket closes, so the UI must
       // not keep claiming it is listening.
       setVoicePhase("off");
+      setVoiceStopping(false);
 
       if (goneRef.current) return;
 
@@ -494,6 +501,7 @@ export function useBrahma() {
     (mode: "local" | "live" = "local") => {
       setVoiceMode(mode);
       setVoiceError("");
+      setVoiceStopping(false);
       setVoicePhase("starting");
       if (!send({ t: "voice_start", mode })) {
         setVoicePhase("error");
@@ -504,6 +512,7 @@ export function useBrahma() {
   );
 
   const stopVoice = useCallback(() => {
+    setVoiceStopping(true);
     send({ t: "voice_stop" });
     // Do not flip to "off" here: the server confirms with a `stopped` frame
     // once the loop has actually released the microphone. Claiming it stopped
@@ -527,6 +536,7 @@ export function useBrahma() {
     voiceLines,
     voiceMode,
     voiceError,
+    voiceStopping,
     startVoice,
     stopVoice,
     clearVoiceLines,

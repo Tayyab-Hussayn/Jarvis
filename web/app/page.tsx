@@ -87,6 +87,7 @@ export default function Page() {
     startVoice,
     stopVoice,
     clearVoiceLines,
+    voiceStopping,
   } = useBrahma();
 
   const [view, setView] = useHashView();
@@ -105,6 +106,27 @@ export default function Page() {
     tts_available: boolean;
     live_configured: boolean;
   }>("/api/voice");
+
+  // Voice needs both halves of the pipeline: something to hear with and
+  // something to answer through. Reporting "ready" on one of the two would
+  // hand the user a control that starts and then immediately fails.
+  const voiceReady = Boolean(
+    voice.data?.stt_backend && voice.data?.tts_available,
+  );
+  const voiceUnavailableReason = voice.data
+    ? !voice.data.stt_backend
+      ? "No speech recognition available on this machine."
+      : !voice.data.tts_available
+        ? "No audio playback — install mpv."
+        : ""
+    : "";
+
+  // Selecting Voice also reveals the panel, so the full transcript and the
+  // local/live choice are one click away rather than hidden behind the top bar.
+  const selectVoice = useCallback(() => {
+    setVoiceOpen(true);
+    startVoice("local");
+  }, [startVoice]);
 
   useEffect(() => {
     setRailExpanded(localStorage.getItem(RAIL_KEY) === "1");
@@ -191,6 +213,13 @@ export default function Page() {
                 onAsk={ask}
                 onRespond={respondToConfirm}
                 onReset={reset}
+                voicePhase={voicePhase}
+                voiceStopping={voiceStopping}
+                voiceLines={voiceLines}
+                voiceReady={voiceReady}
+                voiceUnavailableReason={voiceUnavailableReason}
+                onSelectText={stopVoice}
+                onSelectVoice={selectVoice}
               />
             )}
             {view === "system" && <SystemView run={run} system={system.data} />}

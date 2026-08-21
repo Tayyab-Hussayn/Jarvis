@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { Message } from "@/lib/protocol";
+import type { Message, VoiceLine, VoicePhase } from "@/lib/protocol";
 import type { Connection } from "@/lib/useBrahma";
+import { ModeToggle, isVoiceLive } from "./ModeToggle";
 import { TurnGraph } from "./TurnGraph";
-import { Button, Empty } from "./ui";
+import { Button } from "./ui";
 
 // Four short prompts in an even 2x2 grid. The previous set were full
 // sentences of uneven length and wrapped 3 + 1, leaving a ragged final row.
@@ -33,6 +34,13 @@ export function Console({
   onAsk,
   onRespond,
   onReset,
+  voicePhase,
+  voiceStopping,
+  voiceLines,
+  voiceReady,
+  voiceUnavailableReason,
+  onSelectText,
+  onSelectVoice,
 }: {
   messages: Message[];
   busy: boolean;
@@ -41,6 +49,13 @@ export function Console({
   onAsk: (text: string) => void;
   onRespond: (confirmId: string, approve: boolean) => void;
   onReset: () => void;
+  voicePhase: VoicePhase;
+  voiceStopping: boolean;
+  voiceLines: VoiceLine[];
+  voiceReady: boolean;
+  voiceUnavailableReason?: string;
+  onSelectText: () => void;
+  onSelectVoice: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -63,6 +78,9 @@ export function Console({
 
   const offline = connection !== "open";
   const turns = messages.filter((m) => m.role === "assistant");
+  const voiceLive = isVoiceLive(voicePhase);
+  // Only the tail is worth showing in the hero; the panel holds the full log.
+  const recentVoice = voiceLines.slice(-4);
 
   return (
     <div className="flex h-full flex-col">
@@ -78,20 +96,79 @@ export function Console({
                 {typeof skills === "number" ? ` ${skills} skills available.` : ""}{" "}
                 Destructive actions stop and ask you first.
               </p>
-              <div className="mt-6 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {SUGGESTIONS.map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    disabled={offline}
-                    onClick={() => onAsk(item.prompt)}
-                    className="rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface)] px-3.5 py-2.5 text-left text-[length:var(--text-sm)] text-[var(--text)] hover:border-[var(--accent)] hover:bg-[var(--accent-dim)] hover:text-[var(--accent)] disabled:opacity-40"
-                    style={{ transition: "all var(--motion-fast) var(--ease)" }}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+
+              <div className="mt-6">
+                <ModeToggle
+                  phase={voicePhase}
+                  stopping={voiceStopping}
+                  offline={offline}
+                  voiceReady={voiceReady}
+                  unavailableReason={voiceUnavailableReason}
+                  onSelectText={onSelectText}
+                  onSelectVoice={onSelectVoice}
+                />
               </div>
+
+              {/* Text mode keeps exactly the suggestion grid it had. Voice mode
+                  shows the spoken exchange instead, because a list of things to
+                  click is the wrong prompt when the point is to talk. */}
+              {voiceLive ? (
+                <div className="mt-5 min-h-[7.5rem] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] px-4 py-3.5 text-left">
+                  {recentVoice.length === 0 ? (
+                    <p className="text-center text-[length:var(--text-sm)] text-[var(--text-faint)]">
+                      {voicePhase === "starting"
+                        ? "Loading the speech model…"
+                        : "Listening. Say something."}
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {recentVoice.map((line) => (
+                        <p
+                          key={line.id}
+                          className="text-[length:var(--text-sm)]"
+                          style={{
+                            color:
+                              line.role === "note"
+                                ? "var(--text-faint)"
+                                : "var(--text)",
+                            fontStyle: line.role === "note" ? "italic" : undefined,
+                          }}
+                        >
+                          {line.role !== "note" && (
+                            <span
+                              className="mr-2 font-[family-name:var(--font-mono)] text-[length:var(--text-xs)]"
+                              style={{
+                                color:
+                                  line.role === "brahma"
+                                    ? "var(--accent)"
+                                    : "var(--text-muted)",
+                              }}
+                            >
+                              {line.role}
+                            </span>
+                          )}
+                          {line.text}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {SUGGESTIONS.map((item) => (
+                    <button
+                      key={item.label}
+                      type="button"
+                      disabled={offline}
+                      onClick={() => onAsk(item.prompt)}
+                      className="rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface)] px-3.5 py-2.5 text-left text-[length:var(--text-sm)] text-[var(--text)] hover:border-[var(--accent)] hover:bg-[var(--accent-dim)] hover:text-[var(--accent)] disabled:opacity-40"
+                      style={{ transition: "all var(--motion-fast) var(--ease)" }}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ) : (
