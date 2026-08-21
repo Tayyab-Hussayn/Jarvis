@@ -21,6 +21,7 @@ export type ServerFrame =
   | { t: "turn_end"; id: string; iterations: number; tool_calls?: string[]; error?: string }
   | { t: "error"; id?: string; message: string }
   | { t: "reset_ok" }
+  | { t: "voice_state"; phase: string; text: string }
   | { t: "pong" };
 
 /* -- client -> server ------------------------------------------------ */
@@ -32,6 +33,10 @@ export type ClientFrame =
   | { t: "run"; id: string; skill: string; args: Record<string, unknown> }
   | { t: "confirm_reply"; confirm_id: string; approve: boolean }
   | { t: "reset" }
+  // Voice runs server-side (same machine, loopback only), so the browser only
+  // starts and stops it — audio never crosses the socket.
+  | { t: "voice_start"; mode: "local" | "live" }
+  | { t: "voice_stop" }
   | { t: "ping" };
 
 /* -- REST ------------------------------------------------------------ */
@@ -114,6 +119,23 @@ export interface ConfirmView {
   expiresAt: number;
   status: "pending" | "approved" | "denied" | "expired";
 }
+
+/** One line of the spoken exchange. Kept separate from `Message` so a voice
+ *  session can never rewrite the text console's history. */
+export interface VoiceLine {
+  id: number;
+  role: "you" | "brahma" | "tool" | "note";
+  text: string;
+}
+
+export type VoicePhase =
+  | "off"
+  | "starting"
+  | "idle"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "error";
 
 export interface Message {
   id: string;

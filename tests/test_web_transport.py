@@ -767,3 +767,77 @@ def test_state_snapshot_carries_a_hostname():
     from brahma import server
 
     assert isinstance(server._state_snapshot()["hostname"], str)
+
+
+# ---------------------------------------------------------------------------
+# Live voice
+# ---------------------------------------------------------------------------
+#
+# These deliberately never start a real session: doing so would open the
+# microphone and load a speech model on whatever machine runs the suite. What
+# is worth testing is the wiring around it — the guards, and the decision that
+# a destructive spoken request confirms in the browser rather than out loud.
+
+
+def test_voice_start_reports_readiness_problems_instead_of_starting(client, monkeypatch):
+    from brahma import voice
+
+    monkeypatch.setattr(
+        voice, "readiness", lambda: (False, ["No microphone", "No speech recognition"])
+    )
+
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())          # hello
+        ws.send_text(json.dumps({"t": "voice_start", "mode": "local"}))
+        frame = json.loads(ws.receive_text())
+
+    assert frame["t"] == "voice_state"
+    assert frame["phase"] == "error"
+    assert "No microphone" in frame["text"]
+
+
+def test_voice_stop_without_a_session_is_harmless(client):
+    """The browser may send stop after the loop has already exited."""
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())
+        ws.send_text(json.dumps({"t": "voice_stop"}))
+        ws.send_text(json.dumps({"t": "ping"}))
+        assert json.loads(ws.receive_text())["t"] == "pong"
+
+
+def test_voice_session_uses_an_injected_confirmer_rather_than_asking_aloud():
+    """A spoken summary cannot show the exact target; a card can.
+
+    `VoiceSession` defaults to speaking the question and listening for "yes".
+    The web path injects the browser confirmer instead, so the user sees the
+    exact path or pid being acted on. This asserts the injection is honoured
+    and that nothing is spoken to reach that decision.
+    """
+    from brahma import voice
+    from brahma.safety import Danger
+
+    seen: list[tuple[str, str]] = []
+
+    def confirmer(action, detail, danger):
+        seen.append((action, detail))
+        return False
+
+    convo = voice.VoiceSession(confirmer=confirmer)
+    approved = convo._confirm("delete /tmp/x", "destructive", Danger.DESTRUCTIVE)
+
+    assert approved is False
+    assert seen == [("delete /tmp/x", "destructive")]
+
+
+def test_voice_agent_is_separate_from_the_text_conversation():
+    """Voice must not rewrite the text console's history.
+
+    The server builds a VoiceSession without passing an agent, so it creates
+    its own. If that ever changed to share the web agent, the two transcripts
+    would interleave and each would misrepresent what the model actually saw.
+    """
+    from brahma import voice
+
+    convo = voice.VoiceSession()
+    assert convo.agent is not None
+    assert convo.agent.source == "voice"

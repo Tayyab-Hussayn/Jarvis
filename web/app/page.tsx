@@ -34,6 +34,7 @@ import {
   type ViewId,
 } from "@/components/Shell";
 import { SystemView } from "@/components/SystemView";
+import { VoicePanel } from "@/components/VoicePanel";
 import { WindowsView } from "@/components/WindowsView";
 import type { SkillInfo, StateSnapshot, SystemSnapshot } from "@/lib/protocol";
 import { useResource } from "@/lib/useApi";
@@ -79,17 +80,31 @@ export default function Page() {
     respondToConfirm,
     dismissPanelConfirm,
     reset,
+    voicePhase,
+    voiceLines,
+    voiceMode,
+    voiceError,
+    startVoice,
+    stopVoice,
+    clearVoiceLines,
   } = useBrahma();
 
   const [view, setView] = useHashView();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railExpanded, setRailExpanded] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
 
   const skills = useResource<{ skills: SkillInfo[] }>("/api/skills");
   const state = useResource<StateSnapshot>("/api/state");
   // Polled once here and shared with the top bar, so every screen shows the
   // same vitals rather than each maintaining its own timer.
   const system = useResource<SystemSnapshot>("/api/system", 3000);
+  const voice = useResource<{
+    stt_backend: string;
+    stt_model: string;
+    tts_available: boolean;
+    live_configured: boolean;
+  }>("/api/voice");
 
   useEffect(() => {
     setRailExpanded(localStorage.getItem(RAIL_KEY) === "1");
@@ -107,6 +122,14 @@ export default function Page() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen((open) => !open);
+      }
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "v"
+      ) {
+        event.preventDefault();
+        setVoiceOpen((open) => !open);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -130,8 +153,12 @@ export default function Page() {
           system={system.data}
           connection={connection}
           onPalette={() => setPaletteOpen(true)}
+          voiceActive={voicePhase !== "off" && voicePhase !== "error"}
+          voiceOpen={voiceOpen}
+          onToggleVoice={() => setVoiceOpen((open) => !open)}
         />
 
+        <div className="flex min-h-0 flex-1 overflow-hidden">
         <main className="min-h-0 flex-1 overflow-hidden">
           <div
             key={view}
@@ -177,6 +204,21 @@ export default function Page() {
             {view === "settings" && <SettingsView />}
           </div>
         </main>
+
+        <VoicePanel
+          open={voiceOpen}
+          onClose={() => setVoiceOpen(false)}
+          phase={voicePhase}
+          lines={voiceLines}
+          mode={voiceMode}
+          error={voiceError}
+          readiness={voice.data}
+          connected={connection === "open"}
+          onStart={startVoice}
+          onStop={stopVoice}
+          onClear={clearVoiceLines}
+        />
+        </div>
       </div>
 
       <ConfirmOverlay

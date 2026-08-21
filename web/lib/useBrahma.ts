@@ -26,6 +26,8 @@ import type {
   Message,
   ServerFrame,
   ToolCallView,
+  VoiceLine,
+  VoicePhase,
 } from "./protocol";
 import { captureToken, getToken, wsUrl } from "./session";
 
@@ -62,6 +64,14 @@ export function useBrahma() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [panelConfirms, setPanelConfirms] = useState<ConfirmView[]>([]);
+  // Voice state is deliberately separate from `messages`. The spoken
+  // conversation runs on its own Agent server-side, so mixing the two
+  // transcripts would misrepresent both.
+  const [voicePhase, setVoicePhase] = useState<VoicePhase>("off");
+  const [voiceLines, setVoiceLines] = useState<VoiceLine[]>([]);
+  const [voiceMode, setVoiceMode] = useState<"local" | "live">("local");
+  const [voiceError, setVoiceError] = useState("");
+  const voiceSeq = useRef(0);
 
   const socketRef = useRef<WebSocket | null>(null);
   const attemptsRef = useRef(0);
@@ -257,6 +267,54 @@ export function useBrahma() {
           setMessages([]);
           break;
 
+        case "voice_state": {
+          const push = (role: VoiceLine["role"], text: string) => {
+            if (!text.trim()) return;
+            voiceSeq.current += 1;
+            setVoiceLines((current) =>
+              [...current, { id: voiceSeq.current, role, text }].slice(-80),
+            );
+          };
+          switch (frame.phase) {
+            case "started":
+              setVoicePhase("idle");
+              setVoiceError("");
+              push("note", `Voice session started (${frame.text}).`);
+              break;
+            case "stopped":
+              setVoicePhase("off");
+              push("note", "Voice session ended.");
+              break;
+            case "listening":
+              setVoicePhase("listening");
+              break;
+            case "heard":
+              setVoicePhase("thinking");
+              push("you", frame.text);
+              break;
+            case "answer":
+              push("brahma", frame.text);
+              break;
+            case "speaking":
+              setVoicePhase("speaking");
+              break;
+            case "tool":
+              push("tool", frame.text);
+              break;
+            case "info":
+              push("note", frame.text);
+              break;
+            case "error":
+              setVoicePhase("error");
+              setVoiceError(frame.text);
+              push("note", frame.text);
+              break;
+            default:
+              break;
+          }
+          break;
+        }
+
         case "pong":
           break;
       }
@@ -310,6 +368,9 @@ export function useBrahma() {
         pending.reject(new Error("Connection lost"));
       }
       runsRef.current.clear();
+      // The server stops the voice loop when the socket closes, so the UI must
+      // not keep claiming it is listening.
+      setVoicePhase("off");
 
       if (goneRef.current) return;
 
@@ -429,6 +490,28 @@ export function useBrahma() {
     if (!send({ t: "reset" })) setMessages([]);
   }, [busy, send]);
 
+  const startVoice = useCallback(
+    (mode: "local" | "live" = "local") => {
+      setVoiceMode(mode);
+      setVoiceError("");
+      setVoicePhase("starting");
+      if (!send({ t: "voice_start", mode })) {
+        setVoicePhase("error");
+        setVoiceError("Not connected.");
+      }
+    },
+    [send],
+  );
+
+  const stopVoice = useCallback(() => {
+    send({ t: "voice_stop" });
+    // Do not flip to "off" here: the server confirms with a `stopped` frame
+    // once the loop has actually released the microphone. Claiming it stopped
+    // before that would be a lie the user could hear.
+  }, [send]);
+
+  const clearVoiceLines = useCallback(() => setVoiceLines([]), []);
+
   return {
     connection,
     hello,
@@ -440,5 +523,12 @@ export function useBrahma() {
     respondToConfirm,
     dismissPanelConfirm,
     reset,
+    voicePhase,
+    voiceLines,
+    voiceMode,
+    voiceError,
+    startVoice,
+    stopVoice,
+    clearVoiceLines,
   };
 }

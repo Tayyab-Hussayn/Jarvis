@@ -263,6 +263,87 @@ def create_app(token: str | None = None) -> Any:
             finally:
                 busy.clear()
 
+        # -- voice ---------------------------------------------------------
+        #
+        # The voice pipeline records from *this process's* microphone and speaks
+        # through its speakers. Since the server binds loopback only, that is
+        # the same machine the browser is on — so the browser is the control
+        # surface and live transcript, and the whole tested `VoiceSession` loop
+        # is reused rather than reimplemented over the socket. Capturing audio
+        # in the browser and shipping it here would duplicate a working
+        # pipeline to reach the same devices.
+        #
+        # (This is exactly the assumption that breaks for remote access, which
+        # is why phone support stays a separate piece of work.)
+        voice_box: dict[str, Any] = {"session": None, "thread": None}
+
+        def voice_observer(kind: str, text: str) -> None:
+            # Voice turns deliberately never enter `messages` — the text
+            # console keeps its own history and must not be rewritten by a
+            # parallel spoken conversation.
+            session.emit("voice_state", phase=kind, text=text)
+
+        def voice_confirmer(action: str, detail: str, danger: Any) -> bool:
+            """Confirm a destructive voice action in the browser, not out loud.
+
+            `VoiceSession` would otherwise ask by speaking a summary and
+            listening for "yes". A card wins here: it shows the exact target,
+            which a spoken summary cannot, and it avoids running two
+            independent confirmers that could both try to answer. A short
+            spoken nudge tells a hands-free user to look at the screen.
+            """
+            from .platform import tts as _tts
+
+            with contextlib.suppress(Exception):
+                _tts.speak("I need your confirmation.", blocking=True)
+            return session.confirm(action, detail, danger)
+
+        def voice_worker(mode: str) -> None:
+            from . import voice as voice_mod
+
+            try:
+                if mode == "live":
+                    ok, why = voice_mod.live_available()
+                    if not ok:
+                        session.emit("voice_state", phase="error", text=why)
+                        return
+                    # LiveSession lives in live.py, not voice.py.
+                    from .live import LiveSession
+
+                    live = LiveSession(
+                        observer=voice_observer, confirmer=voice_confirmer
+                    )
+                    voice_box["session"] = live
+                    session.emit("voice_state", phase="started", text="live")
+                    live.run()
+                else:
+                    convo = voice_mod.VoiceSession(
+                        observer=voice_observer,
+                        confirmer=voice_confirmer,
+                    )
+                    voice_box["session"] = convo
+                    session.emit("voice_state", phase="started", text="local")
+                    convo.run()
+            except Exception as exc:
+                audit.record(
+                    "web.voice_failed", error=f"{type(exc).__name__}: {exc}"
+                )
+                session.emit("voice_state", phase="error", text=str(exc))
+            finally:
+                voice_box["session"] = None
+                voice_box["thread"] = None
+                session.emit("voice_state", phase="stopped", text="")
+
+        def stop_voice() -> None:
+            active = voice_box.get("session")
+            if active is not None:
+                with contextlib.suppress(Exception):
+                    active.stop()
+            with contextlib.suppress(Exception):
+                from .platform import tts as _tts
+
+                _tts.stop()
+
         turn_task: asyncio.Task | None = None
         try:
             while True:
@@ -311,6 +392,34 @@ def create_app(token: str | None = None) -> Any:
                     busy.set()
                     turn_task = asyncio.create_task(run_skill(turn_id, skill, args))
 
+                elif kind == "voice_start":
+                    from . import voice as voice_mod
+
+                    if voice_box["thread"] is not None:
+                        session.emit(
+                            "voice_state", phase="error",
+                            text="A voice session is already running.",
+                        )
+                        continue
+                    mode = "live" if msg.get("mode") == "live" else "local"
+                    ready, problems = voice_mod.readiness()
+                    if mode == "local" and not ready:
+                        session.emit(
+                            "voice_state", phase="error", text="; ".join(problems),
+                        )
+                        continue
+                    audit.record("web.voice_start", mode=mode)
+                    worker = threading.Thread(
+                        target=voice_worker, args=(mode,), daemon=True,
+                        name="brahma-web-voice",
+                    )
+                    voice_box["thread"] = worker
+                    worker.start()
+
+                elif kind == "voice_stop":
+                    audit.record("web.voice_stop")
+                    stop_voice()
+
                 elif kind == "confirm_reply":
                     ok = session.resolve_confirm(
                         str(msg.get("confirm_id") or ""), bool(msg.get("approve"))
@@ -338,6 +447,10 @@ def create_app(token: str | None = None) -> Any:
         finally:
             # Releasing the session first unblocks any worker parked on a
             # confirmation — it resolves to deny, and the turn unwinds.
+            # A voice session holds the microphone and can be mid-utterance;
+            # leaving it running after the browser closes would keep recording
+            # with nothing listening.
+            stop_voice()
             session.close()
             pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

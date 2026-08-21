@@ -29,7 +29,8 @@ export type IconName =
   | "close"
   | "refresh"
   | "trash"
-  | "chevron";
+  | "chevron"
+  | "mic";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   // Chat bubble with a cursor — the agent conversation.
@@ -116,6 +117,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   chevron: <path d="m9 6 6 6-6 6" />,
+  mic: (
+    <>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3M9 21h6" />
+    </>
+  ),
 };
 
 export function Icon({

@@ -304,6 +304,9 @@ export function TopBar({
   system,
   connection,
   onPalette,
+  voiceActive,
+  voiceOpen,
+  onToggleVoice,
 }: {
   title: string;
   hostname?: string;
@@ -311,6 +314,9 @@ export function TopBar({
   system: SystemSnapshot | null;
   connection: Connection;
   onPalette: () => void;
+  voiceActive?: boolean;
+  voiceOpen?: boolean;
+  onToggleVoice?: () => void;
 }) {
   const status = STATUS[connection];
   return (
@@ -360,6 +366,39 @@ export function TopBar({
           </>
         )}
       </div>
+
+      {onToggleVoice && (
+        <button
+          type="button"
+          onClick={onToggleVoice}
+          aria-pressed={Boolean(voiceOpen)}
+          title={voiceOpen ? "Hide live voice" : "Live voice"}
+          className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border px-3 py-1.5 text-[length:var(--text-xs)]"
+          style={{
+            transition: "all var(--motion-fast) var(--ease)",
+            borderColor: voiceActive
+              ? "var(--accent)"
+              : voiceOpen
+                ? "var(--border-strong)"
+                : "var(--border-strong)",
+            background: voiceActive ? "var(--accent-dim)" : "transparent",
+            color: voiceActive ? "var(--accent)" : "var(--text-muted)",
+          }}
+        >
+          <Icon name="mic" size={14} />
+          <span className="hidden sm:inline">Voice</span>
+          {voiceActive && (
+            <span
+              aria-hidden
+              className="inline-block h-1.5 w-1.5 rounded-full"
+              style={{
+                background: "var(--accent)",
+                animation: "pulse 1.1s ease-in-out infinite",
+              }}
+            />
+          )}
+        </button>
+      )}
 
       <button
         type="button"
