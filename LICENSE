@@ -1,53 +1,59 @@
-Brahma Source-Available License
-Version 1.0
+Proprietary Software License
 
-Copyright (c) 2026 Suryaansh Tiwari
+Copyright (c) 2026 Tayyab Hussayn. All rights reserved.
 
-This software and its source code are provided under the terms below.
-This is not an open source license as defined by the Open Source Initiative.
+This software and its source code are proprietary and confidential. This is
+not an open source license as defined by the Open Source Initiative, and it
+grants no rights beyond those stated below.
 
-1. Permission granted
+1. Ownership
 
-You may:
+This software, including all source code, documentation, designs, and related
+materials in this repository, is the exclusive property of Tayyab Hussayn.
 
-- Use the software for personal, educational, and internal business purposes.
-- Study, inspect, and modify the source code for your own use.
-- Share unmodified copies of the software as long as you keep this license,
-  preserve all copyright notices, and do not remove Brahma branding.
-- Deploy the software privately within your own environment.
+2. No license granted
 
-2. Restrictions
+No permission is granted to any person to use, copy, modify, merge, publish,
+distribute, sublicense, sell, or create derivative works of this software, in
+whole or in part, without prior written permission from Tayyab Hussayn.
 
-You may not, without prior written permission from Suryaansh Tiwari:
+Viewing this repository does not grant any license, express or implied.
 
-- Rebrand, rename, or republish the software as your own product.
-- Remove, obscure, or replace Brahma branding, logos, attributions, or notices.
-- Distribute modified versions publicly under a different name or identity.
-- Claim authorship, ownership, sponsorship, or endorsement of the software.
-- Use the Brahma name, logo, or related marks in a way that suggests
-  affiliation or endorsement beyond this license.
+3. Restrictions
 
-3. Commercial use
+Without prior written permission you may not:
 
-Commercial use is permitted only if it does not violate the restrictions above
-and does not involve rebranding, resale as a competing product, or misrepresenting
-the origin of the software.
+- Use the software for any purpose, personal, educational, or commercial.
+- Copy, reproduce, or redistribute the software or any portion of it.
+- Modify the software or create derivative works based on it.
+- Reverse engineer, decompile, or disassemble the software, except to the
+  extent that such a restriction is prohibited by applicable law.
+- Remove, obscure, or alter any copyright, trademark, or proprietary notice.
 
-4. Termination
+4. Permitted use by the copyright holder's authorization
 
-Any violation of this license automatically terminates your rights under it.
-You must immediately stop using, distributing, or modifying the software upon
-termination unless you obtain written permission from the copyright holder.
+Any use of this software must be covered by a separate written agreement with
+Tayyab Hussayn. That agreement, and not this file, defines what is permitted.
 
-5. Warranty disclaimer
+5. Termination
+
+Any permission granted terminates immediately and automatically upon breach of
+its terms. On termination you must cease all use and destroy all copies in
+your possession.
+
+6. Warranty disclaimer
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
 
-6. Limitation of liability
+7. Limitation of liability
 
-IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY CLAIM,
-DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR
-OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE
-OR OTHER DEALINGS IN THE SOFTWARE.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
+
+8. Contact
+
+For licensing enquiries, contact Tayyab Hussayn at tayyabhussayn@gmail.com.

@@ -96,8 +96,8 @@ Designed for advanced desktop productivity, Brahma Echo delivers:
 ### 1. Clone the repository
 
 ```powershell
-git clone https://github.com/titechprabhasolutions/Brahma-AI---Lite.git
-cd "Brahma AI - Lite"
+git clone https://github.com/Tayyab-Hussayn/Jarvis.git
+cd Jarvis
 ```
 
 ### 2. Create and activate a virtual environment
@@ -195,10 +195,10 @@ Supported hooks:
 
 ## License
 
-This project is published under a custom source-available license. See `LICENSE` for details.
+This project is proprietary. All rights reserved. See `LICENSE` for details.
 
 ## Maintainer
 
-- Suryaansh Tiwari
+- Tayyab Hussayn
 
-> Preserve attribution and keep credentials secure when building on top of Brahma Echo.
+> Keep credentials secure. This software is proprietary; see `LICENSE`.
