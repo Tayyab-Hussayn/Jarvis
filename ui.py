@@ -7075,7 +7075,7 @@ class MainWindow(QMainWindow):
         title.setFont(QFont("Courier New", 17, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {C.PRI}; background: transparent;")
         mid.addWidget(title)
-        sub = QLabel("Lite Edition by Suryaansh Tiwari")
+        sub = QLabel("Lite Edition by Tayyab Hussayn")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setFont(QFont("Courier New", 7))
         sub.setStyleSheet(f"color: {C.PRI_DIM}; background: transparent;")
@@ -7110,7 +7110,7 @@ class MainWindow(QMainWindow):
                 greeting = "Good Afternoon"
             else:
                 greeting = "Good Evening"
-            name = os.getenv("USERNAME") or os.getenv("USER") or "Suryaansh"
+            name = os.getenv("USERNAME") or os.getenv("USER") or "Tayyab"
             self._core_lbl.setText(f"{greeting}, {name}")
         if hasattr(self, "_core_sub_lbl") and self._core_sub_lbl is not None:
             self._core_sub_lbl.setText("Ready to assist.")
@@ -7303,7 +7303,7 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(_fl("[F4] Mute  Â·  [F11] Fullscreen"))
         lay.addStretch()
-        lay.addWidget(_fl("Suryaansh Tiwari  Â·  Brahma Echo  Â·  Open Source"))
+        lay.addWidget(_fl("Tayyab Hussayn  Â·  Brahma Echo  Â·  Proprietary"))
         lay.addStretch()
         lay.addWidget(_fl("Â© STARK INDUSTRIES", C.PRI_DIM))
         return w
@@ -10156,7 +10156,7 @@ class BrahmaUI:
                     finished_callback()
 
         overlay.finished.connect(_done)
-        overlay.start(device_name=device_name, greeting_name="Suryaansh")
+        overlay.start(device_name=device_name, greeting_name="Tayyab")
 
     # Thread-safe helpers for driving the boot overlay from background threads
     def boot_add_step(self, text: str):
@@ -11617,7 +11617,7 @@ class BrahmaUI:
                     finished_callback()
 
         overlay.finished.connect(_done)
-        overlay.start(device_name=device_name, greeting_name="Suryaansh")
+        overlay.start(device_name=device_name, greeting_name="Tayyab")
 
     # Thread-safe helpers for driving the boot overlay from background threads
     def boot_add_step(self, text: str):

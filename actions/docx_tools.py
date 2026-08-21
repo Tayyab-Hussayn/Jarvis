@@ -142,7 +142,7 @@ def _set_document_defaults(doc):
 def _set_core_props(doc, title: str, author: str | None = None, subject: str | None = None):
     props = doc.core_properties
     props.title = title or PROJECT_NAME
-    props.author = author or "Suryaansh Tiwari"
+    props.author = author or "Tayyab Hussayn"
     props.subject = subject or "Word document"
     props.company = PROJECT_NAME
     props.created = datetime.now()
@@ -273,7 +273,7 @@ def _create_letter(doc, params):
     date_value = (params.get("date") or datetime.now().strftime("%B %d, %Y")).strip()
     salutation = (params.get("salutation") or (f"Dear {recipient}," if recipient else "Dear Sir or Madam,")).strip()
     closing = (params.get("closing") or "Sincerely,").strip()
-    signature = (params.get("signature") or params.get("author") or "Suryaansh Tiwari").strip()
+    signature = (params.get("signature") or params.get("author") or "Tayyab Hussayn").strip()
     body = params.get("body") or params.get("content") or ""
     paragraphs = _normalize_list(params.get("paragraphs")) or [p.strip() for p in re.split(r"\n\s*\n", str(body)) if p.strip()]
 

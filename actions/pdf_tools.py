@@ -400,7 +400,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         topMargin=0.8 * pdf["inch"],
         bottomMargin=0.8 * pdf["inch"],
         title=title,
-        author=parameters.get("author") or "Suryaansh Tiwari",
+        author=parameters.get("author") or "Tayyab Hussayn",
         subject=parameters.get("subject") or "PDF document",
     )
 
@@ -415,7 +415,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         date_value = (parameters.get("date") or datetime.now().strftime("%B %d, %Y")).strip()
         salutation = (parameters.get("salutation") or (f"Dear {recipient}," if recipient else "Dear Sir or Madam,")).strip()
         closing = (parameters.get("closing") or "Sincerely,").strip()
-        signature = (parameters.get("signature") or parameters.get("author") or "Suryaansh Tiwari").strip()
+        signature = (parameters.get("signature") or parameters.get("author") or "Tayyab Hussayn").strip()
         body_text = parameters.get("body") or parameters.get("content") or ""
 
         story.append(pdf["Paragraph"](date_value, styles["brahma_body"]))

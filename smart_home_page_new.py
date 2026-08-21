@@ -377,7 +377,7 @@ class AddDeviceDialog(QDialog):
             self._fields[key] = edit
             self._auth_form.addRow(label, edit)
         self._account_label = QLineEdit()
-        self._account_label.setPlaceholderText("Example: Home, Suryaansh, Bedroom Hub")
+        self._account_label.setPlaceholderText("Example: Home, Tayyab, Bedroom Hub")
         self._auth_form.addRow("Device label", self._account_label)
 
     def _build_scan_results(self):
