@@ -1,60 +1,75 @@
 /*
  * Design tokens — the single place the look and feel is defined.
  *
- * PLACEHOLDER THEME. The user has not specified the look yet (see PLAN.md
- * §Theming). Everything below is deliberately neutral and deliberately
- * centralised: no component anywhere hardcodes a colour, radius, or duration,
- * so re-skinning the whole app is an edit to this file rather than a sweep
- * through every component.
+ * Direction: acid lime on near-black, after the Salesforce/Invoices reference.
+ * Near-black shell, one high-chroma accent, big tabular numerals, and light
+ * detail panels floating over the dark ground.
  *
- * If you are about to write a hex value or a px radius inside a component,
- * add a token here instead.
+ * No component anywhere hardcodes a colour, radius or duration. If you are
+ * about to write a hex value or a px radius inside a component, add a token
+ * here instead.
  */
 
 :root {
   /* -- surfaces, back to front ------------------------------------- */
-  --bg: #0b0d10;
-  --surface: #12151a;
-  --surface-raised: #181c23;
-  --surface-sunken: #080a0d;
-  --border: #232830;
+  --bg: #0a0b0d;
+  --surface: #131519;
+  --surface-raised: #1a1d23;
+  --surface-sunken: #0e1013;
+  --border: #23272e;
   --border-strong: #333a45;
 
+  /* The light panel that floats over the dark ground — the reference's
+     most recognisable move. Its own text scale, because inverting inside a
+     dark app is where contrast bugs breed. */
+  --panel: #f6f7f4;
+  --panel-border: #e2e5dc;
+  --panel-text: #101317;
+  --panel-muted: #5b626c;
+  --panel-faint: #878e98;
+
   /* -- text --------------------------------------------------------- */
-  --text: #e6e9ee;
-  --text-muted: #98a1af;
-  --text-faint: #6b7482;
+  --text: #edeff2;
+  --text-muted: #9ba3af;
+  --text-faint: #6b7280;
 
   /* -- accent ------------------------------------------------------- */
-  --accent: #4da3ff;
-  --accent-hover: #6fb5ff;
-  --accent-contrast: #04121f;
-  --accent-dim: rgba(77, 163, 255, 0.14);
+  --accent: #c0f53f;
+  --accent-hover: #cdff5c;
+  --accent-contrast: #0a0b0d;
+  --accent-dim: rgba(192, 245, 63, 0.12);
+  --accent-line: rgba(192, 245, 63, 0.35);
 
-  /* -- danger levels, mapped to safety.Danger ----------------------- */
-  --safe: #4ade80;
-  --moderate: #fbbf24;
-  --destructive: #fb923c;
-  --critical: #f87171;
-  --safe-dim: rgba(74, 222, 128, 0.12);
-  --moderate-dim: rgba(251, 191, 36, 0.12);
-  --destructive-dim: rgba(251, 146, 60, 0.12);
-  --critical-dim: rgba(248, 113, 113, 0.12);
+  /* -- danger, mapped to safety.Danger ------------------------------ *
+   * Deliberately no green. Lime already means "interactive"; a green
+   * SAFE would read as the same thing. SAFE is the default state and
+   * carries no colour, so the warm ramp reads purely as rising risk. */
+  --safe: var(--text-muted);
+  --moderate: #f5c242;
+  --destructive: #ff8a3d;
+  --critical: #ff5a5a;
+  --safe-dim: rgba(155, 163, 175, 0.1);
+  --moderate-dim: rgba(245, 194, 66, 0.13);
+  --destructive-dim: rgba(255, 138, 61, 0.13);
+  --critical-dim: rgba(255, 90, 90, 0.13);
 
   /* -- status ------------------------------------------------------- */
-  --ok: var(--safe);
+  --ok: var(--accent);
   --warn: var(--moderate);
   --error: var(--critical);
 
   /* -- type --------------------------------------------------------- */
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "Fira Code", monospace;
-  --text-xs: 0.75rem;
+  --text-xs: 0.6875rem;
   --text-sm: 0.8125rem;
   --text-base: 0.9375rem;
   --text-lg: 1.125rem;
   --text-xl: 1.5rem;
   --text-2xl: 2rem;
+  /* Hero numerals: the reference's "$31,211.00" treatment. */
+  --text-stat: 2.125rem;
+  --tracking-stat: -0.03em;
 
   /* -- space -------------------------------------------------------- */
   --space-1: 0.25rem;
@@ -66,10 +81,16 @@
   --space-8: 3rem;
 
   /* -- shape -------------------------------------------------------- */
-  --radius-sm: 4px;
-  --radius: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
   --radius-full: 999px;
+
+  /* -- elevation ---------------------------------------------------- */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --shadow-dock: 0 12px 32px rgba(0, 0, 0, 0.6);
 
   /* -- motion ------------------------------------------------------- */
   /* Semantics, not decoration: `fast` is feedback on a click, `base` is a
@@ -80,8 +101,11 @@
   --ease: cubic-bezier(0.2, 0, 0.2, 1);
 
   /* -- layout ------------------------------------------------------- */
-  --nav-width: 208px;
-  --content-max: 68rem;
+  --rail-width: 68px;
+  --content-max: 84rem;
+  /* Clearance for the floating dock: its own height plus the gap it
+     sits above the viewport edge, or panels scroll underneath it. */
+  --dock-height: 84px;
 }
 
 /* Tailwind v4 reads its palette from these, so `bg-surface`, `text-muted`,
@@ -93,6 +117,11 @@
   --color-sunken: var(--surface-sunken);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
+
+  --color-panel: var(--panel);
+  --color-panel-border: var(--panel-border);
+  --color-panel-text: var(--panel-text);
+  --color-panel-muted: var(--panel-muted);
 
   --color-text: var(--text);
   --color-muted: var(--text-muted);
@@ -118,31 +147,48 @@
   --radius-sm: var(--radius-sm);
   --radius-DEFAULT: var(--radius);
   --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
 }
 
-/* Respect the OS setting. Someone driving this from a bright room should not
-   be handed a dark HUD. */
+/*
+ * Light theme, after the Cardiology reference's warm off-white canvas.
+ *
+ * Bright lime fails contrast as text on a light ground, so it stays a *fill*
+ * colour here and a darker olive carries any accent text. Getting this wrong
+ * is the usual way a one-accent dark design breaks in light mode.
+ */
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f7f8fa;
-    --surface: #ffffff;
+    --bg: #edebe4;
+    --surface: #f7f6f2;
     --surface-raised: #ffffff;
-    --surface-sunken: #eef0f4;
-    --border: #dfe3ea;
-    --border-strong: #c4cbd6;
+    --surface-sunken: #e4e2da;
+    --border: #d9d6cc;
+    --border-strong: #bcb8ab;
 
-    --text: #12151a;
-    --text-muted: #59616e;
-    --text-faint: #858d9a;
+    --panel: #1a1d23;
+    --panel-border: #2b2f37;
+    --panel-text: #edeff2;
+    --panel-muted: #9ba3af;
+    --panel-faint: #6b7280;
 
-    --accent: #0b66d0;
-    --accent-hover: #0a58b3;
+    --text: #14171c;
+    --text-muted: #565d68;
+    --text-faint: #838a95;
+
+    --accent: #4f6b00;
+    --accent-hover: #3e5400;
     --accent-contrast: #ffffff;
-    --accent-dim: rgba(11, 102, 208, 0.1);
+    --accent-dim: rgba(79, 107, 0, 0.1);
+    --accent-line: rgba(79, 107, 0, 0.3);
 
-    --safe: #16a34a;
-    --moderate: #b45309;
-    --destructive: #c2410c;
-    --critical: #b91c1c;
+    --safe: var(--text-muted);
+    --moderate: #9a6600;
+    --destructive: #b4460b;
+    --critical: #b3201f;
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.14);
+    --shadow-dock: 0 12px 32px rgba(0, 0, 0, 0.16);
   }
 }

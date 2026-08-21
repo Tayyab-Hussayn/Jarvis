@@ -601,3 +601,125 @@ def test_approved_confirmation_actually_runs_the_skill(
                 break
 
     assert not doomed.exists(), f"approval did not run the skill: {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# The `run` frame — UI panels driving skills directly
+# ---------------------------------------------------------------------------
+#
+# Panels invoke skills with no model in the loop. The confirmer must still be
+# installed: without it safety.enforce() falls back to deny and every
+# destructive panel button silently fails, and — worse — a future refactor
+# could "fix" that by bypassing enforce entirely.
+
+
+def test_run_frame_executes_a_safe_skill(client):
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())          # hello
+        ws.send_text(json.dumps(
+            {"t": "run", "id": "r1", "skill": "system_status", "args": {}}))
+
+        frames, result = [], ""
+        for _ in range(10):
+            frame = json.loads(ws.receive_text())
+            frames.append(frame["t"])
+            if frame["t"] == "tool_result":
+                result = frame["result"]
+            if frame["t"] == "turn_end":
+                break
+
+    assert "tool_call" in frames and "tool_result" in frames
+    assert result and "Unknown skill" not in result
+
+
+def test_run_frame_reports_an_unknown_skill(client):
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())
+        ws.send_text(json.dumps(
+            {"t": "run", "id": "r1", "skill": "no_such_skill", "args": {}}))
+        result = ""
+        for _ in range(10):
+            frame = json.loads(ws.receive_text())
+            if frame["t"] == "tool_result":
+                result = frame["result"]
+            if frame["t"] == "turn_end":
+                break
+    assert "Unknown skill" in result
+
+
+def test_run_frame_still_asks_before_destroying(tmp_path, client):
+    """A panel-issued delete must raise the same confirmation card."""
+    victim = tmp_path / "panel-victim.txt"
+    victim.write_text("keep me")
+
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())
+        ws.send_text(json.dumps({
+            "t": "run", "id": "r1", "skill": "delete_path",
+            "args": {"path": str(victim), "permanent": True},
+        }))
+
+        confirm = None
+        for _ in range(10):
+            frame = json.loads(ws.receive_text())
+            if frame["t"] == "confirm_request":
+                confirm = frame
+                break
+        assert confirm is not None, "a panel delete ran without asking"
+        assert confirm["danger"] in ("DESTRUCTIVE", "CRITICAL")
+
+        ws.send_text(json.dumps({
+            "t": "confirm_reply", "confirm_id": confirm["confirm_id"],
+            "approve": False,
+        }))
+        for _ in range(10):
+            if json.loads(ws.receive_text())["t"] == "turn_end":
+                break
+
+    assert victim.exists(), "a denied panel confirmation still deleted the file"
+
+
+def test_run_frame_honours_an_approval(tmp_path, client):
+    """The mirror test — a bridge that denied everything would pass the above."""
+    doomed = tmp_path / "panel-doomed.txt"
+    doomed.write_text("delete me")
+
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())
+        ws.send_text(json.dumps({
+            "t": "run", "id": "r1", "skill": "delete_path",
+            "args": {"path": str(doomed), "permanent": True},
+        }))
+        confirm = None
+        for _ in range(10):
+            frame = json.loads(ws.receive_text())
+            if frame["t"] == "confirm_request":
+                confirm = frame
+                break
+        assert confirm is not None
+        ws.send_text(json.dumps({
+            "t": "confirm_reply", "confirm_id": confirm["confirm_id"],
+            "approve": True,
+        }))
+        for _ in range(10):
+            if json.loads(ws.receive_text())["t"] == "turn_end":
+                break
+
+    assert not doomed.exists(), "approval did not run the skill"
+
+
+def test_run_frame_rejects_a_second_request_while_busy(client):
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())
+        ws.send_text(json.dumps(
+            {"t": "run", "id": "a", "skill": "list_processes", "args": {}}))
+        ws.send_text(json.dumps(
+            {"t": "run", "id": "b", "skill": "list_processes", "args": {}}))
+        errors = []
+        for _ in range(12):
+            frame = json.loads(ws.receive_text())
+            if frame["t"] == "error":
+                errors.append(frame["message"])
+            if frame["t"] == "turn_end":
+                break
+    assert any("already running" in m for m in errors), errors

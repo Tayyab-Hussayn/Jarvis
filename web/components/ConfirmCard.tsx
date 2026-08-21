@@ -17,14 +17,7 @@
 import { useEffect, useState } from "react";
 
 import type { ConfirmView } from "@/lib/protocol";
-import { Button, DangerBadge } from "./ui";
-
-const BORDER = {
-  SAFE: "var(--safe)",
-  MODERATE: "var(--moderate)",
-  DESTRUCTIVE: "var(--destructive)",
-  CRITICAL: "var(--critical)",
-} as const;
+import { Button, DangerBadge, dangerColour } from "./ui";
 
 function useCountdown(expiresAt: number, active: boolean): number {
   const [left, setLeft] = useState(() =>
@@ -51,6 +44,7 @@ export function ConfirmCard({
   const pending = confirm.status === "pending";
   const secondsLeft = useCountdown(confirm.expiresAt, pending);
   const needsDoubleClick = confirm.danger === "CRITICAL";
+  const colour = dangerColour(confirm.danger);
 
   const approve = () => {
     if (needsDoubleClick && !armed) {
@@ -62,26 +56,34 @@ export function ConfirmCard({
 
   return (
     <div
-      className="rounded-lg border-l-2 border border-[var(--border)] bg-[var(--surface-raised)] p-3"
-      style={{ borderLeftColor: BORDER[confirm.danger] }}
+      className="rounded-[var(--radius-lg)] border border-l-2 border-[var(--border)] bg-[var(--surface-raised)] p-3.5"
+      style={
+        {
+          borderLeftColor: colour,
+          "--pulse-tint": `color-mix(in srgb, ${colour} 22%, transparent)`,
+          animation: pending ? "await-answer 2.2s ease-in-out infinite" : undefined,
+        } as React.CSSProperties
+      }
       role={pending ? "alertdialog" : undefined}
       aria-label={pending ? `Confirm: ${confirm.action}` : undefined}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <DangerBadge danger={confirm.danger} />
-            <span className="text-[var(--text-sm)] font-medium">{confirm.action}</span>
+            <span className="text-[length:var(--text-sm)] font-medium">
+              {confirm.action}
+            </span>
           </div>
           {confirm.detail && (
-            <p className="mt-1.5 break-all font-[family-name:var(--font-mono)] text-[var(--text-xs)] text-[var(--text-muted)]">
+            <p className="mt-1.5 break-all font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-muted)]">
               {confirm.detail}
             </p>
           )}
         </div>
         {pending && (
           <span
-            className="shrink-0 tabular-nums text-[var(--text-xs)] text-[var(--text-faint)]"
+            className="shrink-0 tabular-nums text-[length:var(--text-xs)] text-[var(--text-faint)]"
             title="Denied automatically when this runs out"
           >
             {secondsLeft}s
@@ -90,24 +92,22 @@ export function ConfirmCard({
       </div>
 
       {pending ? (
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button onClick={() => onRespond(confirm.confirmId, false)}>Deny</Button>
           <Button variant={armed ? "danger" : "default"} onClick={approve}>
             {needsDoubleClick && !armed ? "Approve…" : "Approve"}
           </Button>
-          {needsDoubleClick && armed && (
-            <span className="text-[var(--text-xs)] text-[var(--critical)]">
-              Click again to confirm — this is a critical action.
-            </span>
-          )}
-          {!needsDoubleClick && (
-            <span className="text-[var(--text-xs)] text-[var(--text-faint)]">
-              Brahma is waiting.
-            </span>
-          )}
+          <span
+            className="text-[length:var(--text-xs)]"
+            style={{ color: armed ? "var(--critical)" : "var(--text-faint)" }}
+          >
+            {needsDoubleClick && armed
+              ? "Click again — this is a critical action."
+              : "Brahma is waiting."}
+          </span>
         </div>
       ) : (
-        <p className="mt-2 text-[var(--text-xs)] text-[var(--text-muted)]">
+        <p className="mt-2 text-[length:var(--text-xs)] text-[var(--text-muted)]">
           {confirm.status === "approved" && "Approved."}
           {confirm.status === "denied" && "Denied."}
           {confirm.status === "expired" &&

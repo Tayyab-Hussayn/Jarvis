@@ -15,7 +15,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Scrollbars styled to match the surfaces; the default light scrollbar on a
+/* Scrollbars styled to match the surfaces; a default light scrollbar on a
    dark panel is the single most obvious "unfinished" tell. */
 * {
   scrollbar-width: thin;
@@ -43,6 +43,62 @@ body {
   border-radius: var(--radius-sm);
 }
 
+/* Numerals in stats and tables must not jitter as values tick. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Horizontal chip rows scroll rather than wrap; the scrollbar itself would
+   be noise at this size. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* -- animation ------------------------------------------------------- */
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Nodes in the turn graph arrive as the agent works. */
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* A pending confirmation blocks the agent thread, so its card breathes until
+   answered — the one place in the UI that actively asks for attention. */
+@keyframes await-answer {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--pulse-tint);
+  }
+}
+
 /* Honour the OS reduced-motion setting rather than animating regardless. */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -51,16 +107,5 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-}
-
-/* Used by the running-tool indicator. */
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.3;
   }
 }

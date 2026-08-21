@@ -11,7 +11,7 @@ export type Danger = "SAFE" | "MODERATE" | "DESTRUCTIVE" | "CRITICAL";
 
 export type ServerFrame =
   | { t: "hello"; assistant_name: string; skills: number; provider: string; model: string; environment: string }
-  | { t: "turn_start"; id: string }
+  | { t: "turn_start"; id: string; skill?: string }
   | { t: "thinking"; id: string; text: string }
   | { t: "tool_call"; id: string; call_id: string; name: string; args: Record<string, unknown>; display: string }
   | { t: "tool_result"; id: string; call_id: string; name: string; result: string }
@@ -27,6 +27,9 @@ export type ServerFrame =
 
 export type ClientFrame =
   | { t: "ask"; id: string; text: string }
+  // Panels invoke a skill directly — no model, no tokens. Confirmations still
+  // route through the same bridge as a model-issued call.
+  | { t: "run"; id: string; skill: string; args: Record<string, unknown> }
   | { t: "confirm_reply"; confirm_id: string; approve: boolean }
   | { t: "reset" }
   | { t: "ping" };

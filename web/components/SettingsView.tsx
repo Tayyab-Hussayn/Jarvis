@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Providers, models and skills.
+ * Configures the *assistant*. Control configures the machine.
  *
  * Key material never reaches this page — the server redacts it to `***`, and
  * `_deep_merge` drops that placeholder on write so saving cannot overwrite a
@@ -10,27 +10,32 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import type { SkillInfo, StateSnapshot } from "@/lib/protocol";
 import { api } from "@/lib/session";
-import { Button, DangerBadge, Empty, Panel } from "./ui";
+import { Button, Empty, Field, Panel } from "./ui";
+import { Screen } from "./Shell";
+
+type Settings = Record<string, unknown>;
+
+function flatten(value: unknown, prefix = ""): [string, string][] {
+  if (value === null || value === undefined) return [[prefix, "—"]];
+  if (typeof value !== "object") return [[prefix, String(value)]];
+  if (Array.isArray(value)) return [[prefix, value.length ? value.join(", ") : "—"]];
+  return Object.entries(value as Settings).flatMap(([key, inner]) =>
+    flatten(inner, prefix ? `${prefix}.${key}` : key),
+  );
+}
 
 export function SettingsView() {
-  const [state, setState] = useState<StateSnapshot | null>(null);
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [search, setSearch] = useState("");
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [snapshot, list] = await Promise.all([
-        api<StateSnapshot>("/api/state"),
-        api<{ skills: SkillInfo[] }>("/api/skills"),
-      ]);
-      setState(snapshot);
-      setSkills(list.skills);
+      const data = await api<{ settings: Settings }>("/api/settings");
+      setSettings(data.settings);
       setError("");
     } catch (exc) {
-      setError(String(exc));
+      setError(exc instanceof Error ? exc.message : String(exc));
     }
   }, []);
 
@@ -38,126 +43,72 @@ export function SettingsView() {
     void load();
   }, [load]);
 
-  if (error) return <Empty>Could not read settings: {error}</Empty>;
-  if (!state) return <Empty>Loading…</Empty>;
+  if (error) {
+    return (
+      <Screen title="Settings">
+        <Empty>Could not read settings: {error}</Empty>
+      </Screen>
+    );
+  }
+  if (!settings) {
+    return (
+      <Screen title="Settings">
+        <Empty>Loading…</Empty>
+      </Screen>
+    );
+  }
 
-  const query = search.trim().toLowerCase();
-  const visible = query
-    ? skills.filter(
-        (skill) =>
-          skill.name.includes(query) ||
-          skill.description.toLowerCase().includes(query) ||
-          skill.category.toLowerCase().includes(query),
-      )
-    : skills;
-
-  const byCategory = visible.reduce<Record<string, SkillInfo[]>>((acc, skill) => {
-    (acc[skill.category || "other"] ??= []).push(skill);
-    return acc;
-  }, {});
+  const groups = Object.entries(settings).filter(
+    ([, value]) => typeof value === "object" && value !== null && !Array.isArray(value),
+  );
+  const scalars = Object.entries(settings).filter(
+    ([, value]) => typeof value !== "object" || value === null || Array.isArray(value),
+  );
 
   return (
-    <div className="space-y-4">
-      <Panel title="Language model" actions={<Button onClick={() => void load()}>Refresh</Button>}>
-        <dl className="space-y-1.5 text-[var(--text-sm)]">
-          <div className="flex justify-between gap-4">
-            <dt className="text-[var(--text-muted)]">Provider</dt>
-            <dd className="font-[family-name:var(--font-mono)] text-[var(--text-xs)]">
-              {state.provider}
-            </dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-[var(--text-muted)]">Model</dt>
-            <dd className="font-[family-name:var(--font-mono)] text-[var(--text-xs)]">
-              {state.model}
-            </dd>
-          </div>
-          <div className="flex justify-between gap-4">
-            <dt className="text-[var(--text-muted)]">Fallback</dt>
-            <dd className="font-[family-name:var(--font-mono)] text-[var(--text-xs)]">
-              {state.fallback_model || "—"}
-            </dd>
-          </div>
-        </dl>
-
-        <div className="mt-4 space-y-1.5">
-          {state.providers.map((provider) => (
-            <div
-              key={provider.name}
-              className="flex items-center justify-between rounded-[var(--radius)] border border-[var(--border)] px-3 py-2"
-            >
-              <span className="font-[family-name:var(--font-mono)] text-[var(--text-sm)]">
-                {provider.name}
-              </span>
-              <span
-                className="text-[var(--text-xs)]"
-                style={{
-                  color: provider.cooling
-                    ? "var(--critical)"
-                    : provider.available
-                      ? "var(--safe)"
-                      : "var(--text-faint)",
-                }}
-              >
-                {provider.cooling
-                  ? "cooling down after failures"
-                  : provider.available
-                    ? "ready"
-                    : "not configured"}
-              </span>
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-      <Panel title={`Skills (${skills.length})`}>
-        <input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search skills…"
-          className="mb-3 w-full rounded-[var(--radius)] border border-[var(--border-strong)] bg-[var(--surface-sunken)] px-3 py-1.5 text-[var(--text-sm)] outline-none"
-        />
-        {visible.length === 0 ? (
-          <Empty>Nothing matches “{search}”.</Empty>
-        ) : (
-          <div className="max-h-[60vh] space-y-4 overflow-y-auto">
-            {Object.entries(byCategory)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([category, list]) => (
-                <div key={category}>
-                  <h3 className="mb-1.5 text-[var(--text-xs)] uppercase tracking-wide text-[var(--text-faint)]">
-                    {category}
-                  </h3>
-                  <ul className="space-y-1">
-                    {list.map((skill) => (
-                      <li
-                        key={skill.name}
-                        className="flex items-baseline gap-2 text-[var(--text-sm)]"
-                      >
-                        <span
-                          className="shrink-0 font-[family-name:var(--font-mono)] text-[var(--text-xs)]"
-                          style={{
-                            color: skill.available
-                              ? "var(--text)"
-                              : "var(--text-faint)",
-                          }}
-                        >
-                          {skill.name}
-                        </span>
-                        {skill.danger !== "SAFE" && <DangerBadge danger={skill.danger} />}
-                        <span className="min-w-0 flex-1 truncate text-[var(--text-xs)] text-[var(--text-muted)]">
-                          {skill.available
-                            ? skill.description
-                            : skill.unavailable_reason || "unavailable"}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-          </div>
+    <Screen
+      title="Settings"
+      subtitle="How the assistant itself is configured. Edited at ~/.config/brahma-echo/settings.json."
+      actions={<Button onClick={() => void load()}>Reload</Button>}
+    >
+      <div className="grid gap-4 overflow-y-auto pb-6 lg:grid-cols-2">
+        {scalars.length > 0 && (
+          <Panel title="General">
+            <dl className="space-y-1.5">
+              {scalars.flatMap(([key, value]) =>
+                flatten(value, key).map(([path, shown]) => (
+                  <Field key={path} label={path} value={shown} />
+                )),
+              )}
+            </dl>
+          </Panel>
         )}
-      </Panel>
-    </div>
+
+        {groups.map(([group, value]) => (
+          <Panel key={group} title={group}>
+            <dl className="space-y-1.5">
+              {flatten(value).map(([path, shown]) => (
+                <Field
+                  key={path}
+                  label={path}
+                  value={shown}
+                  tone={shown === "***" ? "var(--moderate)" : undefined}
+                />
+              ))}
+            </dl>
+          </Panel>
+        ))}
+
+        <Panel title="Editing" className="lg:col-span-2">
+          <p className="text-[length:var(--text-sm)] text-[var(--text-muted)]">
+            This screen is read-only for now. Values marked{" "}
+            <span style={{ color: "var(--moderate)" }}>***</span> are credentials
+            the server refuses to send to the browser at all. Edit
+            settings.json directly, or ask Brahma in the Console — it has skills
+            for the model and provider.
+          </p>
+        </Panel>
+      </div>
+    </Screen>
   );
 }

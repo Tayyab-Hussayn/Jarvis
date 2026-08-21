@@ -7,9 +7,15 @@
  * Everything the UI renders comes out of here; no component talks to the
  * socket directly.
  *
- * Reconnect is exponential with a cap. A server that is simply not running
- * (the usual case — the user closed the terminal) must not turn into a
- * connection attempt every 100ms for the rest of the day.
+ * Two kinds of work share one socket:
+ *
+ *   ask  — a model turn. Frames build up a Message in `messages`.
+ *   run  — a panel invoking one skill directly. Frames resolve a promise, and
+ *          any confirmation surfaces in `panelConfirms` so it can be rendered
+ *          as a global overlay rather than buried in the Console.
+ *
+ * Turn ids carry the distinction (`t…` vs `p…`), so a single frame handler
+ * routes both without the server needing to care.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -23,7 +29,12 @@ import type {
 } from "./protocol";
 import { captureToken, getToken, wsUrl } from "./session";
 
-export type Connection = "connecting" | "open" | "reconnecting" | "offline" | "unauthorized";
+export type Connection =
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "offline"
+  | "unauthorized";
 
 export interface Hello {
   assistantName: string;
@@ -37,23 +48,30 @@ const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 15_000;
 const PING_INTERVAL_MS = 25_000;
 
-/** Close code 1008 is our auth rejection — retrying with the same bad token is pointless. */
+/** Close code 1008 is our auth rejection — retrying a bad token is pointless. */
 const POLICY_VIOLATION = 1008;
+
+interface PendingRun {
+  resolve: (result: string) => void;
+  reject: (reason: Error) => void;
+}
 
 export function useBrahma() {
   const [connection, setConnection] = useState<Connection>("connecting");
   const [hello, setHello] = useState<Hello | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
+  const [panelConfirms, setPanelConfirms] = useState<ConfirmView[]>([]);
 
   const socketRef = useRef<WebSocket | null>(null);
   const attemptsRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const turnRef = useRef(0);
-  // Set when the component unmounts, so an in-flight close handler doesn't
-  // schedule a reconnect against a dead component.
+  const seqRef = useRef(0);
+  const runsRef = useRef(new Map<string, PendingRun>());
   const goneRef = useRef(false);
+
+  const isPanelTurn = (id: string | undefined) => Boolean(id?.startsWith("p"));
 
   /* -- view-model updates -------------------------------------------- */
 
@@ -70,6 +88,51 @@ export function useBrahma() {
 
   const handle = useCallback(
     (frame: ServerFrame) => {
+      // Panel runs never touch the conversation. They resolve a promise and,
+      // if the skill is destructive, raise a global confirmation instead.
+      // `error` frames carry an optional id, so narrow it once here rather
+      // than re-asserting at each use.
+      const turnId = "id" in frame && frame.id ? frame.id : "";
+      if (isPanelTurn(turnId)) {
+        switch (frame.t) {
+          case "confirm_request":
+            setPanelConfirms((current) => [
+              ...current,
+              {
+                confirmId: frame.confirm_id,
+                action: frame.action,
+                detail: frame.detail,
+                danger: frame.danger,
+                expiresAt: Date.now() + frame.timeout * 1000,
+                status: "pending",
+              },
+            ]);
+            break;
+          case "confirm_expired":
+            setPanelConfirms((current) =>
+              current.map((confirm) =>
+                confirm.confirmId === frame.confirm_id
+                  ? { ...confirm, status: "expired" }
+                  : confirm,
+              ),
+            );
+            break;
+          case "tool_result":
+            runsRef.current.get(turnId)?.resolve(frame.result);
+            break;
+          case "turn_end":
+            runsRef.current.delete(turnId);
+            setBusy(false);
+            break;
+          case "error":
+            runsRef.current.get(turnId)?.reject(new Error(frame.message));
+            runsRef.current.delete(turnId);
+            setBusy(false);
+            break;
+        }
+        return;
+      }
+
       switch (frame.t) {
         case "hello":
           setHello({
@@ -85,7 +148,15 @@ export function useBrahma() {
           setBusy(true);
           setMessages((current) => [
             ...current,
-            { id: frame.id, role: "assistant", text: "", pending: true, tools: [], thinking: [], confirms: [] },
+            {
+              id: frame.id,
+              role: "assistant",
+              text: "",
+              pending: true,
+              tools: [],
+              thinking: [],
+              confirms: [],
+            },
           ]);
           break;
 
@@ -167,14 +238,17 @@ export function useBrahma() {
           break;
 
         case "error":
-          // A turn-scoped error attaches to its message; a transport-level one
-          // becomes a standalone entry so it is not lost.
           if (frame.id) {
             patchTurn(frame.id, (message) => ({ ...message, error: frame.message }));
           } else {
             setMessages((current) => [
               ...current,
-              { id: `err-${Date.now()}`, role: "assistant", text: "", error: frame.message },
+              {
+                id: `err-${Date.now()}`,
+                role: "assistant",
+                text: "",
+                error: frame.message,
+              },
             ]);
           }
           break;
@@ -230,10 +304,16 @@ export function useBrahma() {
       if (pingTimerRef.current) clearInterval(pingTimerRef.current);
       socketRef.current = null;
       setBusy(false);
+
+      // Nothing will ever resolve these now.
+      for (const pending of runsRef.current.values()) {
+        pending.reject(new Error("Connection lost"));
+      }
+      runsRef.current.clear();
+
       if (goneRef.current) return;
 
       if (event.code === POLICY_VIOLATION) {
-        // Rejected by the server's auth. Reconnecting cannot fix a bad token.
         setConnection("unauthorized");
         return;
       }
@@ -248,8 +328,8 @@ export function useBrahma() {
     };
 
     socket.onerror = () => {
-      // `onclose` always follows; the reconnect is handled there so it does
-      // not get scheduled twice.
+      // `onclose` always follows; reconnect is handled there so it is not
+      // scheduled twice.
     };
   }, [handle]);
 
@@ -280,9 +360,12 @@ export function useBrahma() {
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || busy) return;
-      turnRef.current += 1;
-      const id = `t${turnRef.current}`;
-      setMessages((current) => [...current, { id: `${id}-user`, role: "user", text: trimmed }]);
+      seqRef.current += 1;
+      const id = `t${seqRef.current}`;
+      setMessages((current) => [
+        ...current,
+        { id: `${id}-user`, role: "user", text: trimmed },
+      ]);
       if (!send({ t: "ask", id, text: trimmed })) {
         setMessages((current) => [
           ...current,
@@ -293,27 +376,69 @@ export function useBrahma() {
     [busy, send],
   );
 
-  const respondToConfirm = useCallback(
-    (confirmId: string, approve: boolean) => {
-      send({ t: "confirm_reply", confirm_id: confirmId, approve });
-      setMessages((current) =>
-        current.map((message) => ({
-          ...message,
-          confirms: (message.confirms ?? []).map((confirm) =>
-            confirm.confirmId === confirmId && confirm.status === "pending"
-              ? { ...confirm, status: approve ? "approved" : "denied" }
-              : confirm,
-          ),
-        })),
-      );
+  /**
+   * Invoke one skill directly. Resolves with the skill's textual result.
+   *
+   * Rejects rather than hanging when the socket is down or another request is
+   * in flight, so a panel can show a real error instead of a spinner that
+   * never stops.
+   */
+  const run = useCallback(
+    (skill: string, args: Record<string, unknown> = {}): Promise<string> => {
+      seqRef.current += 1;
+      const id = `p${seqRef.current}`;
+      return new Promise<string>((resolve, reject) => {
+        if (!send({ t: "run", id, skill, args })) {
+          reject(new Error("Not connected"));
+          return;
+        }
+        setBusy(true);
+        runsRef.current.set(id, { resolve, reject });
+      });
     },
     [send],
   );
+
+  const respondToConfirm = useCallback(
+    (confirmId: string, approve: boolean) => {
+      send({ t: "confirm_reply", confirm_id: confirmId, approve });
+      const settle = (confirm: ConfirmView) =>
+        confirm.confirmId === confirmId && confirm.status === "pending"
+          ? { ...confirm, status: approve ? ("approved" as const) : ("denied" as const) }
+          : confirm;
+
+      setMessages((current) =>
+        current.map((message) => ({
+          ...message,
+          confirms: (message.confirms ?? []).map(settle),
+        })),
+      );
+      setPanelConfirms((current) => current.map(settle));
+    },
+    [send],
+  );
+
+  const dismissPanelConfirm = useCallback((confirmId: string) => {
+    setPanelConfirms((current) =>
+      current.filter((confirm) => confirm.confirmId !== confirmId),
+    );
+  }, []);
 
   const reset = useCallback(() => {
     if (busy) return;
     if (!send({ t: "reset" })) setMessages([]);
   }, [busy, send]);
 
-  return { connection, hello, messages, busy, ask, respondToConfirm, reset };
+  return {
+    connection,
+    hello,
+    messages,
+    busy,
+    panelConfirms,
+    ask,
+    run,
+    respondToConfirm,
+    dismissPanelConfirm,
+    reset,
+  };
 }

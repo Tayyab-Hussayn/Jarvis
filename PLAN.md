@@ -3,8 +3,8 @@
 Living plan for the frontend development phase. Updated as phases complete and as decisions
 land. `user-space/STATE.md` tracks *where we are*; this file tracks *what we agreed to build*.
 
-**Status:** Phases 1–5 complete for v1. 192 tests passing. Awaiting the look-and-feel brief.
-**Look and feel:** not yet specified by the user — see [Theming](#theming-placeholder-until-specified).
+**Status:** v1 complete and redesigned. 197 tests passing. Nine screens, all 119 skills reachable.
+**Look and feel:** acid lime on near-black — see [Theming](#7-theming--acid-lime-on-near-black).
 
 ---
 
@@ -36,8 +36,8 @@ Qt nav was four pages: Dashboard, Brahma Echo Home, Devices, System & Connect.
 
 | Decision | Choice | Why |
 |---|---|---|
-| Frontend stack | **Next.js 15 (App Router) + React 19 + TypeScript + Tailwind v4** | User's home turf; App Router in pure-SPA mode |
-| Component primitives | **shadcn/ui** (Radix under the hood) | Unstyled + accessible. We own the look; it owns the keyboard/focus/ARIA correctness we would otherwise get wrong |
+| Frontend stack | **Next.js 16 + React 19 + TypeScript + Tailwind v4** | User's home turf; App Router in pure-SPA mode |
+| Component primitives | **hand-written** | Radix was planned for the command palette's focus trap; the palette needed ~30 lines of focus handling, so the dependency was not worth it |
 | Build output | **`output: 'export'` → static** | No Node at runtime. FastAPI serves the built `out/` dir |
 | Backend | **FastAPI + `uvicorn`, websocket + REST** | Same shape the original `dashboard/server.py` proved |
 | Bind | **`127.0.0.1` only in v1** | Remote is v3, and shipping LAN-bound early is how local services get owned |
@@ -56,7 +56,7 @@ web/               # Next.js app (its own package.json, not in the venv)
   app/
   components/
   lib/
-  styles/tokens.css
+  app/tokens.css
 brahma/web-dist/   # built static output, gitignored, served by server.py
 ```
 
@@ -168,6 +168,39 @@ Additionally:
 
 ---
 
+## 6a. Redesign — what shipped
+
+Nine screens on a left icon rail, covering all 15 skill categories:
+
+| Screen | Covers |
+|---|---|
+| Console | the conversation, as a flow graph |
+| System | `system` + `shell` — stats, sparklines, process table, services, logs |
+| Windows | `windows` — workspace chips, window cards, focus/close |
+| Files | `files` + `documents` |
+| Apps | `apps` + `games` — desktop entries, packages, updates |
+| Control | `settings` + `power` + `notify` — audio, display, network, power |
+| Screen | `interact` + `media` + `web` — vision, capture, clipboard, search |
+| Activity | audit log, master/detail |
+| Brain | `llm` + `memory` + voice + the skill catalogue |
+
+Plus: **command palette** (`Ctrl+K`, fuzzy over 119 skills, argument forms built from each skill's
+JSON Schema), a **floating dock**, and a **global confirmation overlay**.
+
+**Three findings worth keeping:**
+
+1. **Skills return prose, not data.** Every skill formats its output for the model to read.
+   Panels that need real records (`/api/windows`, `/api/apps`, `/api/processes`) read the
+   `platform/` layer directly. Regex-parsing the prose would break the moment a message is
+   reworded — and the wording exists to serve the model, so it *will* be reworded.
+2. **Panel actions need the confirmer installed.** `run` dispatches inside `confirmer_scope(
+   session.confirm)`. Without it `safety.enforce()` falls back to deny and every destructive
+   panel button silently fails — the tempting "fix" for which is bypassing `enforce`.
+   A panel confirmation surfaces in a **global overlay**, because the user may have navigated
+   away from the screen that started it while the agent thread sits blocked.
+3. **Models emit Markdown constantly.** Answers arrived full of `**` and raw table pipes.
+   `react-markdown` + `remark-gfm`, styled entirely from tokens.
+
 ## 6. Screens
 
 ### Console *(the core; everything else is secondary)*
@@ -203,18 +236,30 @@ least function in the original, and riskiest on Wayland).
 
 ---
 
-## 7. Theming *(placeholder until specified)*
+## 7. Theming — acid lime on near-black
 
-The user will describe the look and feel separately; this section gets rewritten then.
+Direction chosen from four supplied references. Everything lives in `web/app/tokens.css`; no
+component hardcodes a value.
 
-Until that lands, **every colour, radius, spacing step, font and motion duration lives as a CSS
-custom property in `web/styles/tokens.css`**, and no component hardcodes a value. Tailwind is
-configured to read those variables rather than its default palette. The re-skin is then a
-single-file change, not a sweep through every component.
+| Reference | Taken | Not taken |
+|---|---|---|
+| Salesforce / Invoices | **Primary identity** — near-black shell, acid-lime accent, big numerals, light detail panels over dark, pill chips | — |
+| Squadly / Task | Left icon rail, floating dock, rounded card grid | Orange palette, avatar cards |
+| Cardiology | **Connector-line flow graph** → the turn timeline | Light canvas as primary |
+| Automatic Payment | Elevation cues | Glass over a photo — illegible for dense log output |
 
-Structural choices being made now that are theme-independent: layout grid, information density,
-what goes on which screen, interaction and keyboard model, motion *semantics* (what animates and
-why, not how fast or in what colour).
+```
+bg #0A0B0D   surface #131519   raised #1A1D23   border #23272E
+text #EDEFF2  muted #9BA3AF    accent #C0F53F   panel (light-over-dark) #F6F7F4
+```
+
+**The danger scale drops green.** A green `SAFE` would collide with a lime accent — "the product"
+and "this is safe" reading as one colour. `SAFE` now carries no colour at all (it is the default
+state); the warm ramp `MODERATE #F5C242 → DESTRUCTIVE #FF8A3D → CRITICAL #FF5A5A` reads purely as
+rising risk. Lime means *interactive*, nothing competes.
+
+Light theme uses the Cardiology warm off-white (`#EDEBE4`). Bright lime fails contrast as text on
+light, so there it is a **fill** colour only and `#4F6B00` carries accent text.
 
 ---
 
@@ -294,7 +339,7 @@ Two deviations from the original decisions, both deliberate:
 - [x] Confirm cards styled by danger level, with a live countdown and a second deliberate click
       for `CRITICAL`
 - [x] History, reset, Enter-to-send
-- [ ] Command palette / direct skill invocation — deferred; this is what pulls in Radix
+- [x] Command palette — hand-rolled with a real focus trap; Radix was not needed after all
 
 ### Phase 4 — Remaining screens ✅
 
@@ -326,8 +371,7 @@ because it's the only part that can fail on platform grounds.
 
 ## 9. Open questions
 
-1. **Look and feel** — still the one blocking input. Everything is themed through
-   `web/app/tokens.css`; describe the look and the re-skin is that one file.
+1. ~~Look and feel~~ Resolved: acid lime on near-black — see §7.
 2. ~~Raw tool JSON by default or behind a disclosure?~~ Resolved: disclosure, with a persisted
    "always expand tool calls" toggle in the Console header.
 3. ~~Does `brahma serve` auto-open a browser tab?~~ Resolved: yes, with `--no-open`.

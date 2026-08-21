@@ -37,6 +37,7 @@ from typing import Any, Optional
 from . import audit, config, events, registry, webauth
 from .agent import Agent
 from .platform import detect
+from .safety import confirmer_scope
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
@@ -123,6 +124,22 @@ def create_app(token: str | None = None) -> Any:
         limit = max(1, min(int(n), 1000))
         return {"entries": audit.tail(limit=limit, event_prefix=prefix)}
 
+    # Skills return prose formatted for a model to read, not structured data.
+    # Panels that need real records read the platform layer directly rather
+    # than regex-parsing that prose — parsing it would break the moment a
+    # message is reworded, and the wording exists to serve the model.
+    @app.get("/api/windows", dependencies=auth)
+    def api_windows() -> dict[str, Any]:
+        return _windows_snapshot()
+
+    @app.get("/api/apps", dependencies=auth)
+    def api_apps() -> dict[str, Any]:
+        return _apps_snapshot()
+
+    @app.get("/api/processes", dependencies=auth)
+    def api_processes(sort: str = "cpu", limit: int = 40) -> dict[str, Any]:
+        return _processes_snapshot(sort=sort, limit=max(1, min(int(limit), 200)))
+
     @app.get("/api/voice", dependencies=auth)
     def api_voice(probe: bool = False) -> dict[str, Any]:
         # `probe` records from the microphone, so it is opt-in rather than
@@ -205,6 +222,47 @@ def create_app(token: str | None = None) -> Any:
             finally:
                 busy.clear()
 
+        def _dispatch(skill: str, args: dict) -> str:
+            """Run one skill on the worker thread, with confirmations wired.
+
+            The UI panels drive skills directly — no model, no tokens. The
+            confirmer must still be installed, or `safety.enforce()` falls back
+            to deny and every destructive panel button silently fails. Using
+            the same `session.confirm` as the agent loop means a panel-issued
+            `kill_process` raises the identical confirmation card, and the
+            per-turn denial memory applies here too.
+            """
+            with confirmer_scope(session.confirm):
+                return registry.dispatch(skill, args, source="web-panel")
+
+        async def run_skill(turn_id: str, skill: str, args: dict) -> None:
+            session.turn_id = turn_id
+            session.emit("turn_start", id=turn_id, skill=skill)
+            call_id = f"{turn_id}-call"
+            session.emit(
+                "tool_call", id=turn_id, call_id=call_id, name=skill,
+                args=args, display=skill,
+            )
+            try:
+                result = await asyncio.to_thread(_dispatch, skill, args)
+                session.emit(
+                    "tool_result", id=turn_id, call_id=call_id,
+                    name=skill, result=result,
+                )
+                session.emit("turn_end", id=turn_id, iterations=1, tool_calls=[skill])
+            except Exception as exc:
+                audit.record(
+                    "web.skill_failed", skill=skill,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                session.emit(
+                    "tool_result", id=turn_id, call_id=call_id,
+                    name=skill, result=str(exc),
+                )
+                session.emit("turn_end", id=turn_id, iterations=1, error=str(exc))
+            finally:
+                busy.clear()
+
         turn_task: asyncio.Task | None = None
         try:
             while True:
@@ -235,6 +293,23 @@ def create_app(token: str | None = None) -> Any:
                         continue
                     busy.set()
                     turn_task = asyncio.create_task(run_turn(turn_id, text))
+
+                elif kind == "run":
+                    skill = str(msg.get("skill") or "").strip()
+                    args = msg.get("args")
+                    turn_id = str(msg.get("id") or "")
+                    if not skill:
+                        continue
+                    if not isinstance(args, dict):
+                        args = {}
+                    if busy.is_set():
+                        session.emit(
+                            "error", id=turn_id,
+                            message="A request is already running.",
+                        )
+                        continue
+                    busy.set()
+                    turn_task = asyncio.create_task(run_skill(turn_id, skill, args))
 
                 elif kind == "confirm_reply":
                     ok = session.resolve_confirm(
@@ -395,6 +470,81 @@ def _system_snapshot() -> dict[str, Any]:
             __import__("time").time() - psutil.boot_time()
         )
     return snapshot
+
+
+def _windows_snapshot() -> dict[str, Any]:
+    from .platform import desktop
+
+    try:
+        backend = desktop.backend()
+        if not backend.available():
+            return {"available": False, "backend": "", "windows": [], "workspaces": []}
+        windows = backend.list_windows()
+        return {
+            "available": True,
+            "backend": type(backend).__name__.replace("Backend", "").lower(),
+            "workspaces": backend.list_workspaces(),
+            "windows": [
+                {
+                    "id": w.id, "title": w.title, "app": w.app, "pid": w.pid,
+                    "workspace": w.workspace, "focused": w.focused,
+                }
+                for w in windows
+            ],
+        }
+    except Exception as exc:
+        return {"available": False, "error": str(exc), "windows": [], "workspaces": []}
+
+
+def _apps_snapshot() -> dict[str, Any]:
+    from .platform import apps
+
+    try:
+        entries = apps.index()
+    except Exception as exc:
+        return {"available": False, "error": str(exc), "apps": []}
+    return {
+        "available": True,
+        "apps": [
+            {
+                "name": e.name,
+                "comment": e.comment or e.generic_name,
+                "categories": list(e.categories),
+                "terminal": e.terminal,
+                "running": False,   # probing every entry would be far too slow
+            }
+            for e in entries
+            if not e.no_display
+        ],
+    }
+
+
+def _processes_snapshot(*, sort: str = "cpu", limit: int = 40) -> dict[str, Any]:
+    try:
+        import psutil
+    except ImportError:
+        return {"available": False, "processes": []}
+
+    rows: list[dict[str, Any]] = []
+    for proc in psutil.process_iter(
+        ["pid", "name", "username", "cpu_percent", "memory_percent", "status"]
+    ):
+        try:
+            info = proc.info
+            rows.append({
+                "pid": info.get("pid"),
+                "name": info.get("name") or "",
+                "user": info.get("username") or "",
+                "cpu": round(float(info.get("cpu_percent") or 0), 1),
+                "memory": round(float(info.get("memory_percent") or 0), 1),
+                "status": info.get("status") or "",
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    key = "memory" if sort == "memory" else "cpu"
+    rows.sort(key=lambda r: r[key], reverse=True)
+    return {"available": True, "total": len(rows), "processes": rows[:limit]}
 
 
 def _voice_snapshot(*, probe: bool = False) -> dict[str, Any]:

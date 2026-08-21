@@ -1,13 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { StateSnapshot, SystemSnapshot } from "@/lib/protocol";
-import { api } from "@/lib/session";
-import { bytes, duration, percent } from "@/lib/format";
-import { Empty, Panel, Stat } from "./ui";
+import { useResource, useSkill, type RunSkill } from "@/lib/useApi";
+import { bytes, duration } from "@/lib/format";
+import { Button, Chip, Empty, Field, Input, Panel, SectionTitle, Stat } from "./ui";
+import { ActionRow, SkillOutput } from "./SkillOutput";
+import { Screen } from "./Shell";
 
 const POLL_MS = 3000;
+const SPARK_POINTS = 40;
+
+interface ProcessRow {
+  pid: number;
+  name: string;
+  user: string;
+  cpu: number;
+  memory: number;
+  status: string;
+}
 
 function tone(value: number | undefined): "accent" | "moderate" | "critical" {
   if (value === undefined) return "accent";
@@ -16,146 +28,231 @@ function tone(value: number | undefined): "accent" | "moderate" | "critical" {
   return "accent";
 }
 
-export function SystemView() {
-  const [system, setSystem] = useState<SystemSnapshot | null>(null);
-  const [state, setState] = useState<StateSnapshot | null>(null);
-  const [error, setError] = useState("");
-
+/** Keeps a rolling window of a polled value so stats can show a sparkline. */
+function useHistory(value: number | undefined, length = SPARK_POINTS): number[] {
+  const ref = useRef<number[]>([]);
+  const [series, setSeries] = useState<number[]>([]);
   useEffect(() => {
-    let alive = true;
+    if (value === undefined) return;
+    ref.current = [...ref.current, value].slice(-length);
+    setSeries(ref.current);
+  }, [value, length]);
+  return series;
+}
 
-    const poll = async () => {
-      try {
-        const snapshot = await api<SystemSnapshot>("/api/system");
-        if (alive) {
-          setSystem(snapshot);
-          setError("");
-        }
-      } catch (exc) {
-        if (alive) setError(String(exc));
-      }
-    };
+export function SystemView({ run }: { run: RunSkill }) {
+  const { data: system, error } = useResource<SystemSnapshot>("/api/system", POLL_MS);
+  const { data: state } = useResource<StateSnapshot>("/api/state");
+  const procs = useResource<{ processes: ProcessRow[]; total: number }>(
+    "/api/processes?sort=cpu&limit=30",
+    5000,
+  );
+  const skill = useSkill(run);
+  const [unit, setUnit] = useState("");
+  const [sort, setSort] = useState<"cpu" | "memory">("cpu");
 
-    void poll();
-    void api<StateSnapshot>("/api/state")
-      .then((value) => alive && setState(value))
-      .catch(() => undefined);
+  const cpuHistory = useHistory(system?.cpu_percent);
+  const memHistory = useHistory(system?.memory?.percent);
 
-    const timer = setInterval(poll, POLL_MS);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, []);
+  if (error) return <Screen title="System"><Empty>Could not read system state: {error}</Empty></Screen>;
+  if (!system) return <Screen title="System"><Empty>Reading system state…</Empty></Screen>;
+  if (!system.available) {
+    return <Screen title="System"><Empty>psutil is not installed.</Empty></Screen>;
+  }
 
-  if (error) return <Empty>Could not read system state: {error}</Empty>;
-  if (!system) return <Empty>Reading system state…</Empty>;
-  if (!system.available) return <Empty>psutil is not installed, so there is nothing to show.</Empty>;
-
-  const env = state?.environment;
+  const rows = (procs.data?.processes ?? [])
+    .slice()
+    .sort((a, b) => (sort === "cpu" ? b.cpu - a.cpu : b.memory - a.memory));
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat
-          label="CPU"
-          value={percent(system.cpu_percent)}
-          detail={
-            system.load
-              ? `load ${system.load.map((v) => v.toFixed(2)).join("  ")}`
-              : `${system.cpu_count ?? "?"} cores`
-          }
-          percent={system.cpu_percent}
-          tone={tone(system.cpu_percent)}
-        />
-        <Stat
-          label="Memory"
-          value={percent(system.memory?.percent)}
-          detail={`${bytes(system.memory?.used)} of ${bytes(system.memory?.total)}`}
-          percent={system.memory?.percent}
-          tone={tone(system.memory?.percent)}
-        />
-        <Stat
-          label="Disk /"
-          value={percent(system.disk?.percent)}
-          detail={`${bytes(system.disk?.used)} of ${bytes(system.disk?.total)}`}
-          percent={system.disk?.percent}
-          tone={tone(system.disk?.percent)}
-        />
-        <Stat
-          label="Battery"
-          value={system.battery ? `${system.battery.percent}%` : "—"}
-          detail={
-            system.battery
-              ? system.battery.plugged
-                ? "charging"
-                : "on battery"
-              : "no battery"
-          }
-          percent={system.battery?.percent}
-          tone={
-            system.battery && system.battery.percent < 20 && !system.battery.plugged
-              ? "critical"
-              : "safe"
-          }
-        />
-      </div>
+    <Screen
+      title="System"
+      subtitle={state?.environment.summary}
+      actions={
+        <>
+          <Button onClick={() => void skill.call("system_status", { detailed: true })}>
+            Full report
+          </Button>
+          <Button onClick={() => void skill.call("list_services", { failed_only: true })}>
+            Failed units
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 overflow-y-auto pb-6">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <Stat
+            label="CPU"
+            value={Math.round(system.cpu_percent ?? 0)}
+            unit="%"
+            detail={
+              system.load
+                ? `load ${system.load.map((v) => v.toFixed(2)).join("  ")}`
+                : `${system.cpu_count ?? "?"} cores`
+            }
+            spark={cpuHistory}
+            percent={system.cpu_percent}
+            tone={tone(system.cpu_percent)}
+          />
+          <Stat
+            label="Memory"
+            value={Math.round(system.memory?.percent ?? 0)}
+            unit="%"
+            detail={`${bytes(system.memory?.used)} of ${bytes(system.memory?.total)}`}
+            spark={memHistory}
+            percent={system.memory?.percent}
+            tone={tone(system.memory?.percent)}
+          />
+          <Stat
+            label="Disk /"
+            value={Math.round(system.disk?.percent ?? 0)}
+            unit="%"
+            detail={`${bytes(system.disk?.used)} of ${bytes(system.disk?.total)}`}
+            percent={system.disk?.percent}
+            tone={tone(system.disk?.percent)}
+          />
+          <Stat
+            label="Uptime"
+            value={duration(system.uptime_seconds)}
+            detail={
+              system.network
+                ? `↑ ${bytes(system.network.sent)}  ↓ ${bytes(system.network.received)}`
+                : undefined
+            }
+          />
+        </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Machine">
-          <dl className="space-y-1.5 text-[var(--text-sm)]">
-            {env &&
-              (
-                [
-                  ["Distro", env.distro],
-                  ["Kernel", env.kernel],
-                  ["Session", `${env.desktop} (${env.session_type})`],
-                  ["Compositor", env.compositor],
-                  ["Audio", env.audio],
-                  ["Packages", env.package_manager],
-                ] as const
-              ).map(([label, value]) => (
-                <div key={label} className="flex justify-between gap-4">
-                  <dt className="text-[var(--text-muted)]">{label}</dt>
-                  <dd className="text-right font-[family-name:var(--font-mono)] text-[var(--text-xs)]">
-                    {value || "—"}
-                  </dd>
-                </div>
-              ))}
-            <div className="flex justify-between gap-4">
-              <dt className="text-[var(--text-muted)]">Uptime</dt>
-              <dd className="font-[family-name:var(--font-mono)] text-[var(--text-xs)]">
-                {duration(system.uptime_seconds)}
-              </dd>
-            </div>
-          </dl>
-        </Panel>
+        <SkillOutput state={skill} />
 
-        <Panel title="Resources">
-          <dl className="space-y-1.5 text-[var(--text-sm)]">
-            <div className="flex justify-between gap-4">
-              <dt className="text-[var(--text-muted)]">Swap</dt>
-              <dd className="font-[family-name:var(--font-mono)] text-[var(--text-xs)]">
-                {system.swap
-                  ? `${bytes(system.swap.used)} / ${bytes(system.swap.total)}`
-                  : "—"}
-              </dd>
+        <div>
+          <SectionTitle
+            count={procs.data?.total}
+            actions={
+              <div className="flex gap-2">
+                <Chip active={sort === "cpu"} onClick={() => setSort("cpu")}>
+                  CPU
+                </Chip>
+                <Chip active={sort === "memory"} onClick={() => setSort("memory")}>
+                  Memory
+                </Chip>
+              </div>
+            }
+          >
+            Processes
+          </SectionTitle>
+
+          <Panel padded={false}>
+            <div className="max-h-[46vh] overflow-auto">
+              <table className="w-full text-left text-[length:var(--text-xs)]">
+                <thead className="sticky top-0 bg-[var(--surface)]">
+                  <tr className="text-[var(--text-faint)]">
+                    <th className="px-4 py-2 font-medium">Process</th>
+                    <th className="px-3 py-2 font-medium">PID</th>
+                    <th className="px-3 py-2 font-medium">User</th>
+                    <th className="px-3 py-2 text-right font-medium">CPU</th>
+                    <th className="px-3 py-2 text-right font-medium">Mem</th>
+                    <th className="px-4 py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((proc) => (
+                    <tr
+                      key={proc.pid}
+                      className="border-t border-[var(--border)] hover:bg-[var(--surface-raised)]"
+                    >
+                      <td className="max-w-[18rem] truncate px-4 py-1.5 font-[family-name:var(--font-mono)]">
+                        {proc.name}
+                      </td>
+                      <td className="px-3 py-1.5 tabular-nums text-[var(--text-muted)]">
+                        {proc.pid}
+                      </td>
+                      <td className="px-3 py-1.5 text-[var(--text-muted)]">{proc.user}</td>
+                      <td
+                        className="px-3 py-1.5 text-right tabular-nums"
+                        style={{ color: proc.cpu > 50 ? "var(--moderate)" : undefined }}
+                      >
+                        {proc.cpu.toFixed(1)}
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {proc.memory.toFixed(1)}
+                      </td>
+                      <td className="px-4 py-1.5 text-right">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await skill.call("kill_process", { target: String(proc.pid) });
+                            procs.reload();
+                          }}
+                          className="text-[var(--text-faint)] hover:text-[var(--critical)]"
+                          title={`Kill ${proc.name} (${proc.pid})`}
+                        >
+                          kill
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {rows.length === 0 && <Empty>No processes readable.</Empty>}
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-[var(--text-muted)]">Network sent</dt>
-              <dd className="font-[family-name:var(--font-mono)] text-[var(--text-xs)]">
-                {bytes(system.network?.sent)}
-              </dd>
+          </Panel>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title="Services & logs">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={unit}
+                onChange={setUnit}
+                placeholder="unit name, e.g. NetworkManager"
+                mono
+                className="min-w-0 flex-1"
+                onEnter={() => unit && void skill.call("service_status", { name: unit })}
+              />
+              <Button
+                disabled={!unit}
+                onClick={() => void skill.call("service_status", { name: unit })}
+              >
+                Status
+              </Button>
+              <Button onClick={() => void skill.call("read_logs", { unit, lines: 60 })}>
+                Logs
+              </Button>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-[var(--text-muted)]">Network received</dt>
-              <dd className="font-[family-name:var(--font-mono)] text-[var(--text-xs)]">
-                {bytes(system.network?.received)}
-              </dd>
-            </div>
-          </dl>
-        </Panel>
+            <ActionRow>
+              <Button onClick={() => void skill.call("list_services", {})}>All units</Button>
+              <Button onClick={() => void skill.call("network_status", {})}>Network</Button>
+              <Button onClick={() => void skill.call("disk_usage", { path: "/" })}>Disks</Button>
+              <Button onClick={() => void skill.call("environment_report", {})}>
+                Environment
+              </Button>
+            </ActionRow>
+          </Panel>
+
+          <Panel title="Machine">
+            {state && (
+              <dl className="space-y-1.5">
+                <Field label="Distro" value={state.environment.distro} />
+                <Field label="Kernel" value={state.environment.kernel} />
+                <Field
+                  label="Session"
+                  value={`${state.environment.desktop} (${state.environment.session_type})`}
+                />
+                <Field label="Compositor" value={state.environment.compositor} />
+                <Field label="Audio" value={state.environment.audio} />
+                <Field
+                  label="Swap"
+                  value={
+                    system.swap
+                      ? `${bytes(system.swap.used)} / ${bytes(system.swap.total)}`
+                      : "—"
+                  }
+                />
+              </dl>
+            )}
+          </Panel>
+        </div>
       </div>
-    </div>
+    </Screen>
   );
 }
