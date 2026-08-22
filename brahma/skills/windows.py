@@ -11,7 +11,7 @@ import time
 
 from ..platform import desktop
 from ..registry import skill
-from ..safety import Danger, Verdict, enforce
+from ..safety import Danger, Verdict, describe_targets, enforce
 
 
 @skill(category="windows", danger=Danger.SAFE)
@@ -145,8 +145,22 @@ def close_window(
         danger=Danger.DESTRUCTIVE,
         reasons=[f"{verb}s '{target.app}: {target.title[:50]}' (unsaved work may be lost)"],
     )
+    # Declaring targets rather than letting safety.py read them back out of the
+    # sentence. Two of these matter:
+    #   window:<id>  the exact window, so a retry under any verb is caught.
+    #   close_window:implicit  set only when no query was given, i.e. the target
+    #     was "whatever is focused". Declining that means the user rejected a
+    #     guess — and the next call can silently resolve a *different* window,
+    #     on a different workspace, because focus moves. Recording the guess
+    #     itself stops the retry instead of prompting about something the user
+    #     never asked about.
     enforce(verdict, f"{verb} window '{target.app}'",
-            skill="close_window", source=_source, pre_confirmed=_confirm)
+            skill="close_window", source=_source, pre_confirmed=_confirm,
+            targets=describe_targets(
+                f"window:{target.id}",
+                f"app:{target.app}",
+                "" if query else "close_window:implicit",
+            ))
 
     accepted = backend.kill(target) if force else backend.close(target)
 

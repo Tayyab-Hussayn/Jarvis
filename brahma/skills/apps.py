@@ -11,7 +11,7 @@ import time
 from ..platform import apps as apps_platform
 from ..platform import desktop, packages, shell
 from ..registry import skill
-from ..safety import Danger, Verdict, enforce
+from ..safety import Danger, Verdict, describe_targets, enforce
 
 
 @skill(category="apps", danger=Danger.MODERATE)
@@ -92,6 +92,8 @@ def close_app(
         + (["forced — the app cannot save first"] if force else []),
     )
     enforce(verdict, f"{verb} {len(matches)} window(s) of '{app_name}'",
+            targets=describe_targets(f"app:{app_name}",
+                                     *[f"window:{m.id}" for m in matches]),
             skill="close_app", source=_source, pre_confirmed=_confirm)
 
     backend = desktop.backend()

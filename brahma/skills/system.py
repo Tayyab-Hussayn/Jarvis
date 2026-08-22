@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from ..platform import detect, power, shell
 from ..registry import skill
-from ..safety import Danger, check_process, enforce
+from ..safety import Danger, check_process, describe_targets, enforce
 
 try:
     import psutil
@@ -245,6 +245,7 @@ def kill_process(
             verdict,
             f"kill {name} (PID {pid})",
             skill="kill_process", source=_source, pre_confirmed=_confirm,
+            targets=describe_targets(f"pid:{pid}", f"process:{name}"),
         )
         described.append((proc, name, pid))
 
@@ -398,6 +399,7 @@ def control_service(
     enforce(
         verdict, f"{action} {scope} service '{name}'",
         skill="control_service", source=_source, pre_confirmed=_confirm,
+        targets=describe_targets(f"service:{name}"),
     )
     return power.service_action(name, action, user=not system_scope)
 

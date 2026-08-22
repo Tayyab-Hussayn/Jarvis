@@ -21,7 +21,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from . import audit, config
 
@@ -377,6 +377,13 @@ def _target_keys(action_desc: str) -> set[str]:
     tried ``delete_path``, ``delete_path permanent``, ``rm -f``, ``rm`` and
     then ``unlink`` on the same file. Keying on the target instead means the
     first denial covers every later spelling of the same request.
+
+    This is the *fallback*. Reading the target back out of a sentence written
+    for a human is guesswork, and it silently produced no keys at all for
+    anything that was not a path or a pid — windows, apps, services, packages —
+    so declining those recorded nothing and the model could retry forever.
+    Skills should pass ``targets=`` to :func:`enforce` instead; see
+    :func:`describe_targets`.
     """
     # Action descriptions wrap shell commands in backticks ("run `rm -f /x`"),
     # so a raw token can arrive as "/x`" and silently fail to match the key
@@ -386,6 +393,13 @@ def _target_keys(action_desc: str) -> set[str]:
         for p in _candidate_paths(action_desc)
     }
     keys |= {f"pid:{pid}" for pid in re.findall(r"\bpid\s*(\d+)", action_desc, re.I)}
+    # Named targets are conventionally quoted in these descriptions —
+    # "close window 'foot'", "stop service 'nginx'".
+    keys |= {
+        name.strip().lower()
+        for name in re.findall(r"['\"]([^'\"]{1,80})['\"]", action_desc)
+        if name.strip()
+    }
     return {k for k in keys if k and k != "/"}
 
 
@@ -414,6 +428,24 @@ class confirmer_scope:
         _local.denied_targets = self._previous_denials
 
 
+def describe_targets(*parts: str) -> list[str]:
+    """Build denial-memory keys, dropping blanks.
+
+    Skills use this to say exactly what they are about to act on:
+
+        enforce(verdict, "close window 'foot'", skill="close_window",
+                targets=describe_targets(f"window:{w.id}", f"app:{w.app}"))
+
+    A skill that resolves its target *implicitly* — ``close_window()`` with no
+    query acts on whatever happens to be focused — should also pass a marker
+    like ``"close_window:implicit"``. Declining such an action means the user
+    rejected the guess, and the next guess may well land on a different window
+    entirely, so the marker stops the retry rather than re-prompting about
+    something the user never mentioned.
+    """
+    return [p.strip().lower() for p in parts if p and p.strip()]
+
+
 def enforce(
     verdict: Verdict,
     action_desc: str,
@@ -421,8 +453,14 @@ def enforce(
     skill: str = "",
     source: str = "local",
     pre_confirmed: bool = False,
+    targets: Sequence[str] | None = None,
 ) -> None:
-    """Apply a verdict: block, confirm, or allow. Raises on refusal."""
+    """Apply a verdict: block, confirm, or allow. Raises on refusal.
+
+    ``targets`` identifies what is being acted on, for the per-turn denial
+    memory. Pass it wherever the skill knows — parsing the target back out of
+    ``action_desc`` is a fallback, not a design.
+    """
     if verdict.blocked:
         audit.record(
             "safety.blocked",
@@ -461,7 +499,8 @@ def enforce(
     # than asking again. Re-asking is how a model grinds a user into approving
     # by attrition, and re-asking with a *different verb* is how it slips past
     # a gap in the pattern list.
-    keys = _target_keys(action_desc)
+    # Prefer what the skill declared; fall back to reading the sentence.
+    keys = set(targets) if targets else _target_keys(action_desc)
     already_denied = keys & _denied_targets()
     if already_denied:
         audit.record(
@@ -471,9 +510,10 @@ def enforce(
             denied_target=sorted(already_denied)[0],
         )
         raise SafetyError(
-            f"Refused: {action_desc}. You already declined an action on "
-            f"{sorted(already_denied)[0]} in this request; Brahma will not "
-            "retry it another way."
+            f"Refused: {action_desc}. You already declined this in the current "
+            f"request (target: {sorted(already_denied)[0]}). Do not retry it "
+            "with different arguments, a different tool, or more force — stop "
+            "and tell the user it was cancelled."
         )
 
     confirmer = get_confirmer()

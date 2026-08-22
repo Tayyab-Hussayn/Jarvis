@@ -16,7 +16,8 @@ from pathlib import Path
 from .. import config
 from ..platform import apps, shell
 from ..registry import skill
-from ..safety import Danger, Verdict, check_delete, check_path, enforce
+from ..safety import (Danger, Verdict, check_delete, check_path,
+                      describe_targets, enforce)
 
 FILE_TYPE_MAP = {
     "Images": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".svg", ".ico", ".heic", ".avif"},

@@ -125,6 +125,19 @@ destructive action on that same path in that request is refused outright without
 memory is scoped by `confirmer_scope`, so it lasts exactly one turn. Never widen it to a blanket
 per-turn lockout: "delete A, keep B" must still work.
 
+**The denial memory only works if the target is *declared*.** It originally read the target back
+out of the human-readable action string, which found file paths and pids and **nothing else** — so
+declining `close window 'foot'` recorded no key at all and the model could retry forever. Reported
+from a real session: one "no" to closing a window produced two more prompts, the second about an
+unrelated window on a different workspace. Skills now pass `targets=describe_targets(...)` to
+`safety.enforce()`; prose parsing is the fallback, not the design.
+
+Two rules for `targets`: include a stable id (`window:0x…`, `pid:42`, `service:nginx`) so a retry
+under any verb is caught, and when the skill resolved its target **implicitly** — `close_window()`
+with no query acts on whatever is focused — add a marker like `close_window:implicit`. Focus moves
+between calls, so without the marker the retry prompts about a different window and looks like the
+assistant ignoring you.
+
 **`server.py` must not use `from __future__ import annotations`.** FastAPI resolves route type
 hints to tell a request object from a query parameter. Postponed annotations are strings resolved
 against module scope, where the lazily-imported `Request`/`WebSocket` names don't exist, so every
