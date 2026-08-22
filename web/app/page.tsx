@@ -124,10 +124,16 @@ export default function Page() {
 
   // Selecting Voice also reveals the panel, so the full transcript and the
   // local/live choice are one click away rather than hidden behind the top bar.
+  //
+  // Live is the default when a key is configured: it answers in ~7s against
+  // ~19s for the on-device pipeline, and it hears continuously instead of
+  // recording an utterance at a time. The panel still offers "Start" for the
+  // free local path, and this falls back to it when Live is unavailable rather
+  // than presenting a button that cannot work.
   const selectVoice = useCallback(() => {
     setVoiceOpen(true);
-    startVoice("local");
-  }, [startVoice]);
+    startVoice(voice.data?.live_configured ? "live" : "local");
+  }, [startVoice, voice.data?.live_configured]);
 
   useEffect(() => {
     setRailExpanded(localStorage.getItem(RAIL_KEY) === "1");

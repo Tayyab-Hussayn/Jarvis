@@ -152,6 +152,19 @@ and this bug needed all three — the server always answering, the client not as
 is not needed, and an invariant on the client (you cannot be "stopping" something already stopped)
 so a dropped frame cannot wedge the control.
 
+**Gemini Live transcription auto-detects the language, and gets it wrong.** English speech came
+back rendered in Malayalam and Hindi script. The audio itself reached the model intact — replies
+were correct while the transcript was gibberish, which is a confusing way to fail. Pass
+`AudioTranscriptionConfig(language_codes=[...])`; `language_auto` is a nested config object, not a
+flag, so supplying codes is what disables detection. `voice.language` in settings overrides the
+`en-US` default.
+
+**Live input transcription lags the audio.** Deltas keep arriving *after* the model has begun
+answering, so flushing the user's words on the first output chunk truncates them — "running in
+for" instead of "what's running in workspace four". Flush at `turn_complete`, and stream the
+partial into a line that is rewritten in place, or the finished sentence lands underneath the
+reply it prompted.
+
 **`server.py` must not use `from __future__ import annotations`.** FastAPI resolves route type
 hints to tell a request object from a query parameter. Postponed annotations are strings resolved
 against module scope, where the lazily-imported `Request`/`WebSocket` names don't exist, so every

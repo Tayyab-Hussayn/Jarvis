@@ -42,6 +42,10 @@ CHANNELS = 1
 CHUNK_SIZE = 1024
 VOICE_NAME = "Charon"
 
+# Recognition language. Empty means "let the model guess", which mis-detected
+# English badly enough to render it in Malayalam script.
+DEFAULT_LANGUAGE = "en-US"
+
 Observer = Callable[[str, str], None]
 
 
@@ -138,19 +142,39 @@ class LiveSession:
         )
         return prompt
 
+    def _language(self) -> str:
+        """BCP-47 code for speech recognition and the reply voice."""
+        raw = str(config.get("voice.language", "") or "").strip()
+        if not raw:
+            return DEFAULT_LANGUAGE
+        # Accept "en" or "en_US" as well as "en-US".
+        code = raw.replace("_", "-")
+        return code if "-" in code else f"{code}-{code.upper()}"
+
     def _config(self) -> Any:
         from google.genai import types
 
         from .llm import _sanitize_tools
 
+        # Transcription defaults to auto-detect, and auto-detect was guessing
+        # badly — English speech came back transcribed into Malayalam and
+        # Hindi script. The audio still reached the model intact, so replies
+        # were correct while the transcript was gibberish. Pinning the language
+        # fixes the transcript; `voice.language` in settings overrides it.
+        language = self._language()
+        # `language_auto` is a nested config object, not a flag — supplying
+        # language_codes is what turns auto-detection off.
+        transcription = types.AudioTranscriptionConfig(language_codes=[language])
+
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
-            output_audio_transcription={},
-            input_audio_transcription={},
+            output_audio_transcription=transcription,
+            input_audio_transcription=transcription,
             system_instruction=self._system_prompt(),
             tools=[{"function_declarations": _sanitize_tools(registry.tool_declarations())}],
             session_resumption=types.SessionResumptionConfig(),
             speech_config=types.SpeechConfig(
+                language_code=language,
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
                         voice_name=config.get("voice.live_voice", VOICE_NAME)
@@ -266,10 +290,13 @@ class LiveSession:
 
                     out = getattr(server, "output_transcription", None)
                     if out is not None and getattr(out, "text", ""):
-                        # The model answering means the user's utterance is
-                        # over — a cleaner boundary than turn_complete, which
-                        # would hold their words back until after the reply.
-                        self._flush_heard()
+                        # Deliberately NOT flushing the user's words here.
+                        # Input transcription lags the audio, so deltas keep
+                        # arriving after the model has begun answering —
+                        # flushing on first output cut utterances in half
+                        # ("running in for" instead of "what's running in
+                        # workspace four"). The client shows the partial live,
+                        # so nothing is hidden by waiting for turn_complete.
                         if not self._said:
                             self._emit("speaking", "")
                         self._said.append(out.text)

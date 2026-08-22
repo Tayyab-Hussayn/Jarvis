@@ -85,6 +85,10 @@ export function useBrahma() {
   // fragment.
   const [voicePartial, setVoicePartial] = useState<VoiceLine | null>(null);
   const voiceSeq = useRef(0);
+  // Ids of the lines currently being streamed into, so deltas rewrite them
+  // rather than appending a new line each time.
+  const openUser = useRef<number | null>(null);
+  const openBrahma = useRef<number | null>(null);
   // Callbacks need the current phase without being rebuilt on every change.
   const phaseRef = useRef<VoicePhase>("off");
   phaseRef.current = voicePhase;
@@ -291,6 +295,35 @@ export function useBrahma() {
               [...current, { id: voiceSeq.current, role, text }].slice(-80),
             );
           };
+
+          // An in-progress line lives in `voiceLines` from its first delta and
+          // is rewritten in place, rather than being tacked on at the end when
+          // it finishes. Appending on completion put the user's sentence
+          // *after* the reply it prompted, because input transcription lags
+          // the audio and only completes at the turn boundary.
+          const stream = (role: "you" | "brahma", text: string, final: boolean) => {
+            const slot = role === "you" ? openUser : openBrahma;
+            if (!text.trim()) {
+              if (final) slot.current = null;
+              return;
+            }
+            if (slot.current === null) {
+              voiceSeq.current += 1;
+              slot.current = voiceSeq.current;
+              const id = slot.current;
+              setVoiceLines((current) =>
+                [...current, { id, role, text }].slice(-80),
+              );
+            } else {
+              const id = slot.current;
+              setVoiceLines((current) =>
+                current.map((line) =>
+                  line.id === id ? { ...line, text } : line,
+                ),
+              );
+            }
+            if (final) slot.current = null;
+          };
           switch (frame.phase) {
             case "started":
               setVoicePhase("idle");
@@ -301,6 +334,8 @@ export function useBrahma() {
               setVoicePhase("off");
               setVoiceStopping(false);
               setVoicePartial(null);
+              openUser.current = null;
+              openBrahma.current = null;
               push("note", "Voice session ended.");
               break;
             case "listening":
@@ -309,27 +344,17 @@ export function useBrahma() {
             case "started":
               break;
             case "heard_partial":
-              setVoicePartial(
-                frame.text.trim()
-                  ? { id: -1, role: "you", text: frame.text }
-                  : null,
-              );
+              stream("you", frame.text, false);
               break;
             case "heard":
               setVoicePhase("thinking");
-              setVoicePartial(null);
-              push("you", frame.text);
+              stream("you", frame.text, true);
               break;
             case "answer_partial":
-              setVoicePartial(
-                frame.text.trim()
-                  ? { id: -2, role: "brahma", text: frame.text }
-                  : null,
-              );
+              stream("brahma", frame.text, false);
               break;
             case "answer":
-              setVoicePartial(null);
-              push("brahma", frame.text);
+              stream("brahma", frame.text, true);
               break;
             case "speaking":
               // Phase only — never rendered as a line.
@@ -592,6 +617,8 @@ export function useBrahma() {
   const clearVoiceLines = useCallback(() => {
     setVoiceLines([]);
     setVoicePartial(null);
+    openUser.current = null;
+    openBrahma.current = null;
   }, []);
 
   return {

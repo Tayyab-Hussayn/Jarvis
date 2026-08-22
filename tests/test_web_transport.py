@@ -1104,3 +1104,60 @@ def test_voice_stop_is_idempotent():
         for _ in range(3):
             ws.send_text(json.dumps({"t": "voice_stop"}))
             assert json.loads(ws.receive_text())["phase"] == "stopped"
+
+
+def test_live_does_not_truncate_speech_when_the_model_starts_replying():
+    """Input transcription lags the audio.
+
+    Deltas keep arriving after the model has begun answering. Flushing the
+    user's words on the first output chunk therefore cut utterances in half —
+    "running in for" instead of "what's running in workspace four" — while the
+    audio itself reached the model intact, so the reply was correct and only
+    the transcript was wrong.
+    """
+    from brahma.live import LiveSession
+
+    seen: list[tuple[str, str]] = []
+    live = LiveSession(observer=lambda k, t: seen.append((k, t)))
+
+    _drive(live, [
+        _Response(_Server(heard="what's ")),
+        _Response(_Server(heard="running ")),
+        _Response(_Server(said="In workspace 4")),      # model starts early
+        _Response(_Server(heard="in workspace four")),  # …user deltas continue
+        _Response(_Server(said=", Chrome.")),
+        _Response(_Server(turn_complete=True)),
+    ])
+
+    heard = [t for k, t in seen if k == "heard"]
+    assert heard == ["what's running in workspace four"], f"truncated: {heard}"
+    assert [t for k, t in seen if k == "answer"] == ["In workspace 4, Chrome."]
+
+
+def test_live_pins_the_transcription_language(monkeypatch):
+    """Auto-detect rendered English speech in Malayalam and Hindi script."""
+    from brahma import live as live_mod
+
+    session = live_mod.LiveSession()
+    cfg = session._config()
+    assert cfg.input_audio_transcription.language_codes == ["en-US"]
+    assert cfg.output_audio_transcription.language_codes == ["en-US"]
+    assert cfg.speech_config.language_code == "en-US"
+
+
+@pytest.mark.parametrize("configured,expected", [
+    ("en-GB", "en-GB"),
+    ("en_US", "en-US"),
+    ("fr", "fr-FR"),
+    ("", "en-US"),
+])
+def test_voice_language_setting_is_honoured(monkeypatch, configured, expected):
+    from brahma import config as cfg_mod
+    from brahma import live as live_mod
+
+    real = cfg_mod.get
+    monkeypatch.setattr(
+        cfg_mod, "get",
+        lambda key, default=None: configured if key == "voice.language" else real(key, default),
+    )
+    assert live_mod.LiveSession()._language() == expected

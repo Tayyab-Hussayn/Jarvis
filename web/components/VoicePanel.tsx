@@ -173,28 +173,31 @@ export function VoicePanel({
             </Button>
           ) : (
             <>
+              {/* Live first, and primary, because it is the default the
+                  toggle picks. On-device stays available as the free path. */}
               <Button
-                variant="primary"
-                disabled={!connected || !sttReady}
-                onClick={() => onStart("local")}
-                title={
-                  sttReady
-                    ? "Runs entirely on this machine"
-                    : "Speech recognition or playback is unavailable"
-                }
-              >
-                Start
-              </Button>
-              <Button
+                variant={liveReady ? "primary" : "default"}
                 disabled={!connected || !liveReady}
                 onClick={() => onStart("live")}
                 title={
                   liveReady
-                    ? "Gemini native audio — faster, metered per second"
+                    ? "Gemini native audio — ~7s to first word, metered"
                     : "Needs a Gemini API key"
                 }
               >
                 Start live
+              </Button>
+              <Button
+                variant={liveReady ? "default" : "primary"}
+                disabled={!connected || !sttReady}
+                onClick={() => onStart("local")}
+                title={
+                  sttReady
+                    ? "Runs entirely on this machine — free, ~19s to first word"
+                    : "Speech recognition or playback is unavailable"
+                }
+              >
+                Start on-device
               </Button>
             </>
           )}
