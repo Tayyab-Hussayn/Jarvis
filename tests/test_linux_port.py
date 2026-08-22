@@ -1605,3 +1605,177 @@ def test_declared_targets_win_over_reading_the_sentence():
         with pytest.raises(safety.SafetyError):
             safety.enforce(verdict, "disable it instead", skill="control_service",
                            targets=safety.describe_targets("service:nginx"))
+
+
+# ---------------------------------------------------------------------------
+# close_workspace
+# ---------------------------------------------------------------------------
+#
+# Added because "close workspace 2" had no skill behind it: the model
+# improvised switch_workspace + close_window per window, which produced a queue
+# of confirmations and, when one was declined, a half-cleared workspace.
+
+
+class _FakeWindow:
+    def __init__(self, wid, app, workspace, pid=9999, title="t"):
+        self.id, self.app, self.workspace = wid, app, str(workspace)
+        self.pid, self.title, self.focused = pid, title, False
+
+
+class _FakeBackend:
+    """Closes on request unless the window is listed as stubborn."""
+
+    name = "fake"
+
+    def __init__(self, windows, stubborn=(), accepts=True):
+        self.windows = list(windows)
+        self.stubborn = set(stubborn)
+        self.accepts = accepts
+        self.closed: list[str] = []
+
+    def available(self):
+        return True
+
+    def list_windows(self):
+        return list(self.windows)
+
+    def focused(self):
+        return self.windows[0] if self.windows else None
+
+    def close(self, window):
+        self.closed.append(window.id)
+        if window.id not in self.stubborn:
+            self.windows = [w for w in self.windows if w.id != window.id]
+        return self.accepts
+
+    kill = close
+
+
+@pytest.fixture
+def fake_desktop(monkeypatch):
+    from brahma.skills import windows as win
+
+    def install(backend):
+        monkeypatch.setattr(win.desktop, "backend", lambda: backend)
+        return backend
+
+    return install
+
+
+def test_close_workspace_is_registered_and_destructive():
+    entry = registry.get_skill("close_workspace")
+    assert entry is not None
+    assert entry.danger >= Danger.DESTRUCTIVE
+
+
+def test_close_workspace_asks_once_for_the_whole_workspace(fake_desktop):
+    """One prompt, not one per window — the point of the skill."""
+    from brahma.skills import windows as win
+
+    backend = fake_desktop(_FakeBackend([
+        _FakeWindow("a", "foot", 2), _FakeWindow("b", "chrome", 2),
+        _FakeWindow("c", "kitty", 2), _FakeWindow("z", "other", 3),
+    ]))
+
+    asked = []
+    with safety.confirmer_scope(lambda a, d, g: (asked.append(a), True)[1]):
+        out = win.close_workspace(workspace="2")
+
+    assert len(asked) == 1, f"asked {len(asked)} times"
+    assert sorted(backend.closed) == ["a", "b", "c"]
+    assert "closed 3 of 3" in out
+    assert [w.id for w in backend.windows] == ["z"], "touched another workspace"
+
+
+def test_close_workspace_never_closes_the_window_hosting_brahma(fake_desktop, monkeypatch):
+    """Structural, not a matter of what the user answers.
+
+    A window was once targeted by list position and the assistant killed its
+    own terminal mid-task. A bulk close is exactly where that repeats.
+    """
+    from brahma.skills import windows as win
+
+    monkeypatch.setattr(win, "_own_pids", lambda: {4242})
+    backend = fake_desktop(_FakeBackend([
+        _FakeWindow("mine", "foot", 2, pid=4242),
+        _FakeWindow("other", "chrome", 2, pid=1),
+    ]))
+
+    # Approve everything — protection must not depend on the answer.
+    with safety.confirmer_scope(lambda *_: True):
+        out = win.close_workspace(workspace="2")
+
+    assert "mine" not in backend.closed, "closed the window running Brahma"
+    assert backend.closed == ["other"]
+    assert "skipped" in out.lower()
+
+
+def test_close_workspace_refuses_when_only_its_own_window_is_there(fake_desktop, monkeypatch):
+    from brahma.skills import windows as win
+
+    monkeypatch.setattr(win, "_own_pids", lambda: {4242})
+    backend = fake_desktop(_FakeBackend([_FakeWindow("mine", "foot", 2, pid=4242)]))
+
+    asked = []
+    with safety.confirmer_scope(lambda a, d, g: (asked.append(a), True)[1]):
+        out = win.close_workspace(workspace="2")
+
+    assert backend.closed == []
+    assert asked == [], "asked about something it was never going to do"
+    assert "nothing safe to close" in out
+
+
+def test_close_workspace_on_an_empty_workspace_asks_nothing(fake_desktop):
+    from brahma.skills import windows as win
+
+    fake_desktop(_FakeBackend([_FakeWindow("z", "other", 3)]))
+    asked = []
+    with safety.confirmer_scope(lambda a, d, g: (asked.append(a), True)[1]):
+        out = win.close_workspace(workspace="2")
+    assert asked == []
+    assert "already empty" in out
+
+
+def test_close_workspace_reports_windows_that_would_not_close(fake_desktop):
+    """An app showing a save prompt must be named, not silently counted."""
+    from brahma.skills import windows as win
+
+    fake_desktop(_FakeBackend(
+        [_FakeWindow("a", "foot", 2), _FakeWindow("b", "editor", 2)],
+        stubborn={"b"},
+    ))
+    with safety.confirmer_scope(lambda *_: True):
+        out = win.close_workspace(workspace="2")
+
+    assert "closed 1 of 2" in out
+    assert "still open" in out and "editor" in out
+    assert "force=true" in out
+
+
+def test_close_workspace_declined_blocks_the_forced_retry(fake_desktop):
+    from brahma.skills import windows as win
+
+    backend = fake_desktop(_FakeBackend([_FakeWindow("a", "foot", 2)]))
+    asked = []
+    with safety.confirmer_scope(lambda a, d, g: (asked.append(a), False)[1]):
+        with pytest.raises(safety.ConfirmationRequired):
+            win.close_workspace(workspace="2")
+        with pytest.raises(safety.SafetyError):
+            win.close_workspace(workspace="2", force=True)
+
+    assert len(asked) == 1
+    assert backend.closed == []
+
+
+def test_wait_until_gone_returns_as_soon_as_windows_disappear():
+    """It used to sleep a fixed 0.9s per window regardless."""
+    import time as _time
+
+    from brahma.skills import windows as win
+
+    backend = _FakeBackend([_FakeWindow("a", "foot", 2)])
+    backend.windows = []                      # already gone
+    started = _time.monotonic()
+    remaining = win._wait_until_gone(backend, {"a"}, timeout=3.0)
+    assert remaining == set()
+    assert _time.monotonic() - started < 0.6, "waited longer than it needed to"

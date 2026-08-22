@@ -138,6 +138,12 @@ with no query acts on whatever is focused — add a marker like `close_window:im
 between calls, so without the marker the retry prompts about a different window and looks like the
 assistant ignoring you.
 
+**A bulk window operation must exclude Brahma's own session.** `close_workspace` filters out any
+window whose pid is this process or one of its ancestors — normally the terminal running
+`brahma serve` — and says it skipped them. This is structural, not a confirmation: it holds even
+when the user answers yes, because "close workspace 2" is not a request to kill the thing doing
+the closing. An earlier session killed the user's terminal exactly this way.
+
 **`server.py` must not use `from __future__ import annotations`.** FastAPI resolves route type
 hints to tell a request object from a query parameter. Postponed annotations are strings resolved
 against module scope, where the lazily-imported `Request`/`WebSocket` names don't exist, so every

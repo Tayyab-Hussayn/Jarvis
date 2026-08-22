@@ -7,11 +7,54 @@ IPC, so it works without synthetic input.
 
 from __future__ import annotations
 
+import os
 import time
 
 from ..platform import desktop
 from ..registry import skill
 from ..safety import Danger, Verdict, describe_targets, enforce
+
+# How long to wait for windows to actually disappear. Hyprland answering "ok"
+# only means the request was accepted — an app showing a save prompt stays put.
+_GONE_TIMEOUT = 2.5
+_GONE_POLL = 0.15
+
+
+def _own_pids() -> set[int]:
+    """This process and its ancestors — i.e. the terminal hosting Brahma.
+
+    Closing a workspace must not close the session doing the closing. That has
+    happened: a window was targeted by list position and the assistant killed
+    its own terminal mid-task. A bulk close is exactly where that repeats, so
+    these are filtered out and reported rather than acted on.
+    """
+    pids: set[int] = {os.getpid()}
+    try:
+        import psutil
+
+        for parent in psutil.Process().parents():
+            pids.add(parent.pid)
+    except Exception:
+        pass
+    return pids
+
+
+def _wait_until_gone(backend, ids: set[str], timeout: float = _GONE_TIMEOUT) -> set[str]:
+    """Poll until the given windows disappear. Returns the ones still open.
+
+    One shared wait for a batch, rather than a fixed sleep per window — closing
+    six windows used to cost six full sleeps even when they all went instantly.
+    """
+    deadline = time.monotonic() + timeout
+    remaining = set(ids)
+    while remaining and time.monotonic() < deadline:
+        time.sleep(_GONE_POLL)
+        try:
+            alive = {w.id for w in backend.list_windows()}
+        except Exception:
+            break
+        remaining &= alive
+    return remaining
 
 
 @skill(category="windows", danger=Danger.SAFE)
@@ -164,9 +207,9 @@ def close_window(
 
     accepted = backend.kill(target) if force else backend.close(target)
 
-    # Verify it actually went away rather than trusting the request.
-    time.sleep(0.9)
-    if target.id not in {w.id for w in backend.list_windows()}:
+    # Verify it actually went away rather than trusting the request. Polling
+    # returns as soon as it is gone instead of always paying a fixed sleep.
+    if not _wait_until_gone(backend, {target.id}):
         return f"Closed {target.app}: {target.title[:60]}"
 
     if accepted:
@@ -175,3 +218,108 @@ def close_window(
             + ("" if force else " Re-run with force=true to kill it.")
         )
     return f"Could not {verb} {target.app} (backend: {backend.name})."
+
+
+@skill(category="windows", danger=Danger.DESTRUCTIVE)
+def close_workspace(
+    workspace: str = "",
+    force: bool = False,
+    _source: str = "local",
+    _confirm: bool = False,
+) -> str:
+    """Close every window on a workspace.
+
+    Args:
+        workspace: Which workspace to clear; omit for the current one.
+        force: Kill the clients instead of politely asking them to close.
+    """
+    backend = desktop.backend()
+    if not backend.available():
+        return "No supported compositor is available."
+
+    target = str(workspace).strip()
+    if not target:
+        current = backend.focused()
+        if current is None or not current.workspace:
+            return "No workspace is focused — say which one to close."
+        target = str(current.workspace)
+
+    windows = [w for w in backend.list_windows() if str(w.workspace) == target]
+    if not windows:
+        return f"Workspace {target} is already empty."
+
+    # Never close the session running Brahma. Doing this by hand is how a
+    # terminal got killed mid-task once already.
+    mine = _own_pids()
+    protected = [w for w in windows if w.pid in mine]
+    closable = [w for w in windows if w.pid not in mine]
+
+    if not closable:
+        return (
+            f"Workspace {target} only holds the window Brahma is running in "
+            f"({protected[0].app}), so there is nothing safe to close."
+        )
+
+    verb = "kill" if force else "close"
+    listing = "; ".join(f"{w.app}: {w.title[:40]}" for w in closable)
+
+    # One confirmation for the whole workspace. Asking per window turned
+    # "close workspace 2" into a queue of prompts, and answering no to one of
+    # them left the rest half-done.
+    verdict = Verdict(
+        danger=Danger.DESTRUCTIVE,
+        reasons=[
+            f"{verb}s {len(closable)} window(s) on workspace {target} "
+            f"(unsaved work may be lost): {listing}"
+        ],
+    )
+    enforce(
+        verdict,
+        f"{verb} {len(closable)} window(s) on workspace {target}",
+        skill="close_workspace", source=_source, pre_confirmed=_confirm,
+        targets=describe_targets(
+            f"workspace:{target}",
+            *[f"window:{w.id}" for w in closable],
+        ),
+    )
+
+    # Issue every close first, then wait once for the batch. Waiting after each
+    # one made a six-window workspace take six times as long as it needed to.
+    rejected = []
+    for window in closable:
+        try:
+            accepted = backend.kill(window) if force else backend.close(window)
+        except Exception:
+            accepted = False
+        if not accepted:
+            rejected.append(window)
+
+    still_open = _wait_until_gone(backend, {w.id for w in closable})
+
+    closed = [w for w in closable if w.id not in still_open]
+    lines = [f"Workspace {target}: closed {len(closed)} of {len(closable)} window(s)."]
+
+    if closed:
+        lines += [f"  closed  {w.app}: {w.title[:50]}" for w in closed]
+
+    stuck = [w for w in closable if w.id in still_open]
+    if stuck:
+        lines.append("")
+        for window in stuck:
+            why = (
+                "did not accept the request"
+                if window in rejected
+                else "still open — it may be asking you to save"
+            )
+            lines.append(f"  still open  {window.app}: {window.title[:40]} — {why}")
+        if not force:
+            lines.append("Re-run with force=true to kill the ones left.")
+
+    if protected:
+        lines.append("")
+        lines.append(
+            f"  skipped  {protected[0].app} — Brahma is running in it."
+            if len(protected) == 1
+            else f"  skipped  {len(protected)} window(s) hosting Brahma."
+        )
+    return "\n".join(lines)
