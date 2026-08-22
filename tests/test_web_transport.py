@@ -1161,3 +1161,63 @@ def test_voice_language_setting_is_honoured(monkeypatch, configured, expected):
         lambda key, default=None: configured if key == "voice.language" else real(key, default),
     )
     assert live_mod.LiveSession()._language() == expected
+
+
+def test_a_confirmation_with_no_matching_turn_still_reaches_the_client():
+    """A dropped confirmation freezes the session.
+
+    Voice sessions never set a turn id, so their confirmation frames carried
+    an empty one. The client's inline branch looked for a message with that id,
+    found none, and discarded the card — nothing could answer it, the worker
+    blocked until the 120s timeout, and the whole voice session appeared to
+    hang after the tool call.
+
+    This pins the server half: the frame is emitted with an id that is *not* a
+    live text turn, which is exactly the case the client must route to the
+    global overlay.
+    """
+    import asyncio
+
+    async def go():
+        session = events.Session(asyncio.get_running_loop(), confirm_timeout=1.0)
+        session.turn_id = "v1"          # what voice now sets
+
+        result: dict[str, bool] = {}
+
+        def worker():
+            result["approved"] = session.confirm(
+                "close 2 window(s) on workspace 3", "destructive", Danger.DESTRUCTIVE
+            )
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+
+        frame = await asyncio.wait_for(session.next_frame(), timeout=2)
+        assert frame["t"] == "confirm_request"
+        assert frame["id"] == "v1", "voice confirmations must be identifiable"
+        assert frame["confirm_id"]
+
+        # Answering it releases the blocked worker — the thing that never
+        # happened while the card was being dropped.
+        assert session.resolve_confirm(frame["confirm_id"], True)
+        thread.join(timeout=3)
+        assert result["approved"] is True
+
+    asyncio.run(go())
+
+
+def test_voice_confirmation_is_announced_in_the_transcript(monkeypatch):
+    """The panel showed the tool call and then nothing at all."""
+    import inspect
+
+    from brahma import server
+
+    source = inspect.getsource(server.create_app)
+    assert "Waiting for your confirmation" in source, (
+        "a voice confirmation must appear in the transcript, not only aloud"
+    )
+    # And it must be emitted before the blocking confirm call, or it would only
+    # arrive after the user had already answered.
+    announce = source.find("Waiting for your confirmation")
+    blocking = source.find("return session.confirm(action, detail, danger)")
+    assert announce < blocking

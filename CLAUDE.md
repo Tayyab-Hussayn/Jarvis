@@ -165,6 +165,14 @@ for" instead of "what's running in workspace four". Flush at `turn_complete`, an
 partial into a line that is rewritten in place, or the finished sentence lands underneath the
 reply it prompted.
 
+**A confirmation frame must never be silently dropped.** `events.Session.confirm` blocks a worker
+thread until it is answered, so a card that fails to render is not a cosmetic bug — the session
+freezes until the 120s timeout, then denies. Voice sessions never set `session.turn_id`, so their
+confirmations arrived with an empty id, matched no message, and the client's inline branch threw
+them away: the transcript showed the tool call and then nothing at all. The client now routes any
+confirmation whose turn has no live message to the global overlay, so there is no id for which a
+card can vanish.
+
 **`server.py` must not use `from __future__ import annotations`.** FastAPI resolves route type
 hints to tell a request object from a query parameter. Postponed annotations are strings resolved
 against module scope, where the lazily-imported `Request`/`WebSocket` names don't exist, so every

@@ -283,6 +283,8 @@ def create_app(token: str | None = None) -> Any:
             # parallel spoken conversation.
             session.emit("voice_state", phase=kind, text=text)
 
+        voice_turn = {"n": 0}
+
         def voice_confirmer(action: str, detail: str, danger: Any) -> bool:
             """Confirm a destructive voice action in the browser, not out loud.
 
@@ -294,6 +296,21 @@ def create_app(token: str | None = None) -> Any:
             """
             from .platform import tts as _tts
 
+            # Voice frames carried whatever turn id was last used by a typed
+            # request — usually none at all — so the confirmation card matched
+            # no message on the client and was dropped without a trace. The
+            # worker then blocked until it timed out and denied, which looked
+            # like the whole session freezing. A distinct id routes it to the
+            # global overlay instead.
+            voice_turn["n"] += 1
+            session.turn_id = f"v{voice_turn['n']}"
+
+            # And say it in the transcript, not only out loud — the panel
+            # otherwise showed the tool call and then nothing.
+            session.emit(
+                "voice_state", phase="info",
+                text=f"Waiting for your confirmation: {action}",
+            )
             with contextlib.suppress(Exception):
                 _tts.speak("I need your confirmation.", blocking=True)
             return session.confirm(action, detail, danger)

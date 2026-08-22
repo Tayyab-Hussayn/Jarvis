@@ -100,6 +100,9 @@ export function useBrahma() {
   const seqRef = useRef(0);
   const runsRef = useRef(new Map<string, PendingRun>());
   const goneRef = useRef(false);
+  // Turns that currently have a message in `messages` to attach frames to.
+  // A confirmation for anything else has nowhere to render inline.
+  const liveTurns = useRef(new Set<string>());
 
   const isPanelTurn = (id: string | undefined) => Boolean(id?.startsWith("p"));
 
@@ -176,6 +179,7 @@ export function useBrahma() {
 
         case "turn_start":
           setBusy(true);
+          liveTurns.current.add(frame.id);
           setMessages((current) => [
             ...current,
             {
@@ -225,32 +229,51 @@ export function useBrahma() {
           }));
           break;
 
-        case "confirm_request":
-          patchTurn(frame.id, (message) => ({
-            ...message,
-            confirms: [
-              ...(message.confirms ?? []),
-              {
-                confirmId: frame.confirm_id,
-                action: frame.action,
-                detail: frame.detail,
-                danger: frame.danger,
-                expiresAt: Date.now() + frame.timeout * 1000,
-                status: "pending",
-              } satisfies ConfirmView,
-            ],
-          }));
+        case "confirm_request": {
+          const card: ConfirmView = {
+            confirmId: frame.confirm_id,
+            action: frame.action,
+            detail: frame.detail,
+            danger: frame.danger,
+            expiresAt: Date.now() + frame.timeout * 1000,
+            status: "pending",
+          };
+          // A confirmation blocks a worker thread until it is answered, so it
+          // must never be dropped. Voice sessions carry a turn id that has no
+          // message behind it, and the inline branch silently discarded those
+          // — the card never appeared, nothing could answer it, and the
+          // session sat frozen until it timed out and denied. Anything without
+          // a live turn goes to the overlay instead.
+          if (liveTurns.current.has(frame.id)) {
+            patchTurn(frame.id, (message) => ({
+              ...message,
+              confirms: [...(message.confirms ?? []), card],
+            }));
+          } else {
+            setPanelConfirms((current) => [...current, card]);
+          }
           break;
+        }
 
         case "confirm_expired":
-          patchTurn(frame.id, (message) => ({
-            ...message,
-            confirms: (message.confirms ?? []).map((confirm) =>
-              confirm.confirmId === frame.confirm_id && confirm.status === "pending"
-                ? { ...confirm, status: "expired" }
-                : confirm,
-            ),
-          }));
+          if (liveTurns.current.has(frame.id)) {
+            patchTurn(frame.id, (message) => ({
+              ...message,
+              confirms: (message.confirms ?? []).map((confirm) =>
+                confirm.confirmId === frame.confirm_id && confirm.status === "pending"
+                  ? { ...confirm, status: "expired" }
+                  : confirm,
+              ),
+            }));
+          } else {
+            setPanelConfirms((current) =>
+              current.map((confirm) =>
+                confirm.confirmId === frame.confirm_id
+                  ? { ...confirm, status: "expired" }
+                  : confirm,
+              ),
+            );
+          }
           break;
 
         case "answer":
@@ -259,6 +282,7 @@ export function useBrahma() {
 
         case "turn_end":
           setBusy(false);
+          liveTurns.current.delete(frame.id);
           patchTurn(frame.id, (message) => ({
             ...message,
             pending: false,
