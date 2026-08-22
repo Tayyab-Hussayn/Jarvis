@@ -841,3 +841,223 @@ def test_voice_agent_is_separate_from_the_text_conversation():
     convo = voice.VoiceSession()
     assert convo.agent is not None
     assert convo.agent.source == "voice"
+
+
+# ---------------------------------------------------------------------------
+# Gemini Live: stop responsiveness and transcript coalescing
+# ---------------------------------------------------------------------------
+#
+# Three bugs, all reproduced here before being fixed:
+#   1. Stop hung while the assistant was speaking.
+#   2. Streamed transcription rendered one fragment per line.
+#   3. The assistant's own replies never reached the transcript.
+
+
+class _Server:
+    """A stand-in for LiveServerContent."""
+
+    def __init__(self, *, heard=None, said=None, turn_complete=False,
+                 interrupted=False):
+        self.input_transcription = type("T", (), {"text": heard})() if heard else None
+        self.output_transcription = type("T", (), {"text": said})() if said else None
+        self.turn_complete = turn_complete
+        self.generation_complete = False
+        self.interrupted = interrupted
+
+
+class _Response:
+    def __init__(self, server=None):
+        self.data = None
+        self.server_content = server
+        self.tool_call = None
+
+
+def _drive(session, responses):
+    """Feed responses through the real _receive loop and collect emissions."""
+    import asyncio
+
+    class FakeSession:
+        def receive(self):
+            async def gen():
+                for r in responses:
+                    yield r
+                session._stop.set()
+                if session._astop:
+                    session._astop.set()
+            return gen()
+
+    session._session = FakeSession()
+
+    async def go():
+        session._astop = asyncio.Event()
+        session._loop = asyncio.get_running_loop()
+        await session._receive(asyncio.Queue())
+
+    asyncio.run(go())
+
+
+def test_live_transcription_deltas_become_one_line():
+    """Gemini streams a syllable at a time; the UI must see a sentence."""
+    from brahma.live import LiveSession
+
+    seen: list[tuple[str, str]] = []
+    live = LiveSession(observer=lambda k, t: seen.append((k, t)))
+
+    _drive(live, [
+        _Response(_Server(heard="स")),
+        _Response(_Server(heard="्क्रीन")),
+        _Response(_Server(heard=" ओपन")),
+        _Response(_Server(said="Opening")),      # model replies -> flush input
+        _Response(_Server(said=" it now.")),
+        _Response(_Server(turn_complete=True)),
+    ])
+
+    heard = [t for k, t in seen if k == "heard"]
+    assert heard == ["स्क्रीन ओपन"], f"user speech was not coalesced: {heard}"
+
+
+def test_live_emits_the_assistants_reply():
+    """Replies used to be dropped: only `speaking` was sent, carrying phase."""
+    from brahma.live import LiveSession
+
+    seen: list[tuple[str, str]] = []
+    live = LiveSession(observer=lambda k, t: seen.append((k, t)))
+
+    _drive(live, [
+        _Response(_Server(heard="open terminal")),
+        _Response(_Server(said="Sure,")),
+        _Response(_Server(said=" opening it.")),
+        _Response(_Server(turn_complete=True)),
+    ])
+
+    answers = [t for k, t in seen if k == "answer"]
+    assert answers == ["Sure, opening it."], f"reply missing: {seen}"
+
+
+def test_live_partials_are_emitted_for_live_feedback():
+    from brahma.live import LiveSession
+
+    seen: list[tuple[str, str]] = []
+    live = LiveSession(observer=lambda k, t: seen.append((k, t)))
+    _drive(live, [_Response(_Server(heard="he")), _Response(_Server(heard="llo"))])
+
+    partials = [t for k, t in seen if k == "heard_partial"]
+    assert partials == ["he", "hello"], partials
+
+
+def test_live_barge_in_keeps_what_was_already_said():
+    from brahma.live import LiveSession
+
+    seen: list[tuple[str, str]] = []
+    live = LiveSession(observer=lambda k, t: seen.append((k, t)))
+    _drive(live, [
+        _Response(_Server(said="Let me check")),
+        _Response(_Server(interrupted=True)),
+    ])
+    assert [t for k, t in seen if k == "answer"] == ["Let me check"]
+
+
+def test_live_stop_is_seen_by_a_coroutine_parked_on_the_event():
+    """stop() must cross threads onto the session's loop.
+
+    A bare threading.Event can only be polled between awaits, so anything
+    parked on the websocket or an audio queue never noticed it.
+    """
+    import asyncio
+    import threading
+
+    from brahma.live import LiveSession
+
+    live = LiveSession()
+    woke = threading.Event()
+
+    async def go():
+        live._loop = asyncio.get_running_loop()
+        live._astop = asyncio.Event()
+        threading.Timer(0.2, live.stop).start()
+        # Parked indefinitely — only a cross-thread set can release this.
+        await asyncio.wait_for(live._astop.wait(), timeout=5)
+        woke.set()
+
+    asyncio.run(go())
+    assert woke.is_set(), "stop() did not reach the running loop"
+
+
+def test_live_audio_playback_does_not_block_the_event_loop():
+    """The reason Stop hung mid-reply.
+
+    `stream.write` blocks until the buffer drains, and it used to be called
+    directly on the event loop — so for the length of the spoken answer nothing
+    else could run, including anything watching for stop.
+    """
+    import asyncio
+    import contextlib
+    import sys
+    import time
+    import types as _types
+
+    from brahma.live import LiveSession
+
+    class _Stream:
+        def start(self): pass
+        def abort(self): pass
+        def close(self): pass
+        def write(self, chunk):
+            time.sleep(0.4)          # a chunk of speech
+
+    fake_sd = _types.ModuleType("sounddevice")
+    fake_sd.RawOutputStream = lambda **kw: _Stream()
+    saved = sys.modules.get("sounddevice")
+    sys.modules["sounddevice"] = fake_sd
+    try:
+        live = LiveSession()
+
+        async def go():
+            live._loop = asyncio.get_running_loop()
+            live._astop = asyncio.Event()
+            queue: asyncio.Queue = asyncio.Queue()
+            for _ in range(5):
+                queue.put_nowait(b"\x00" * 32)
+
+            player = asyncio.create_task(live._play_audio(queue))
+            # If playback blocked the loop, this ticker could not advance while
+            # write() slept.
+            ticks = 0
+            for _ in range(10):
+                await asyncio.sleep(0.02)
+                ticks += 1
+            player.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await player
+            return ticks
+
+        ticks = asyncio.run(go())
+        assert ticks == 10, f"event loop was blocked during playback ({ticks}/10)"
+    finally:
+        if saved is not None:
+            sys.modules["sounddevice"] = saved
+        else:
+            sys.modules.pop("sounddevice", None)
+
+
+def test_local_voice_emits_answer_before_the_shortened_spoken_form():
+    """Guards the duplicate the UI would otherwise render.
+
+    `VoiceSession.run` emits `answer` with the full reply and then `speaking`
+    with a truncated version for the synthesiser. If the client rendered
+    `speaking` as content too, every reply would appear twice — once whole,
+    once cut short. `speaking` is therefore phase-only on the client, which is
+    only safe because Live now emits `answer` of its own.
+    """
+    import inspect
+
+    from brahma import voice
+
+    source = inspect.getsource(voice.VoiceSession.run)
+    answer_at = source.find('_emit("answer"')
+    say_at = source.find("self.say(", answer_at)
+    assert answer_at != -1, "the local pipeline no longer emits `answer`"
+    assert say_at > answer_at, "ordering changed; re-check the client's speaking branch"
+
+    # And `say` is what emits `speaking`, carrying the shortened text.
+    assert '_emit("speaking"' in inspect.getsource(voice.VoiceSession.say)

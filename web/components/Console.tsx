@@ -37,6 +37,7 @@ export function Console({
   voicePhase,
   voiceStopping,
   voiceLines,
+  voicePartial,
   voiceReady,
   voiceUnavailableReason,
   onSelectText,
@@ -52,6 +53,7 @@ export function Console({
   voicePhase: VoicePhase;
   voiceStopping: boolean;
   voiceLines: VoiceLine[];
+  voicePartial: VoiceLine | null;
   voiceReady: boolean;
   voiceUnavailableReason?: string;
   onSelectText: () => void;
@@ -80,7 +82,10 @@ export function Console({
   const turns = messages.filter((m) => m.role === "assistant");
   const voiceLive = isVoiceLive(voicePhase);
   // Only the tail is worth showing in the hero; the panel holds the full log.
-  const recentVoice = voiceLines.slice(-4);
+  const recentVoice = [
+    ...voiceLines,
+    ...(voicePartial ? [voicePartial] : []),
+  ].slice(-4);
 
   return (
     <div className="flex h-full flex-col">
@@ -132,6 +137,9 @@ export function Console({
                                 ? "var(--text-faint)"
                                 : "var(--text)",
                             fontStyle: line.role === "note" ? "italic" : undefined,
+                            // Negative ids are the utterance still being
+                            // transcribed.
+                            opacity: line.id < 0 ? 0.65 : 1,
                           }}
                         >
                           {line.role !== "note" && (

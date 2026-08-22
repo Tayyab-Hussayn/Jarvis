@@ -84,6 +84,7 @@ export function VoicePanel({
   onClose,
   phase,
   lines,
+  partial,
   mode,
   error,
   readiness,
@@ -96,6 +97,7 @@ export function VoicePanel({
   onClose: () => void;
   phase: VoicePhase;
   lines: VoiceLine[];
+  partial: VoiceLine | null;
   mode: "local" | "live";
   error: string;
   readiness: VoiceReadiness | null;
@@ -108,7 +110,7 @@ export function VoicePanel({
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [lines]);
+  }, [lines, partial]);
 
   if (!open) return null;
 
@@ -216,7 +218,7 @@ export function VoicePanel({
 
       {/* -- transcript --------------------------------------------------- */}
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {lines.length === 0 ? (
+        {lines.length === 0 && !partial ? (
           <div className="pt-6 text-center">
             <p className="text-[length:var(--text-sm)] text-[var(--text-muted)]">
               Nothing spoken yet.
@@ -228,7 +230,7 @@ export function VoicePanel({
           </div>
         ) : (
           <div className="space-y-2.5">
-            {lines.map((line) => {
+            {[...lines, ...(partial ? [partial] : [])].map((line) => {
               const style = ROLE_STYLE[line.role];
               return (
                 <div key={line.id} className="text-[length:var(--text-sm)]">
@@ -243,6 +245,7 @@ export function VoicePanel({
                   <span
                     className="whitespace-pre-wrap"
                     style={{
+                      opacity: line.id < 0 ? 0.65 : 1,
                       color:
                         line.role === "note" ? "var(--text-faint)" : "var(--text)",
                       fontStyle: line.role === "note" ? "italic" : undefined,

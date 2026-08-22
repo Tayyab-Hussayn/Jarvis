@@ -88,6 +88,7 @@ export default function Page() {
     stopVoice,
     clearVoiceLines,
     voiceStopping,
+    voicePartial,
   } = useBrahma();
 
   const [view, setView] = useHashView();
@@ -216,6 +217,7 @@ export default function Page() {
                 voicePhase={voicePhase}
                 voiceStopping={voiceStopping}
                 voiceLines={voiceLines}
+                voicePartial={voicePartial}
                 voiceReady={voiceReady}
                 voiceUnavailableReason={voiceUnavailableReason}
                 onSelectText={stopVoice}
@@ -239,6 +241,7 @@ export default function Page() {
           onClose={() => setVoiceOpen(false)}
           phase={voicePhase}
           lines={voiceLines}
+          partial={voicePartial}
           mode={voiceMode}
           error={voiceError}
           readiness={voice.data}

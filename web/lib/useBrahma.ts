@@ -75,6 +75,11 @@ export function useBrahma() {
   // the microphone when it unwinds. Without this the UI would look frozen
   // between the click and the server's `stopped` frame.
   const [voiceStopping, setVoiceStopping] = useState(false);
+  // The utterance currently being transcribed. Held apart from `voiceLines`
+  // so each delta replaces it instead of appending — streaming transcription
+  // arrives a syllable at a time, which previously produced one line per
+  // fragment.
+  const [voicePartial, setVoicePartial] = useState<VoiceLine | null>(null);
   const voiceSeq = useRef(0);
 
   const socketRef = useRef<WebSocket | null>(null);
@@ -288,19 +293,45 @@ export function useBrahma() {
             case "stopped":
               setVoicePhase("off");
               setVoiceStopping(false);
+              setVoicePartial(null);
               push("note", "Voice session ended.");
               break;
             case "listening":
               setVoicePhase("listening");
               break;
+            case "started":
+              break;
+            case "heard_partial":
+              setVoicePartial(
+                frame.text.trim()
+                  ? { id: -1, role: "you", text: frame.text }
+                  : null,
+              );
+              break;
             case "heard":
               setVoicePhase("thinking");
+              setVoicePartial(null);
               push("you", frame.text);
               break;
+            case "answer_partial":
+              setVoicePartial(
+                frame.text.trim()
+                  ? { id: -2, role: "brahma", text: frame.text }
+                  : null,
+              );
+              break;
             case "answer":
+              setVoicePartial(null);
               push("brahma", frame.text);
               break;
             case "speaking":
+              // Phase only — never rendered as a line.
+              //
+              // The local pipeline emits `answer` with the full reply and then
+              // `speaking` with a shortened version for the speech synthesiser.
+              // Rendering both would show the same reply twice, once truncated.
+              // Live now emits `answer`/`answer_partial` of its own, so there
+              // is nothing left for this branch to carry.
               setVoicePhase("speaking");
               break;
             case "tool":
@@ -519,7 +550,10 @@ export function useBrahma() {
     // before that would be a lie the user could hear.
   }, [send]);
 
-  const clearVoiceLines = useCallback(() => setVoiceLines([]), []);
+  const clearVoiceLines = useCallback(() => {
+    setVoiceLines([]);
+    setVoicePartial(null);
+  }, []);
 
   return {
     connection,
@@ -537,6 +571,7 @@ export function useBrahma() {
     voiceMode,
     voiceError,
     voiceStopping,
+    voicePartial,
     startVoice,
     stopVoice,
     clearVoiceLines,

@@ -16,6 +16,7 @@ local voice mode in :mod:`brahma.voice`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import traceback
 from typing import Any, Callable
@@ -61,6 +62,20 @@ class LiveSession:
         self._stop = threading.Event()
         self._session = None
 
+        # Stop has to reach coroutines that are parked on a socket read or a
+        # queue, and a threading.Event can only be polled between awaits — so
+        # it is mirrored onto an asyncio.Event that a watcher task awaits. See
+        # stop() and _main().
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._astop: asyncio.Event | None = None
+
+        # Gemini streams transcription as deltas — one syllable or word per
+        # message. Emitting each as it arrives produced a column of fragments
+        # instead of a sentence, so they are accumulated and flushed at the
+        # turn boundary.
+        self._heard: list[str] = []
+        self._said: list[str] = []
+
     # -- helpers ---------------------------------------------------------
 
     def _emit(self, kind: str, text: str) -> None:
@@ -71,7 +86,30 @@ class LiveSession:
                 pass
 
     def stop(self) -> None:
+        """Ask the session to end. Safe to call from any thread."""
         self._stop.set()
+        loop, event = self._loop, self._astop
+        if loop is not None and event is not None and not loop.is_closed():
+            # The event belongs to the session's loop; setting it from this
+            # thread directly would not wake anything waiting on it.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(event.set)
+
+    def _flush_heard(self) -> None:
+        text = "".join(self._heard).strip()
+        self._heard.clear()
+        if text:
+            self._emit("heard", text)
+
+    def _flush_said(self) -> None:
+        text = "".join(self._said).strip()
+        self._said.clear()
+        if text:
+            # `answer` is the kind the local pipeline uses for a finished
+            # reply. Live only ever emitted `speaking`, which carries phase
+            # rather than content, so the assistant's own words never reached
+            # the transcript at all.
+            self._emit("answer", text)
 
     def _system_prompt(self) -> str:
         from .skills.memory import context_for_prompt
@@ -147,8 +185,10 @@ class LiveSession:
             callback=callback,
         ):
             self._emit("listening", "")
-            while not self._stop.is_set():
-                await asyncio.sleep(0.1)
+            # Await the stop event rather than polling: this wakes the instant
+            # stop() is called instead of up to a tick later.
+            if self._astop is not None:
+                await self._astop.wait()
 
     async def _drain_queue(self, out_queue: asyncio.Queue) -> None:
         while not self._stop.is_set():
@@ -164,20 +204,37 @@ class LiveSession:
     async def _play_audio(self, audio_queue: asyncio.Queue) -> None:
         import sounddevice as sd
 
-        with sd.RawOutputStream(
+        stream = sd.RawOutputStream(
             samplerate=RECEIVE_SAMPLE_RATE,
             channels=CHANNELS,
             dtype="int16",
             blocksize=CHUNK_SIZE,
-        ) as stream:
+        )
+        stream.start()
+        try:
             while not self._stop.is_set():
                 chunk = await audio_queue.get()
                 if chunk is None:
                     continue
+                # `stream.write` blocks until the buffer drains. Running it on
+                # the event loop froze everything for the length of the reply —
+                # which is exactly why Stop appeared to hang while the phase
+                # was "Speaking". Off-thread, the loop stays responsive and the
+                # stop watcher can still fire.
                 try:
-                    stream.write(chunk)
+                    await asyncio.to_thread(stream.write, chunk)
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
                     pass
+        finally:
+            # abort(), not stop(): drop whatever is still queued in PortAudio
+            # so the assistant goes quiet at once instead of finishing the
+            # sentence after the user asked it to stop.
+            with contextlib.suppress(Exception):
+                stream.abort()
+            with contextlib.suppress(Exception):
+                stream.close()
 
     # -- tools -----------------------------------------------------------
 
@@ -203,10 +260,33 @@ class LiveSession:
                 if server is not None:
                     inp = getattr(server, "input_transcription", None)
                     if inp is not None and getattr(inp, "text", ""):
-                        self._emit("heard", inp.text)
+                        self._heard.append(inp.text)
+                        # Show it building, as one line that grows.
+                        self._emit("heard_partial", "".join(self._heard).strip())
+
                     out = getattr(server, "output_transcription", None)
                     if out is not None and getattr(out, "text", ""):
-                        self._emit("speaking", out.text)
+                        # The model answering means the user's utterance is
+                        # over — a cleaner boundary than turn_complete, which
+                        # would hold their words back until after the reply.
+                        self._flush_heard()
+                        if not self._said:
+                            self._emit("speaking", "")
+                        self._said.append(out.text)
+                        self._emit("answer_partial", "".join(self._said).strip())
+
+                    # Barge-in: the user cut the model off. Keep what was
+                    # actually said rather than dropping it.
+                    if getattr(server, "interrupted", False):
+                        self._flush_heard()
+                        self._flush_said()
+
+                    if getattr(server, "turn_complete", False) or getattr(
+                        server, "generation_complete", False
+                    ):
+                        self._flush_heard()
+                        self._flush_said()
+                        self._emit("listening", "")
 
                 tool_call = getattr(response, "tool_call", None)
                 if tool_call is not None:
@@ -237,6 +317,13 @@ class LiveSession:
         audit.record("voice.live_start", model=self.model)
         self._emit("info", f"connecting to {self.model}")
 
+        # Published before connecting so a stop() arriving during the handshake
+        # is still seen.
+        self._loop = asyncio.get_running_loop()
+        self._astop = asyncio.Event()
+        if self._stop.is_set():
+            self._astop.set()
+
         async with client.aio.live.connect(model=self.model, config=self._config()) as session:
             self._session = session
             self._emit("info", "connected — start speaking")
@@ -250,11 +337,21 @@ class LiveSession:
                 asyncio.create_task(self._play_audio(audio_queue)),
                 asyncio.create_task(self._receive(audio_queue)),
             ]
+            # A watcher, so shutdown does not depend on any worker noticing the
+            # flag. `gather` waits for *all* tasks; _receive parks on the
+            # socket and _play_audio on its queue, so neither returned and the
+            # cancelling `finally` was unreachable. Waiting for the first
+            # completion instead means stop() ends the session immediately.
+            watcher = asyncio.create_task(self._astop.wait())
+            everything = [*tasks, watcher]
             try:
-                await asyncio.gather(*tasks)
+                await asyncio.wait(everything, return_when=asyncio.FIRST_COMPLETED)
             finally:
-                for task in tasks:
+                for task in everything:
                     task.cancel()
+                await asyncio.gather(*everything, return_exceptions=True)
+                self._flush_heard()
+                self._flush_said()
                 self._session = None
 
     def run(self) -> int:
@@ -277,10 +374,14 @@ class LiveSession:
             try:
                 asyncio.run(self._main())
                 return self.turns
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, asyncio.CancelledError):
                 self._emit("info", "interrupted")
                 return self.turns
             except Exception as exc:
+                if self._stop.is_set():
+                    # Asked to stop mid-connect; trying the next model would
+                    # reopen the microphone the user just closed.
+                    return self.turns
                 last = exc
                 text = str(exc)
                 audit.record(
