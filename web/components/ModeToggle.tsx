@@ -17,14 +17,10 @@
  */
 
 import type { VoicePhase } from "@/lib/protocol";
+import { isVoiceLive } from "@/lib/protocol";
 import { Icon } from "./icons";
 
 export type ChatMode = "text" | "voice";
-
-/** Phases in which a voice session is genuinely live. */
-export function isVoiceLive(phase: VoicePhase): boolean {
-  return phase !== "off" && phase !== "error";
-}
 
 const LIVE_LABEL: Partial<Record<VoicePhase, string>> = {
   starting: "Starting…",

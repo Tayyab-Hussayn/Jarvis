@@ -334,8 +334,10 @@ def create_app(token: str | None = None) -> Any:
                 voice_box["thread"] = None
                 session.emit("voice_state", phase="stopped", text="")
 
-        def stop_voice() -> None:
+        def stop_voice() -> bool:
+            """Ask the voice loop to end. Returns whether one was running."""
             active = voice_box.get("session")
+            running = active is not None or voice_box.get("thread") is not None
             if active is not None:
                 with contextlib.suppress(Exception):
                     active.stop()
@@ -343,6 +345,7 @@ def create_app(token: str | None = None) -> Any:
                 from .platform import tts as _tts
 
                 _tts.stop()
+            return running
 
         turn_task: asyncio.Task | None = None
         try:
@@ -418,7 +421,12 @@ def create_app(token: str | None = None) -> Any:
 
                 elif kind == "voice_stop":
                     audit.record("web.voice_stop")
-                    stop_voice()
+                    # Always answer. When a session is running its worker emits
+                    # `stopped` from its finally; when none is, nothing would
+                    # have replied at all, and a client that shows "Stopping…"
+                    # until confirmation stayed stuck there for good.
+                    if not stop_voice():
+                        session.emit("voice_state", phase="stopped", text="")
 
                 elif kind == "confirm_reply":
                     ok = session.resolve_confirm(

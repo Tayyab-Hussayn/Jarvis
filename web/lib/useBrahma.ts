@@ -29,6 +29,7 @@ import type {
   VoiceLine,
   VoicePhase,
 } from "./protocol";
+import { isVoiceLive } from "./protocol";
 import { captureToken, getToken, wsUrl } from "./session";
 
 export type Connection =
@@ -52,6 +53,9 @@ const PING_INTERVAL_MS = 25_000;
 
 /** Close code 1008 is our auth rejection — retrying a bad token is pointless. */
 const POLICY_VIOLATION = 1008;
+
+/** How long to wait for the server to confirm a stop before releasing the UI. */
+const STOP_CONFIRM_TIMEOUT_MS = 8000;
 
 interface PendingRun {
   resolve: (result: string) => void;
@@ -81,6 +85,9 @@ export function useBrahma() {
   // fragment.
   const [voicePartial, setVoicePartial] = useState<VoiceLine | null>(null);
   const voiceSeq = useRef(0);
+  // Callbacks need the current phase without being rebuilt on every change.
+  const phaseRef = useRef<VoicePhase>("off");
+  phaseRef.current = voicePhase;
 
   const socketRef = useRef<WebSocket | null>(null);
   const attemptsRef = useRef(0);
@@ -359,6 +366,30 @@ export function useBrahma() {
     [patchTurn],
   );
 
+  /* -- stopping invariants -------------------------------------------- */
+
+  // You cannot be "stopping" something already stopped. This reconciles the
+  // flag against the phase no matter which order they arrive in, which is the
+  // property that actually prevents a stuck control — the frame-based clear
+  // alone depended on a message that might never come.
+  useEffect(() => {
+    if (voiceStopping && !isVoiceLive(voicePhase)) setVoiceStopping(false);
+  }, [voiceStopping, voicePhase]);
+
+  // And if the session really is live but never confirms, give the user their
+  // control back rather than leaving it disabled. Reporting honestly that the
+  // stop was not acknowledged beats silently pretending it worked.
+  useEffect(() => {
+    if (!voiceStopping) return;
+    const timer = setTimeout(() => {
+      setVoiceStopping(false);
+      setVoiceError(
+        "The voice session did not confirm it stopped. Try again, or reload.",
+      );
+    }, STOP_CONFIRM_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [voiceStopping]);
+
   /* -- connection ----------------------------------------------------- */
 
   const connect = useCallback(() => {
@@ -543,6 +574,14 @@ export function useBrahma() {
   );
 
   const stopVoice = useCallback(() => {
+    // Nothing to stop. Sending anyway used to leave the UI showing
+    // "Stopping…" for good: the server had no session to end, so it emitted
+    // no `stopped` frame, and the flag that gates the toggle is cleared by
+    // that frame.
+    if (!isVoiceLive(phaseRef.current)) {
+      setVoiceStopping(false);
+      return;
+    }
     setVoiceStopping(true);
     send({ t: "voice_stop" });
     // Do not flip to "off" here: the server confirms with a `stopped` frame

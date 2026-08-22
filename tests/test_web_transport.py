@@ -797,10 +797,16 @@ def test_voice_start_reports_readiness_problems_instead_of_starting(client, monk
 
 
 def test_voice_stop_without_a_session_is_harmless(client):
-    """The browser may send stop after the loop has already exited."""
+    """The browser may send stop after the loop has already exited.
+
+    This used to assert that nothing came back, which turned out to be the bug
+    rather than the contract: a client that shows "Stopping…" until the server
+    confirms then waited for ever. Stop is now always acknowledged.
+    """
     with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
         json.loads(ws.receive_text())
         ws.send_text(json.dumps({"t": "voice_stop"}))
+        assert json.loads(ws.receive_text())["phase"] == "stopped"
         ws.send_text(json.dumps({"t": "ping"}))
         assert json.loads(ws.receive_text())["t"] == "pong"
 
@@ -1061,3 +1067,40 @@ def test_local_voice_emits_answer_before_the_shortened_spoken_form():
 
     # And `say` is what emits `speaking`, carrying the shortened text.
     assert '_emit("speaking"' in inspect.getsource(voice.VoiceSession.say)
+
+
+def test_voice_stop_is_answered_even_when_nothing_is_running():
+    """A request the protocol can leave unanswered is a wedged UI.
+
+    Reported: clicking "Text" while voice was already off left the toggle
+    showing "Stopping…" until the page was reloaded. The client sets that flag
+    optimistically and clears it on the server's `stopped` frame — but with no
+    session to end, the server did nothing and sent nothing, so the flag was
+    never cleared. Every voice_stop must produce a reply.
+    """
+    from fastapi.testclient import TestClient
+
+    from brahma.server import create_app
+
+    client = TestClient(create_app(TOKEN), base_url="http://127.0.0.1:8787")
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())          # hello
+        ws.send_text(json.dumps({"t": "voice_stop"}))
+        frame = json.loads(ws.receive_text())
+
+    assert frame["t"] == "voice_state"
+    assert frame["phase"] == "stopped", f"stop went unanswered: {frame}"
+
+
+def test_voice_stop_is_idempotent():
+    """Clicking Text repeatedly must not need a session to exist."""
+    from fastapi.testclient import TestClient
+
+    from brahma.server import create_app
+
+    client = TestClient(create_app(TOKEN), base_url="http://127.0.0.1:8787")
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())
+        for _ in range(3):
+            ws.send_text(json.dumps({"t": "voice_stop"}))
+            assert json.loads(ws.receive_text())["phase"] == "stopped"

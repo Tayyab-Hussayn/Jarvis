@@ -144,6 +144,14 @@ window whose pid is this process or one of its ancestors — normally the termin
 when the user answers yes, because "close workspace 2" is not a request to kill the thing doing
 the closing. An earlier session killed the user's terminal exactly this way.
 
+**Every client request must produce a reply frame.** Clicking "Text" while voice was already off
+left the toggle reading "Stopping…" until the page was reloaded: the client sets that flag
+optimistically and clears it when the server confirms, but with no session to end the server did
+nothing and sent nothing. Optimistic UI state cleared only by a remote event needs three things,
+and this bug needed all three — the server always answering, the client not asking for work that
+is not needed, and an invariant on the client (you cannot be "stopping" something already stopped)
+so a dropped frame cannot wedge the control.
+
 **`server.py` must not use `from __future__ import annotations`.** FastAPI resolves route type
 hints to tell a request object from a query parameter. Postponed annotations are strings resolved
 against module scope, where the lazily-imported `Request`/`WebSocket` names don't exist, so every

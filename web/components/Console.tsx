@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Message, VoiceLine, VoicePhase } from "@/lib/protocol";
 import type { Connection } from "@/lib/useBrahma";
-import { ModeToggle, isVoiceLive } from "./ModeToggle";
+import { isVoiceLive } from "@/lib/protocol";
+import { ModeToggle } from "./ModeToggle";
 import { TurnGraph } from "./TurnGraph";
 import { Button } from "./ui";
 

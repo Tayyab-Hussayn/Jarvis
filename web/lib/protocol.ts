@@ -128,6 +128,12 @@ export interface VoiceLine {
   text: string;
 }
 
+/** Phases in which a voice session is genuinely live.
+ *  One definition, because the toggle and the hook must agree on it. */
+export function isVoiceLive(phase: VoicePhase): boolean {
+  return phase !== "off" && phase !== "error";
+}
+
 export type VoicePhase =
   | "off"
   | "starting"
