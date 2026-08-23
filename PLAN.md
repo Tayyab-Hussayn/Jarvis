@@ -1,10 +1,11 @@
-# PLAN.md — reliability pass and agent audit
+# PLAN.md — reliability pass, agent audit, and capability roadmap
 
 Supersedes the frontend build-out plan (that work is done; see git history and
 `UI_AUDIT.md`). This plan covers three reported defects and a full audit of the
 agent as an autonomous system.
 
-**Status:** complete. D1–D3 fixed; audit written to `AGENT_AUDIT.md` with 8 findings fixed and 5 recorded. 248 tests passing.
+**Status:** Parts 1–2 complete — D1–D3 fixed, audit in `AGENT_AUDIT.md` (8 fixed, 5 recorded),
+248 tests passing. **Part 3 is the open work.**
 
 ---
 
@@ -155,3 +156,113 @@ Tests alongside each fix; nothing lands on a claim I have not checked.
   class; they are not a claim that I found the specific cause. If it recurs
   there will now be audit records to read.
 - D3 is fully understood and reproducible.
+
+---
+
+# Part 3 — capability roadmap
+
+The audit found the system *safe*; this part is about making it *capable*. The
+original Windows build could open a browser, message someone on WhatsApp, drive
+Spotify and type into a terminal. Most of that did not survive the port.
+
+## How the original actually did it
+
+Read from the Windows tree, not assumed:
+
+| Capability | Mechanism | Ported? |
+|---|---|---|
+| Browser control | **Playwright** (`actions/browser_control.py`, 627 lines) driving the OS default browser, `headless=False`, on a dedicated asyncio thread | **No** |
+| Element targeting | `smart_click`/`smart_type` — a cascade of Playwright semantic locators: `get_by_role` → `get_by_text` → `get_by_placeholder` → `get_by_label` | **No** |
+| WhatsApp messaging | **pyautogui macro**: Win → type "WhatsApp" → Enter → Ctrl+F → type contact → Enter → type message → Enter | No |
+| Spotify / app navigation | Same pyautogui approach — focus a window and synthesise keystrokes | Partially (`type_text`, `press_keys` exist) |
+| Terminal command typing | Same again | Partially |
+
+There was **no** vision-guided clicking anywhere — `locateOnScreen` appears
+nowhere in the tree. Coordinates were hardcoded or assumed.
+
+**Why it felt fast, and the catch:** it never verified anything. It types and
+hopes. If WhatsApp is slow to load the message goes wherever focus happens to
+be; if the contact list orders differently it messages the wrong person. That is
+the opposite trade-off from this port, which verifies focus before acting
+precisely because blind targeting destroyed the wrong terminal.
+
+## P3-1 · Browser control via Playwright · the big one
+
+The single largest capability gap, and the one behind the WhatsApp example.
+Playwright is the strong path on Wayland: it drives a real browser process and
+needs no synthetic input at all.
+
+### Which browser does it drive?
+
+Three options, measured against this machine (Chrome pid 1283 running with **no**
+`--remote-debugging-port`; profiles `Default`, `Profile 1`–`Profile 4`):
+
+| | Approach | Gets your logins | Needs Chrome restarted | Risk |
+|---|---|---|---|---|
+| **A** | `connect_over_cdp` to a debug port | Yes, everything | **Yes** — cannot attach retroactively | Port is **unauthenticated**: any local process can drive your browser and act as you on every logged-in site |
+| **B** | `launch_persistent_context` on your real profile dir | Yes | No, but **Chrome must be closed** (profile lock) | Rule out — will not survive real use |
+| **C** | `launch_persistent_context` on a dedicated Brahma profile | Only what you log it into | No | A mistake stays inside a profile you chose |
+
+**Decision: C by default, A as an explicit opt-in.**
+
+Not squeamishness about the port — the audit just closed a run of bugs where the
+agent acted on the wrong target. `close_window` picked the wrong terminal; an
+unreviewable card got approved. Those were recoverable. The same mistake inside a
+live browser session — wrong tab, wrong profile, wrong account — is not. We also
+put a token, Origin check and Host check on Brahma's own loopback port; opening
+an unauthenticated CDP port beside it would undo that in one step.
+
+### Scope
+
+- `brahma/platform/browser.py` — Playwright on its own thread, persistent
+  context at `~/.local/share/brahma-echo/chrome-profile`, lazily started.
+- Skills: `browser_open`, `browser_click`, `browser_type`, `browser_scroll`,
+  `browser_tabs`, `browser_switch_tab`, `browser_read`, `browser_close`.
+- Semantic targeting ported from `smart_click`, but **refusing ambiguity** the
+  way `_resolve_one` does — list the candidates rather than clicking the first.
+  The A1 lesson applies to DOM elements exactly as it did to windows.
+- Danger levels: navigation and reading MODERATE; anything that submits,
+  purchases or posts DESTRUCTIVE with a confirmation naming the site and action.
+- CDP attach behind `browser.attach_to_running: true` plus a documented
+  warning, never the default.
+
+## P3-2 · Reliable app navigation
+
+`open_app` launches; it cannot then *drive* the app. The original used blind
+keystrokes. Better options in order of reliability:
+
+1. **App-specific control protocols** where they exist — MPRIS over D-Bus
+   already covers Spotify play/pause/next/previous and is far more reliable than
+   typing at it. `media_control` uses this; extend to playlists and search.
+2. **Playwright** for anything with a web version (Spotify Web, WhatsApp Web).
+3. **Synthetic input** only as the last resort, and only after verifying the
+   right window is focused — the mistake the original made.
+
+## P3-3 · Typing into a specific terminal
+
+"Open a terminal and run X there" needs synthetic input, which on Wayland means
+`ydotool` (daemon + `uinput` permissions). Requirements: verify the target
+terminal is focused before typing, refuse if focus does not land, and treat the
+typed command as `run_command` does — classify it, and confirm anything
+destructive. Typing blind into whatever has focus is how the original sent
+messages to the wrong person.
+
+## P3-4 · Gaps carried over from the audit
+
+From `AGENT_AUDIT.md` §A7, unchanged and still worth doing:
+
+- **Cancel an in-flight turn** — the agent loop has no interruption point.
+- **Undo** — every destructive action is one-way. A short undo window would
+  change the risk profile more than any confirmation does.
+- **Layout memory** — it cannot restore what it never recorded.
+- **Proactive reporting** — `notify` exists; nothing drives it.
+
+## Order
+
+1. **P3-1** browser control — largest capability gain, strongest mechanism.
+2. **P3-2** app navigation via D-Bus/MPRIS where possible.
+3. **P3-4** cancel, then undo.
+4. **P3-3** terminal typing — weakest mechanism, most caveats, last.
+
+Each lands with tests, and nothing claims to work that has not been driven
+against the real thing.
