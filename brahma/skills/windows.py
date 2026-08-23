@@ -39,6 +39,86 @@ def _own_pids() -> set[int]:
     return pids
 
 
+class AmbiguousTarget(Exception):
+    """More than one window matched and there is no basis to choose."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+def _describe(w) -> str:
+    return f"workspace {w.workspace} · {w.app} · {w.title[:44]} · pid {w.pid}"
+
+
+def _resolve_one(query: str, workspace: str = ""):
+    """Resolve exactly one window, or refuse.
+
+    `find_windows` returns *every* match ranked by quality, and callers used to
+    take `matches[0]`. With three `foot` terminals open that picked an
+    arbitrary one: a user who asked to close the terminal on workspace 4, from
+    workspace 1, had the workspace-2 terminal closed instead — the one running
+    the server. The confirmation card said only "close window 'foot'", so there
+    was nothing in it to catch the mistake.
+
+    Guessing is the bug. When the query cannot identify a single window this
+    raises, and the caller reports the candidates so the choice comes back to
+    whoever asked.
+    """
+    matches = desktop.find_windows(query)
+    if workspace:
+        want = str(workspace).strip()
+        matches = [w for w in matches if str(w.workspace) == want]
+        if not matches:
+            raise AmbiguousTarget(
+                f"No window matching '{query}' on workspace {want}."
+            )
+
+    if not matches:
+        raise AmbiguousTarget(f"No window matches '{query}'.")
+    if len(matches) == 1:
+        return matches[0]
+
+    # An exact app-id match that is unique still counts as unambiguous.
+    text = (query or "").strip().lower()
+    exact = [w for w in matches if (w.app or "").lower() == text]
+    if len(exact) == 1:
+        return exact[0]
+
+    lines = [
+        f"'{query}' matches {len(matches)} windows — say which one "
+        f"(add workspace=…, or use a distinctive part of the title):"
+    ]
+    lines += [f"  {_describe(w)}" for w in matches]
+    raise AmbiguousTarget("\n".join(lines))
+
+
+def _restore_workspace(backend, origin) -> None:
+    """Put the user back where they were before we focused a target."""
+    if origin is None or not origin.workspace:
+        return
+    try:
+        current = backend.focused()
+        if current is not None and str(current.workspace) == str(origin.workspace):
+            return
+        backend.workspace(str(origin.workspace))
+    except Exception:
+        pass
+
+
+def _still_matches(backend, target) -> bool:
+    """Is the window we resolved still the same window?
+
+    Resolution, confirmation and the action are three separate moments, and
+    windows open and close in between. Acting on a stale handle is how the
+    wrong thing gets closed.
+    """
+    for w in backend.list_windows():
+        if w.id == target.id:
+            return w.app == target.app
+    return False
+
+
 def _wait_until_gone(backend, ids: set[str], timeout: float = _GONE_TIMEOUT) -> set[str]:
     """Poll until the given windows disappear. Returns the ones still open.
 
@@ -83,19 +163,20 @@ def focused_window() -> str:
 
 
 @skill(category="windows", danger=Danger.MODERATE)
-def focus_window(query: str) -> str:
+def focus_window(query: str, workspace: str = "") -> str:
     """Bring a window to the front by app name or title.
 
     Args:
         query: Part of the application id or window title.
+        workspace: Only consider windows on this workspace.
     """
-    matches = desktop.find_windows(query)
-    if not matches:
-        return f"No window matches '{query}'."
+    try:
+        target = _resolve_one(query, workspace)
+    except AmbiguousTarget as exc:
+        return exc.message
 
-    target = matches[0]
     if desktop.backend().focus(target):
-        return f"Focused {target.app}: {target.title[:60]}"
+        return f"Focused {_describe(target)}"
     return f"Could not focus {target.app}."
 
 
@@ -162,6 +243,7 @@ def toggle_floating() -> str:
 @skill(category="windows", danger=Danger.DESTRUCTIVE)
 def close_window(
     query: str = "",
+    workspace: str = "",
     force: bool = False,
     _source: str = "local",
     _confirm: bool = False,
@@ -170,23 +252,42 @@ def close_window(
 
     Args:
         query: Optional app name or title; omit to close the focused window.
+        workspace: Only consider windows on this workspace. Use it whenever the
+            app name could match more than one window.
         force: Kill the client instead of politely asking it to close.
     """
     backend = desktop.backend()
     if query:
-        matches = desktop.find_windows(query)
-        if not matches:
-            return f"No window matches '{query}'."
-        target = matches[0]
+        try:
+            target = _resolve_one(query, workspace)
+        except AmbiguousTarget as exc:
+            return exc.message
     else:
+        if workspace:
+            return "Give a window to close, or use close_workspace for a whole workspace."
         target = backend.focused()
         if target is None:
             return "No window is focused."
 
+    # Never close the session Brahma is running in, whatever was asked for.
+    if target.pid in _own_pids():
+        return (
+            f"Refusing: {_describe(target)} is the window Brahma is running in. "
+            "Closing it would end this session."
+        )
+
+    # Remember where the user actually is. Acting on a window has to focus it,
+    # and leaving them on a workspace they never asked for is disorienting —
+    # it is also what made a mis-targeted close look like a workspace switch.
+    origin = backend.focused()
+
     verb = "kill" if force else "close"
     verdict = Verdict(
         danger=Danger.DESTRUCTIVE,
-        reasons=[f"{verb}s '{target.app}: {target.title[:50]}' (unsaved work may be lost)"],
+        # Name the workspace, title and pid. "close window 'foot'" was not
+        # reviewable with three foot terminals open, so approving it could not
+        # be an informed decision.
+        reasons=[f"{verb}s {_describe(target)} (unsaved work may be lost)"],
     )
     # Declaring targets rather than letting safety.py read them back out of the
     # sentence. Two of these matter:
@@ -197,7 +298,7 @@ def close_window(
     #     on a different workspace, because focus moves. Recording the guess
     #     itself stops the retry instead of prompting about something the user
     #     never asked about.
-    enforce(verdict, f"{verb} window '{target.app}'",
+    enforce(verdict, f"{verb} window '{target.app}' on workspace {target.workspace}",
             skill="close_window", source=_source, pre_confirmed=_confirm,
             targets=describe_targets(
                 f"window:{target.id}",
@@ -205,16 +306,28 @@ def close_window(
                 "" if query else "close_window:implicit",
             ))
 
+    # Resolution, confirmation and action are three separate moments. Between
+    # them the window list can change, and acting on a stale handle is exactly
+    # how the wrong window gets destroyed.
+    if not _still_matches(backend, target):
+        return (
+            f"Not closing anything: {target.app} on workspace {target.workspace} "
+            "is no longer there. Ask again and I will re-check."
+        )
+
     accepted = backend.kill(target) if force else backend.close(target)
 
     # Verify it actually went away rather than trusting the request. Polling
     # returns as soon as it is gone instead of always paying a fixed sleep.
-    if not _wait_until_gone(backend, {target.id}):
-        return f"Closed {target.app}: {target.title[:60]}"
+    gone = not _wait_until_gone(backend, {target.id})
+    _restore_workspace(backend, origin)
+    if gone:
+        return f"Closed {_describe(target)}"
 
     if accepted:
         return (
-            f"{target.app} is still open — it may be asking you to save."
+            f"{target.app} on workspace {target.workspace} is still open — "
+            "it may be asking you to save."
             + ("" if force else " Re-run with force=true to kill it.")
         )
     return f"Could not {verb} {target.app} (backend: {backend.name})."

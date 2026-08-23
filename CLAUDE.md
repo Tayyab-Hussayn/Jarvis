@@ -138,6 +138,27 @@ with no query acts on whatever is focused — add a marker like `close_window:im
 between calls, so without the marker the retry prompts about a different window and looks like the
 assistant ignoring you.
 
+**Never resolve an ambiguous target by taking the first match.** `find_windows` returns *every*
+match ranked by quality, and `close_window`/`focus_window` used to take `matches[0]`. With three
+`foot` terminals open that picked an arbitrary one: a user who asked to close the terminal on
+workspace 4, from workspace 1, had the workspace-2 terminal closed instead — the one running the
+server. Skills now refuse and list the candidates (`_resolve_one` in `skills/windows.py`), accept
+a `workspace=` scope, and re-check the target still exists between confirming and acting.
+
+**A confirmation has to be reviewable.** The card for that incident said `close window 'foot'`,
+which is identical for all three terminals — approving it could not be an informed decision.
+Destructive confirmations name the workspace, title and pid.
+
+**Acting on a window focuses it; put the user back.** `_act_on` must focus a target before
+closing it, so the user's view is dragged along. `close_window` records the origin workspace and
+restores it afterwards.
+
+**A tool call must never hold a voice session open indefinitely.** The model keeps its turn open
+until every call it made returns a `FunctionResponse`; one that never comes leaves the session
+listening but unable to answer, recoverable only by stopping it by hand. `live.py` bounds each
+call at `TOOL_TIMEOUT` and always returns *something*, and records
+`voice.live_tool_start`/`_end`/`_timeout` so a real stall leaves evidence.
+
 **A bulk window operation must exclude Brahma's own session.** `close_workspace` filters out any
 window whose pid is this process or one of its ancestors — normally the terminal running
 `brahma serve` — and says it skipped them. This is structural, not a confirmation: it holds even

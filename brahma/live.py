@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
+import time
 import traceback
 from typing import Any, Callable
 
@@ -45,6 +46,11 @@ VOICE_NAME = "Charon"
 # Recognition language. Empty means "let the model guess", which mis-detected
 # English badly enough to render it in Malayalam script.
 DEFAULT_LANGUAGE = "en-US"
+
+# A tool call blocks the model's turn. Without a ceiling the whole session can
+# sit silent with no way to tell a slow command from a dead one, and no way out
+# except tearing the session down by hand.
+TOOL_TIMEOUT = 90.0
 
 Observer = Callable[[str, str], None]
 
@@ -262,6 +268,39 @@ class LiveSession:
 
     # -- tools -----------------------------------------------------------
 
+    async def _call_tool(self, name: str, args: dict) -> str:
+        """Run one tool with a ceiling, always returning something to the model.
+
+        Anything that raises or overruns comes back as an error string rather
+        than as silence, so the conversation continues instead of stalling.
+        """
+        started = time.monotonic()
+        audit.record("voice.live_tool_start", tool=name)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(self._run_tool, name, args), timeout=TOOL_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            result = (
+                f"{name} did not finish within {TOOL_TIMEOUT:.0f}s and was left "
+                "running. Tell the user it timed out; do not retry it silently."
+            )
+            self._emit("error", f"{name} timed out after {TOOL_TIMEOUT:.0f}s")
+            audit.record("voice.live_tool_timeout", tool=name)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            result = f"{name} failed: {type(exc).__name__}: {exc}"
+            self._emit("error", result)
+            audit.record("voice.live_tool_failed", tool=name, error=str(exc))
+        else:
+            audit.record(
+                "voice.live_tool_end", tool=name,
+                seconds=round(time.monotonic() - started, 2),
+            )
+        self._emit("tool_result", result)
+        return result
+
     def _run_tool(self, name: str, args: dict) -> str:
         self._emit("tool", f"{name}({', '.join(f'{k}={v!r}' for k, v in list(args.items())[:3])})")
         with confirmer_scope(self.confirmer):
@@ -319,9 +358,11 @@ class LiveSession:
                 if tool_call is not None:
                     responses = []
                     for call in getattr(tool_call, "function_calls", []) or []:
-                        result = await asyncio.to_thread(
-                            self._run_tool, call.name, dict(call.args or {})
-                        )
+                        # Every call must produce a FunctionResponse. A missing
+                        # one is an indefinite wait by construction: the model
+                        # holds the turn open for a result that never comes,
+                        # and the session looks dead while still listening.
+                        result = await self._call_tool(call.name, dict(call.args or {}))
                         self.turns += 1
                         responses.append(types.FunctionResponse(
                             id=getattr(call, "id", None),
@@ -329,7 +370,16 @@ class LiveSession:
                             response={"result": result},
                         ))
                     if responses:
-                        await self._session.send_tool_response(function_responses=responses)
+                        try:
+                            await self._session.send_tool_response(
+                                function_responses=responses
+                            )
+                        except Exception as exc:
+                            # If the results cannot be delivered the turn will
+                            # never complete. Say so rather than going quiet.
+                            self._emit("error", f"could not return tool results: {exc}")
+                            audit.record("voice.live_tool_send_failed", error=str(exc))
+                            return
 
     # -- entry point -----------------------------------------------------
 

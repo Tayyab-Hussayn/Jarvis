@@ -86,6 +86,7 @@ export default function Page() {
     voiceError,
     startVoice,
     stopVoice,
+    restartVoice,
     clearVoiceLines,
     voiceStopping,
     voicePartial,
@@ -254,6 +255,7 @@ export default function Page() {
           connected={connection === "open"}
           onStart={startVoice}
           onStop={stopVoice}
+          onRestart={() => restartVoice(voice.data?.live_configured ? "live" : "local")}
           onClear={clearVoiceLines}
         />
         </div>

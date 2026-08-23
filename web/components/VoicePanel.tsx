@@ -91,6 +91,7 @@ export function VoicePanel({
   connected,
   onStart,
   onStop,
+  onRestart,
   onClear,
 }: {
   open: boolean;
@@ -104,6 +105,7 @@ export function VoicePanel({
   connected: boolean;
   onStart: (mode: "local" | "live") => void;
   onStop: () => void;
+  onRestart: () => void;
   onClear: () => void;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -168,9 +170,16 @@ export function VoicePanel({
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {running ? (
-            <Button variant="danger" onClick={onStop}>
-              Stop listening
-            </Button>
+            <>
+              <Button variant="danger" onClick={onStop}>
+                Stop listening
+              </Button>
+              {/* Recovery without doing stop-then-start by hand, which was the
+                  only way out of a stalled session. */}
+              <Button onClick={onRestart} title="Stop and start again">
+                Restart
+              </Button>
+            </>
           ) : (
             <>
               {/* Live first, and primary, because it is the default the

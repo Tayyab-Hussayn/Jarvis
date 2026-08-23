@@ -1,390 +1,157 @@
-# PLAN.md — Brahma Echo Frontend
+# PLAN.md — reliability pass and agent audit
 
-Living plan for the frontend development phase. Updated as phases complete and as decisions
-land. `user-space/STATE.md` tracks *where we are*; this file tracks *what we agreed to build*.
+Supersedes the frontend build-out plan (that work is done; see git history and
+`UI_AUDIT.md`). This plan covers three reported defects and a full audit of the
+agent as an autonomous system.
 
-**Status:** v1 complete and redesigned. 197 tests passing. Nine screens, all 119 skills reachable.
-**Look and feel:** acid lime on near-black — see [Theming](#7-theming--acid-lime-on-near-black).
+**Status:** documentation complete, development in progress.
 
 ---
 
-## 1. Background
+## Part 1 — the three reported defects
 
-The original Windows build shipped two separate frontends:
+### D1 · Live voice wedges after a tool call · P0
 
-| | What it was | Size |
+**Reported:** the transcript ends at `run_command(command='foot &')` and never
+advances. Speaking again changes nothing.
+
+**What I confirmed:** nothing. I could not reproduce an unbounded hang.
+`shell.run` honours its timeout even for a detached child holding the inherited
+pipe — `setsid sleep 120 &` with `timeout=3` returned at 3.0s with
+`timed_out=True`. `run_command` defaults to 60s, so it returns.
+
+I am not going to invent a root cause from a screenshot. What the evidence does
+establish is that the design **permits** this class of failure and gives no way
+to see it or escape it:
+
+- A tool call blocks the model's turn for as long as it takes. `run_command`
+  allows up to 600s; `voice_confirmer` blocks up to 120s waiting on a card.
+  During that window the session looks dead and is indistinguishable from one
+  that will never recover.
+- If `send_tool_response` never carries a result for a call, the model waits
+  for ever. Nothing detects that.
+- There is no per-tool timeout in the Live path, no watchdog, and no audit
+  record of a tool starting — so the *next* occurrence is equally undiagnosable.
+
+**Approach:** bound it, surface it, and make the next occurrence diagnosable.
+
+1. Bound tool execution in the Live path. On expiry, send the model an error
+   result so the conversation continues instead of stalling.
+2. Guarantee a `FunctionResponse` for **every** call in a `tool_call`, including
+   ones that raise. A missing response is an indefinite wait by construction.
+3. Audit `voice.live_tool_start` / `_end` with durations, so a real hang leaves
+   evidence rather than a screenshot.
+4. Surface a stalled tool in the panel ("still running `run_command`, 42s") so
+   the user can see what is happening rather than guessing.
+
+### D2 · Only Stop → Start recovers it · P0
+
+The session has no recovery path short of tearing it down by hand. That is the
+same defect as D1 seen from the user's side: nothing self-heals and nothing
+offers to.
+
+1. A **Restart** control in the voice panel — stop and start in one action.
+2. Automatic recovery when a tool exceeds its bound: report, unblock, continue.
+3. The panel must always show *why* it is quiet — waiting on a tool, waiting on
+   a confirmation, or genuinely idle.
+
+### D3 · Closed workspace 2 instead of workspace 4 · P0, worst of the three
+
+**Reported:** asked to close the `foot` terminal on workspace 4, having walked
+back to workspace 1 by hand. Approving the card closed the terminal on
+workspace 2 — the one running the Brahma server.
+
+**Root cause — confirmed, not inferred.** `close_window(query='foot')` resolves
+through `desktop.find_windows`, which returns *every* match ranked by how well
+the string matches, and then:
+
+```python
+target = matches[0]      # skills/windows.py
+```
+
+Measured on this machine right now, `find_windows("foot")` returns **three**:
+
+```
+[0] ws3  pid=3155  foot: ⠐ brahma-echo-frontend-redesign     <- Claude Code
+[1] ws4  pid=3641  foot: ~                                    <- the one meant
+[2] ws2  pid=3984  foot: .venv/bin/python -m ~/c/Brahma-Echo  <- the server
+```
+
+`matches[0]` is arbitrary with respect to intent. At the time of the incident it
+was the workspace-2 terminal. Right now it is the terminal running Claude Code —
+so the same request today would kill this session.
+
+Two independent failures compound:
+
+- **Ambiguity is resolved by guessing.** Three candidates, no workspace filter,
+  no disambiguation, silently take the first.
+- **The confirmation cannot be reviewed.** The card said `close window 'foot'`.
+  Nothing in it distinguishes three identical-looking terminals, so approving it
+  was not an informed decision. A confirmation that cannot be checked is theatre.
+
+The focus-then-act machinery in `HyprlandBackend._act_on` was *not* at fault —
+it correctly focused and verified the window it was given. It was given the
+wrong one, and the workspace switch the user saw was that machinery faithfully
+focusing the wrong target.
+
+**Approach:**
+
+1. **Refuse ambiguity.** More than one match and no way to choose returns the
+   candidates and asks which — it does not pick.
+2. **Scope by workspace.** `close_window(query, workspace=…)`, and the same for
+   `focus_window`.
+3. **Confirmations must be reviewable.** Name the workspace, the title and the
+   pid, not just the app class.
+4. **Re-verify at action time.** The window list can change between resolving a
+   target, asking, and acting. Confirm the id still exists and still matches
+   before doing anything.
+5. **Restore the user's workspace.** Acting on a window necessarily focuses it;
+   the user should be put back where they were rather than left somewhere they
+   did not ask to be.
+6. **Never resolve to Brahma's own session by accident** — extend the
+   `close_workspace` protection to single-window closes.
+
+---
+
+## Part 2 — full agent audit
+
+Beyond the three defects, a systematic pass for loopholes and missing
+capabilities. Findings and fixes go in `AGENT_AUDIT.md`.
+
+### Areas to audit
+
+| # | Area | Looking for |
 |---|---|---|
-| `ui.py` | PyQt6 desktop HUD — boot sequence, scanning overlay, HUD canvas, floating launcher, conversation feed, task dock, gesture camera preview, smart-device tiles, setup wizard | 12,005 lines, 40+ widget classes |
-| `dashboard/server.py` + `static/app.html` | FastAPI + websocket remote control — QR device login, phone mic streaming, file upload, command relay | ~38 KB + 36 KB |
+| A1 | **Target resolution** | Every skill that turns a string into a thing it acts on. D3 is one instance; how many others take `matches[0]`? |
+| A2 | **Blocking and timeouts** | Every path that can block a session unboundedly. Tool calls, confirmations, subprocesses, model requests. |
+| A3 | **Confirmation quality** | Can each confirmation actually be reviewed? Does it name the specific target? |
+| A4 | **Self-protection** | Which operations can kill Brahma's own session, terminal or server? |
+| A5 | **Error surfacing** | Failures that vanish instead of reaching the user. |
+| A6 | **State reconciliation** | Optimistic UI state cleared only by a remote event — the class behind two bugs already. |
+| A7 | **Capability gaps** | What a full assistant should do that this cannot. |
+| A8 | **Observability** | When something goes wrong, is there enough in the audit log to diagnose it? |
 
-Qt nav was four pages: Dashboard, Brahma Echo Home, Devices, System & Connect.
+### Method
 
-**Neither is being ported directly.** Reasons:
-
-1. `ui.py` imports `discord_bot`, `gesture_utils`, `smart_home`, `smart_home_page_new`,
-   `workspace_store`. Gesture tracking is blocked (no mediapipe wheels for Python 3.14) and smart
-   home was never ported, so a 1:1 port drags in five dead dependencies.
-2. Wayland gives no application the right to position its own window, sit always-on-top, or go
-   click-through. The floating launcher and full-screen HUD overlay need `wlr-layer-shell`, which
-   PyQt6 does not speak. That part is deferred and isolated (see [v4](#v4--hud-extras-optional)).
-3. One web codebase serves the desktop window *and* the phone. The original needed two codebases
-   for that.
-
----
-
-## 2. Decisions (locked)
-
-| Decision | Choice | Why |
-|---|---|---|
-| Frontend stack | **Next.js 16 + React 19 + TypeScript + Tailwind v4** | User's home turf; App Router in pure-SPA mode |
-| Component primitives | **hand-written** | Radix was planned for the command palette's focus trap; the palette needed ~30 lines of focus handling, so the dependency was not worth it |
-| Build output | **`output: 'export'` → static** | No Node at runtime. FastAPI serves the built `out/` dir |
-| Backend | **FastAPI + `uvicorn`, websocket + REST** | Same shape the original `dashboard/server.py` proved |
-| Bind | **`127.0.0.1` only in v1** | Remote is v3, and shipping LAN-bound early is how local services get owned |
-| v1 target | **Browser tab** | Confirmed by user |
-| v2 | **Tauri desktop window** | Native window + tray, tiny binary, no Electron |
-| v3 | **Phone / remote** | Confirmed as wanted, deliberately not v1 |
-
-### Repo layout
-
-```
-brahma/
-  server.py        # FastAPI app: websocket, REST, static mount
-  events.py        # typed event frames + per-session bus
-  webauth.py       # token issue/verify, Origin check
-web/               # Next.js app (its own package.json, not in the venv)
-  app/
-  components/
-  lib/
-  app/tokens.css
-brahma/web-dist/   # built static output, gitignored, served by server.py
-```
+Read the code, not the docs. For each finding record: what breaks, the concrete
+failure, severity, and the fix. Verify against the live system where possible
+rather than asserting.
 
 ---
 
-## 3. The blocking constraint
+## Execution order
 
-**The UI cannot be built against the transport that exists today.**
+1. **D3 first.** It destroys the wrong thing, and today it would kill the
+   Claude Code session.
+2. **D1 + D2** together — same underlying gap.
+3. **Audit**, written to `AGENT_AUDIT.md`.
+4. **Fix audit findings** by severity.
 
-`brahma/daemon.py` is a Unix-socket JSONL server: one request in, one full response out. No
-streaming, no events. Its confirmer is `_preapproved`, which **auto-denies** everything
-destructive — correct for a background daemon that must not approve its own dangerous actions,
-useless for an interactive UI.
+Tests alongside each fix; nothing lands on a claim I have not checked.
 
-Three capabilities have to exist before any pixel is worth drawing:
+## Honesty notes
 
-1. **Streaming** — tool calls and results as they happen, not a 24-second silence then a wall of
-   text. `Agent` already has an `Observer` hook (`kind, text` for `thinking | tool | tool_result |
-   answer | error`), but it only carries strings. It needs structured payloads.
-2. **Round-trip confirmation** — `safety.Confirmer` is a **blocking, thread-local** callable
-   `(action, detail, Danger) -> bool`. The web bridge runs the agent on a worker thread and blocks
-   that thread on a `threading.Event` while the browser is asked. **This is the one piece that
-   must not be shortcut.** Getting it wrong means a web page silently approving `delete_path`.
-3. **Push events** — audit entries, provider failover, voice state, system metrics.
-
-Order is therefore: **transport → design → pixels.**
-
----
-
-## 4. Wire protocol
-
-One websocket at `/ws`. JSON frames, `{"t": "<type>", ...}`. Client→server frames are few;
-server→client carries the stream.
-
-### Client → server
-
-| `t` | Payload | Meaning |
-|---|---|---|
-| `ask` | `text`, `id` | New user request |
-| `confirm_reply` | `id`, `approve: bool` | Answer to a pending confirmation |
-| `cancel` | `id` | Abort the in-flight turn |
-| `reset` | — | Clear conversation history |
-| `ping` | — | Keepalive |
-
-### Server → client
-
-| `t` | Payload | Meaning |
-|---|---|---|
-| `hello` | `assistant_name`, `skills`, `provider`, `model`, `environment` | Sent on connect |
-| `turn_start` | `id` | Request accepted |
-| `thinking` | `id`, `text` | Model prose emitted alongside tool calls |
-| `tool_call` | `id`, `call_id`, `name`, `args` | A skill is about to run |
-| `tool_result` | `id`, `call_id`, `result`, `ok` | That skill returned |
-| `confirm_request` | `id`, `confirm_id`, `action`, `detail`, `danger` | **Blocks the agent thread** until answered |
-| `answer` | `id`, `text` | Final prose reply |
-| `turn_end` | `id`, `iterations`, `error` | Turn finished either way |
-| `audit` | audit record | Tailed from the audit log |
-| `error` | `message` | Transport-level failure |
-
-Notes:
-
-- `danger` is the `safety.Danger` name (`SAFE`/`MODERATE`/`DESTRUCTIVE`/`CRITICAL`). The UI styles
-  the confirm card by level and requires a deliberate click for `CRITICAL`.
-- A `confirm_request` with no reply within a timeout resolves to **deny**. Silence is never
-  approval.
-- Only one turn in flight per session. A second `ask` while one is running is rejected, not queued.
-
-### REST
-
-Read-only state that does not belong in the stream, so a page refresh doesn't need a turn:
-
-```
-GET  /api/state        provider, model, breaker state, skill count, environment
-GET  /api/skills       full registry with schemas
-GET  /api/system       CPU / mem / disk / battery / network snapshot
-GET  /api/audit?n=100  recent audit entries
-GET  /api/voice        mic health, STT/TTS backend availability
-GET  /api/settings     redacted settings (keys never returned)
-POST /api/settings     patch settings
-```
-
----
-
-## 5. Security
-
-Loopback binding alone is **not** sufficient. Any page in the user's browser can issue requests to
-`http://127.0.0.1:8787`, and DNS rebinding defeats naive host checks. Three controls, all required:
-
-1. **Bearer token.** Generated at server start, written `0600` to
-   `$XDG_RUNTIME_DIR/brahma-echo/web-token` inside a `0700` directory. Required on every REST call
-   and as a `?token=` query parameter on the websocket handshake. Compared with
-   `secrets.compare_digest`.
-2. **Origin allowlist.** Reject any websocket or REST request whose `Origin` is not the server's
-   own origin or the dev origin (`http://localhost:3000`). Guards against a random site scripting
-   the local server.
-3. **Host header check.** Reject requests whose `Host` is not `127.0.0.1`/`localhost` + our port.
-   This is the actual DNS-rebinding defence.
-
-Additionally:
-
-- **Settings API never returns key material.** `GET /api/settings` redacts; `POST` is write-only
-  for key fields. There is already a test asserting `read_auth()` never leaks `eyJ`/`workos:`
-  material; an equivalent test covers the HTTP surface.
-- **The web confirmer is a real confirmer**, not `_auto_yes`. It surfaces the exact
-  `(action, detail, danger)` the skill passed, and forbidden actions stay forbidden regardless of
-  what the browser answers — `safety.enforce()` refuses protected paths, PID 1, the compositor and
-  `rm -rf /` before any confirmer is consulted, and the web path does not change that.
-- Server is **opt-in**: `brahma serve`. It does not start with the REPL or the systemd daemon.
-
----
-
-## 6a. Redesign — what shipped
-
-Nine screens on a left icon rail, covering all 15 skill categories:
-
-| Screen | Covers |
-|---|---|
-| Console | the conversation, as a flow graph |
-| System | `system` + `shell` — stats, sparklines, process table, services, logs |
-| Windows | `windows` — workspace chips, window cards, focus/close |
-| Files | `files` + `documents` |
-| Apps | `apps` + `games` — desktop entries, packages, updates |
-| Control | `settings` + `power` + `notify` — audio, display, network, power |
-| Screen | `interact` + `media` + `web` — vision, capture, clipboard, search |
-| Activity | audit log, master/detail |
-| Brain | `llm` + `memory` + voice + the skill catalogue |
-
-Plus: **command palette** (`Ctrl+K`, fuzzy over 119 skills, argument forms built from each skill's
-JSON Schema), a **floating dock**, and a **global confirmation overlay**.
-
-**Three findings worth keeping:**
-
-1. **Skills return prose, not data.** Every skill formats its output for the model to read.
-   Panels that need real records (`/api/windows`, `/api/apps`, `/api/processes`) read the
-   `platform/` layer directly. Regex-parsing the prose would break the moment a message is
-   reworded — and the wording exists to serve the model, so it *will* be reworded.
-2. **Panel actions need the confirmer installed.** `run` dispatches inside `confirmer_scope(
-   session.confirm)`. Without it `safety.enforce()` falls back to deny and every destructive
-   panel button silently fails — the tempting "fix" for which is bypassing `enforce`.
-   A panel confirmation surfaces in a **global overlay**, because the user may have navigated
-   away from the screen that started it while the agent thread sits blocked.
-3. **Models emit Markdown constantly.** Answers arrived full of `**` and raw table pipes.
-   `react-markdown` + `remark-gfm`, styled entirely from tokens.
-
-## 6. Screens
-
-### Console *(the core; everything else is secondary)*
-
-The conversation. Streaming reply, tool calls rendered inline as they fire — this is what makes a
-119-skill agent legible instead of a black box. Inline confirm cards for destructive actions,
-styled by danger level. Command palette for direct skill invocation (`brahma run <skill>` with no
-model in the loop).
-
-### System
-
-Live CPU / memory / disk / battery / network, running apps, windows per workspace. Replaces the Qt
-`StatCard` / `MetricBar` / `HudCanvas`.
-
-### Activity
-
-The audit log, filterable by skill, source, danger and outcome. Already exists as JSONL at
-`~/.local/state/brahma-echo/audit.jsonl` — this is the highest value-per-line-of-code screen on
-the list, and per `CLAUDE.md` it's the first thing to read when debugging "why did it do that".
-
-### Voice
-
-Mic health and calibration, STT/TTS backend state, `/voice` (local, free) vs `/voice live`
-(Gemini native audio, metered) toggle. Surfaces the measured tradeoff: 19.3s local vs 7.1s Live.
-
-### Settings
-
-Provider order, model, circuit-breaker state, safety thresholds, API keys (write-only).
-
-**Deliberately excluded from v1:** Devices / Brahma Connect (the gateway was never ported, so the
-page would have nothing behind it), and the animated boot sequence + scanning overlay (most code,
-least function in the original, and riskiest on Wayland).
-
----
-
-## 7. Theming — acid lime on near-black
-
-Direction chosen from four supplied references. Everything lives in `web/app/tokens.css`; no
-component hardcodes a value.
-
-| Reference | Taken | Not taken |
-|---|---|---|
-| Salesforce / Invoices | **Primary identity** — near-black shell, acid-lime accent, big numerals, light detail panels over dark, pill chips | — |
-| Squadly / Task | Left icon rail, floating dock, rounded card grid | Orange palette, avatar cards |
-| Cardiology | **Connector-line flow graph** → the turn timeline | Light canvas as primary |
-| Automatic Payment | Elevation cues | Glass over a photo — illegible for dense log output |
-
-```
-bg #0A0B0D   surface #131519   raised #1A1D23   border #23272E
-text #EDEFF2  muted #9BA3AF    accent #C0F53F   panel (light-over-dark) #F6F7F4
-```
-
-**The danger scale drops green.** A green `SAFE` would collide with a lime accent — "the product"
-and "this is safe" reading as one colour. `SAFE` now carries no colour at all (it is the default
-state); the warm ramp `MODERATE #F5C242 → DESTRUCTIVE #FF8A3D → CRITICAL #FF5A5A` reads purely as
-rising risk. Lime means *interactive*, nothing competes.
-
-Light theme uses the Cardiology warm off-white (`#EDEBE4`). Bright lime fails contrast as text on
-light, so there it is a **fill** colour only and `#4F6B00` carries accent text.
-
----
-
-## 8. Phases
-
-### Phase 1 — Transport ✅
-
-- [x] `Agent.Observer` carries structured payloads; 2-arg callers (`cli.py`, `voice.py`) unchanged
-- [x] `brahma/events.py` — frames + per-session bus + confirmation bridge
-- [x] `brahma/webauth.py` — token issue/verify, Origin + Host checks
-- [x] `brahma/server.py` — FastAPI app, `/ws`, REST endpoints, static mount
-- [x] Blocking web confirmer bridged to `confirm_request` / `confirm_reply`
-- [x] `brahma serve` CLI subcommand
-- [x] `tests/test_web_transport.py` — 48 tests, all passing
-
-Two things this phase turned up, both now encoded as comments where they bite:
-
-- **`server.py` must not use `from __future__ import annotations`.** FastAPI resolves route type
-  hints to decide what is a request object and what is a query parameter. Postponed annotations
-  are strings resolved against module scope, where the lazily-imported `Request` / `WebSocket`
-  names don't exist — so every handler's request argument was misread as a required query
-  parameter and the routes 422'd.
-- **Starlette's `TestClient` sends `Host: testserver` on websocket upgrades** regardless of
-  `base_url`, which the loopback guard correctly rejects. Tests pass an explicit loopback `Host`.
-
-Verified against a live server on port 8791: no token → 401, foreign Origin → 403, valid token →
-200 with all 119 skills. Both directions of the confirmation bridge are covered end to end — a
-denial leaves the file on disk, an approval actually deletes it.
-
-### Phase 1a — Safety hardening *(unplanned; forced by a live test)* ✅
-
-Driving a real turn over the websocket — "delete this file", denying every confirmation — the
-model **worked around the denial**. It tried `delete_path`, then `delete_path permanent=true`,
-then `rm -f`, then `rm`, all denied, then `unlink`, which matched no pattern in `safety.py`. That
-one ran unconfirmed and the file was deleted.
-
-The transport was not at fault: every confirmation was raised and denied correctly. The hole was
-in the pre-existing safety layer, and the system prompt's "never try to work around a
-confirmation" turned out to be advice, not enforcement.
-
-- [x] Classify the missing verbs: `unlink`, `find -delete`, `find -exec rm`, `xargs rm`,
-      `rsync --delete`, `busybox rm`, `gio trash`, `trash-put`, `sed -i`, and interpreter
-      one-liners (`python -c "os.unlink(…)"`, `perl -e unlink`)
-- [x] **Per-turn denial memory** in `safety.enforce()`, keyed on the *target* rather than the
-      verb. Declining an action on a path refuses every later destructive action on that same
-      path in the same request, without re-asking. Scoped by `confirmer_scope`, so it lasts one
-      turn — a blanket lockout would break the legitimate "delete A, keep B" case.
-- [x] 15 tests: every deletion verb, the five-verb attack, target isolation, per-turn clearing
-
-Re-running the identical live attack after the fix: **one** confirmation, the retry refused
-outright, and the model reported honestly that the file was not deleted.
-
-A verb blocklist is inherently incomplete — that is why the denial memory exists. Do not treat
-the pattern list as the defence.
-
-### Phase 2 — App shell ✅
-
-- [x] Next.js 16.3.2 / React 19.2.8 / Tailwind 4 in `web/`, static export configured
-- [x] `app/tokens.css` with placeholder theme; Tailwind reads the variables
-- [x] `lib/useBrahma.ts` — typed websocket client, exponential reconnect, no retry on auth
-      rejection (close code 1008)
-- [x] Nav shell across the five screens; connection state always visible
-
-Two deviations from the original decisions, both deliberate:
-
-- **Hash-based views, not Next routes.** A static export served by FastAPI's `StaticFiles`
-  resolves nested routes through directory-index lookups, turning every deep-link refresh into a
-  trailing-slash problem. One route avoids that entirely.
-- **No shadcn/ui yet.** Its `init` rewrites `globals.css`, which is where the theming contract
-  lives, and the shell needs a panel, a stat, a badge and a button — none with accessibility
-  behaviour worth outsourcing. Radix earns its place when the command palette and dialogs land
-  (focus traps, portals, roving tabindex). That is Phase 3.
-
-### Phase 3 — Console ✅
-
-- [x] Message stream, tool-call cards with argument/result disclosure, answer rendering
-- [x] Confirm cards styled by danger level, with a live countdown and a second deliberate click
-      for `CRITICAL`
-- [x] History, reset, Enter-to-send
-- [x] Command palette — hand-rolled with a real focus trap; Radix was not needed after all
-
-### Phase 4 — Remaining screens ✅
-
-- [x] System (3s polling), Activity (audit log, filterable), Voice, Settings
-- [x] `GET /api/voice` added to the backend to support the Voice screen
-
-### Phase 5 — Integration ✅
-
-- [x] `install-linux.sh` step 7 builds the web app when npm is present, skips cleanly when it isn't
-- [x] `brahma doctor` reports frontend build status
-- [x] `CLAUDE.md` — new tree, commands, architecture, and both hard-won lessons from this phase
-
-### v2 — Tauri
-
-Wrap the same build. Native window, tray icon, global hotkey. No frontend rewrite.
-
-### v3 — Phone / remote
-
-LAN binding, QR pairing, device tokens with revocation, phone mic streaming — the parts
-`dashboard/server.py` already solved once and can be read for reference. Gated behind explicit
-opt-in; loopback stays the default.
-
-### v4 — HUD extras *(optional)*
-
-Floating launcher and overlay via `gtk4-layer-shell`. Separate process, separate decision. Last
-because it's the only part that can fail on platform grounds.
-
----
-
-## 9. Open questions
-
-1. ~~Look and feel~~ Resolved: acid lime on near-black — see §7.
-2. ~~Raw tool JSON by default or behind a disclosure?~~ Resolved: disclosure, with a persisted
-   "always expand tool calls" toggle in the Console header.
-3. ~~Does `brahma serve` auto-open a browser tab?~~ Resolved: yes, with `--no-open`.
-4. Should the Console be able to *cancel* an in-flight turn? The `cancel` frame is specified in
-   §4 but not implemented — the agent loop has no interruption point, so this needs a real design
-   rather than a button that lies.
-
-## 10. Verified
-
-- 192 tests pass (`tests/test_linux_port.py` 144, `tests/test_web_transport.py` 48)
-- Live server on a real port: no token → 401, foreign Origin → 403, rebound Host → 400, valid
-  token → 200 with all 119 skills
-- A full turn end to end against the real model:
-  `hello → turn_start → tool_call(disk_usage) → tool_result → answer → turn_end`, 2 rounds
-- The confirmation bypass attack, before and after the fix (see Phase 1a)
-- `npm run build` → static export served by `brahma serve`; index, chunks and API all 200
+- D1's exact trigger is unreproduced. The fixes bound and expose the failure
+  class; they are not a claim that I found the specific cause. If it recurs
+  there will now be audit records to read.
+- D3 is fully understood and reproducible.

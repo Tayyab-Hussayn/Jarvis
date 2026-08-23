@@ -638,6 +638,33 @@ export function useBrahma() {
     // before that would be a lie the user could hear.
   }, [send]);
 
+  // Recovery without tearing the session down by hand. Waits for the server's
+  // `stopped` before starting again, so the microphone is actually released
+  // first rather than two sessions racing for it.
+  const restartVoice = useCallback(
+    (mode: "local" | "live" = "live") => {
+      const wasLive = isVoiceLive(phaseRef.current);
+      if (!wasLive) {
+        startVoice(mode);
+        return;
+      }
+      setVoiceStopping(true);
+      send({ t: "voice_stop" });
+      const started = Date.now();
+      const poll = setInterval(() => {
+        if (!isVoiceLive(phaseRef.current)) {
+          clearInterval(poll);
+          startVoice(mode);
+        } else if (Date.now() - started > STOP_CONFIRM_TIMEOUT_MS) {
+          clearInterval(poll);
+          setVoiceStopping(false);
+          setVoiceError("Could not restart — the session never confirmed it stopped.");
+        }
+      }, 250);
+    },
+    [send, startVoice],
+  );
+
   const clearVoiceLines = useCallback(() => {
     setVoiceLines([]);
     setVoicePartial(null);
@@ -664,6 +691,7 @@ export function useBrahma() {
     voicePartial,
     startVoice,
     stopVoice,
+    restartVoice,
     clearVoiceLines,
   };
 }

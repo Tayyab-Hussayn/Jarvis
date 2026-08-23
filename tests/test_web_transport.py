@@ -1221,3 +1221,62 @@ def test_voice_confirmation_is_announced_in_the_transcript(monkeypatch):
     announce = source.find("Waiting for your confirmation")
     blocking = source.find("return session.confirm(action, detail, danger)")
     assert announce < blocking
+
+
+# ---------------------------------------------------------------------------
+# Live voice: a tool call must never hold the session open indefinitely
+# ---------------------------------------------------------------------------
+
+def test_live_tool_timeout_returns_a_result_to_the_model():
+    """A missing FunctionResponse is an indefinite wait by construction.
+
+    The model holds the turn open until every call it made comes back. If a
+    tool never returns, the session sits silent — still listening, but unable
+    to answer — with no way out but tearing it down by hand.
+    """
+    import asyncio
+
+    from brahma import live as live_mod
+
+    session = live_mod.LiveSession()
+    monkey = live_mod.TOOL_TIMEOUT
+    live_mod.TOOL_TIMEOUT = 0.3
+    try:
+        def hang(name, args):
+            import time as _t
+            _t.sleep(5)
+            return "never"
+
+        session._run_tool = hang
+        result = asyncio.run(session._call_tool("run_command", {"command": "foot &"}))
+    finally:
+        live_mod.TOOL_TIMEOUT = monkey
+
+    assert result, "the model was given nothing back"
+    assert "did not finish" in result
+    assert "run_command" in result
+
+
+def test_live_tool_failure_returns_a_result_rather_than_raising():
+    import asyncio
+
+    from brahma import live as live_mod
+
+    session = live_mod.LiveSession()
+
+    def boom(name, args):
+        raise RuntimeError("compositor went away")
+
+    session._run_tool = boom
+    result = asyncio.run(session._call_tool("close_window", {}))
+    assert "failed" in result and "compositor went away" in result
+
+
+def test_live_tool_success_is_passed_through():
+    import asyncio
+
+    from brahma import live as live_mod
+
+    session = live_mod.LiveSession()
+    session._run_tool = lambda name, args: "Battery is 99%."
+    assert asyncio.run(session._call_tool("battery_status", {})) == "Battery is 99%."

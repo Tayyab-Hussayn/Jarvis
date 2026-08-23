@@ -1779,3 +1779,135 @@ def test_wait_until_gone_returns_as_soon_as_windows_disappear():
     remaining = win._wait_until_gone(backend, {"a"}, timeout=3.0)
     assert remaining == set()
     assert _time.monotonic() - started < 0.6, "waited longer than it needed to"
+
+
+# ---------------------------------------------------------------------------
+# Window targeting — the wrong-workspace incident
+# ---------------------------------------------------------------------------
+#
+# Reported: asked to close the `foot` terminal on workspace 4, having walked
+# back to workspace 1 by hand. Approving closed the terminal on workspace 2 —
+# the one running the Brahma server.
+#
+# `close_window(query='foot')` resolved through find_windows, which returns
+# EVERY match, and then took matches[0]. Three foot terminals were open. The
+# confirmation said only "close window 'foot'", so there was nothing in it to
+# catch the mistake before approving.
+
+
+def test_resolve_refuses_an_ambiguous_query(fake_desktop):
+    from brahma.skills import windows as win
+
+    fake_desktop(_FakeBackend([
+        _FakeWindow("a", "foot", 2, title="server"),
+        _FakeWindow("b", "foot", 3, title="claude"),
+        _FakeWindow("c", "foot", 4, title="spare"),
+    ]))
+    with pytest.raises(win.AmbiguousTarget) as caught:
+        win._resolve_one("foot")
+
+    message = caught.value.message
+    assert "matches 3 windows" in message
+    # Every candidate must be named well enough to tell them apart.
+    for ws in ("workspace 2", "workspace 3", "workspace 4"):
+        assert ws in message
+
+
+def test_resolve_scopes_by_workspace(fake_desktop):
+    from brahma.skills import windows as win
+
+    fake_desktop(_FakeBackend([
+        _FakeWindow("a", "foot", 2), _FakeWindow("b", "foot", 4),
+    ]))
+    assert win._resolve_one("foot", workspace="4").id == "b"
+
+
+def test_close_window_will_not_guess_between_candidates(fake_desktop):
+    """The exact call that destroyed the wrong terminal."""
+    from brahma.skills import windows as win
+
+    backend = fake_desktop(_FakeBackend([
+        _FakeWindow("server", "foot", 2), _FakeWindow("target", "foot", 4),
+    ]))
+    asked = []
+    with safety.confirmer_scope(lambda a, d, g: (asked.append(a), True)[1]):
+        out = win.close_window(query="foot")
+
+    assert backend.closed == [], "closed a window without knowing which was meant"
+    assert asked == [], "asked about a window it could not identify"
+    assert "matches 2 windows" in out
+
+
+def test_close_window_confirmation_names_the_workspace(fake_desktop):
+    """A confirmation that cannot be reviewed is theatre."""
+    from brahma.skills import windows as win
+
+    fake_desktop(_FakeBackend([
+        _FakeWindow("a", "foot", 2), _FakeWindow("b", "foot", 4, pid=777, title="spare"),
+    ]))
+    seen = []
+    with safety.confirmer_scope(lambda a, d, g: (seen.append((a, d)), False)[1]):
+        with pytest.raises(safety.ConfirmationRequired):
+            win.close_window(query="foot", workspace="4")
+
+    action, detail = seen[0]
+    assert "workspace 4" in action
+    assert "workspace 4" in detail and "777" in detail
+
+
+def test_close_window_refuses_brahmas_own_window(fake_desktop, monkeypatch):
+    from brahma.skills import windows as win
+
+    monkeypatch.setattr(win, "_own_pids", lambda: {4242})
+    backend = fake_desktop(_FakeBackend([_FakeWindow("mine", "foot", 2, pid=4242)]))
+    with safety.confirmer_scope(lambda *_: True):
+        out = win.close_window(query="foot")
+    assert backend.closed == []
+    assert "Refusing" in out
+
+
+def test_close_window_rechecks_the_target_before_acting(fake_desktop):
+    """Resolution, confirmation and action are three separate moments."""
+    from brahma.skills import windows as win
+
+    backend = fake_desktop(_FakeBackend([_FakeWindow("a", "foot", 4)]))
+
+    def vanish(action, detail, danger):
+        # The window closes by itself while the card is on screen.
+        backend.windows = []
+        return True
+
+    with safety.confirmer_scope(vanish):
+        out = win.close_window(query="foot")
+    assert backend.closed == [], "acted on a handle that was already stale"
+    assert "no longer there" in out
+
+
+def test_close_window_puts_the_user_back_where_they_were(fake_desktop):
+    """Acting has to focus the target; the user should not be left there."""
+    from brahma.skills import windows as win
+
+    here = _FakeWindow("here", "chrome", 1)
+    target = _FakeWindow("target", "foot", 4)
+    backend = _FakeBackend([here, target])
+    switched: list[str] = []
+    # Closing a window necessarily focuses it first (see _act_on), so the fake
+    # models that: after the close, focus is left on the target's workspace.
+    state = {"focused": here}
+
+    def close(window):
+        state["focused"] = window
+        backend.closed.append(window.id)
+        backend.windows = [w for w in backend.windows if w.id != window.id]
+        return True
+
+    backend.close = close
+    backend.kill = close
+    backend.focused = lambda: state["focused"]
+    backend.workspace = lambda t: (switched.append(t), state.update(focused=here), True)[2]
+    fake_desktop(backend)
+
+    with safety.confirmer_scope(lambda *_: True):
+        win.close_window(query="foot", workspace="4")
+
+    assert switched == ["1"], f"did not restore the origin workspace: {switched}"
