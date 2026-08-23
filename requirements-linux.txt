@@ -71,9 +71,14 @@ pytest-asyncio>=1.0
 # Needed only for `voice live` (the original Gemini Live pipeline).
 sounddevice>=0.4
 
+# --- Browser automation -------------------------------------------------
+# Drives Chrome in Brahma's own profile (~/.local/share/brahma-echo/
+# chrome-profile), never the browser you are using. Uses the system Chrome via
+# channel="chrome", so no bundled browser download is needed.
+playwright>=1.40
+
 # --- Not installed by default -------------------------------------------
 # discord.py        — only if you use the Discord bridge
-# playwright        — only if you use browser automation
 # mediapipe         — hand tracking; has no Python 3.14 wheels yet
 # opencv-python     — camera capture; pulled in by mediapipe workflows
 # vosk              — alternative lighter speech recogniser

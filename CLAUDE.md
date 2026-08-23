@@ -138,6 +138,21 @@ with no query acts on whatever is focused — add a marker like `close_window:im
 between calls, so without the marker the retry prompts about a different window and looks like the
 assistant ignoring you.
 
+**ydotool needs numeric key codes, and lies about it.** `ydotool key ENTER:1` and
+`KEY_ENTER:1` are both silently ignored — and both exit 0, so nothing surfaces. Only Linux input
+event codes work (`28:1 28:0` for Enter). The port shipped symbolic names, which meant every
+`press_keys` call and every hotkey did nothing at all while reporting success. `_KEYMAP` in
+`platform/inputs.py` is numeric for this reason; do not "tidy" it back to names.
+
+**Clear the prompt before typing into a terminal.** Synthetic input appends to whatever is
+already staged on the line, so a half-typed command or a previous failed attempt gets
+concatenated and the shell runs the result. `echo DIRECT_OK` arrived as
+`/tmp/brahma-term-test. OK DIRECT_OK`. `skills/terminal.py` sends Ctrl+C then Ctrl+U first.
+
+**Synthetic input cannot be confirmed.** Keystrokes go to the compositor and nothing comes back,
+so a skill that types must report what it *did* rather than assert the command ran. The first
+version claimed success while delivering nothing — the exact failure mode worth never shipping.
+
 **Never resolve an ambiguous target by taking the first match.** `find_windows` returns *every*
 match ranked by quality, and `close_window`/`focus_window` used to take `matches[0]`. With three
 `foot` terminals open that picked an arbitrary one: a user who asked to close the terminal on

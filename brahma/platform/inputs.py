@@ -20,33 +20,50 @@ from typing import Iterable
 from . import detect, shell
 
 # pyautogui-style name -> Linux KEY_* name (without the KEY_ prefix)
+# Linux input event codes, from <linux/input-event-codes.h>.
+#
+# These MUST be numeric. ydotool accepts `28:1` but silently ignores `ENTER:1`
+# and `KEY_ENTER:1` — and exits 0 either way, so the failure is invisible. The
+# port shipped symbolic names for months, which meant every press_keys call and
+# every hotkey did nothing at all while reporting success.
 _KEYMAP = {
-    "enter": "ENTER", "return": "ENTER", "esc": "ESC", "escape": "ESC",
-    "tab": "TAB", "space": "SPACE", "backspace": "BACKSPACE",
-    "delete": "DELETE", "del": "DELETE", "insert": "INSERT",
-    "home": "HOME", "end": "END", "pageup": "PAGEUP", "pagedown": "PAGEDOWN",
-    "up": "UP", "down": "DOWN", "left": "LEFT", "right": "RIGHT",
-    "ctrl": "LEFTCTRL", "control": "LEFTCTRL", "ctrlleft": "LEFTCTRL",
-    "ctrlright": "RIGHTCTRL",
-    "alt": "LEFTALT", "altleft": "LEFTALT", "altright": "RIGHTALT",
-    "shift": "LEFTSHIFT", "shiftleft": "LEFTSHIFT", "shiftright": "RIGHTSHIFT",
-    "win": "LEFTMETA", "super": "LEFTMETA", "meta": "LEFTMETA",
-    "cmd": "LEFTMETA", "command": "LEFTMETA",
-    "capslock": "CAPSLOCK", "printscreen": "SYSRQ", "print_screen": "SYSRQ",
-    "minus": "MINUS", "equal": "EQUAL", "plus": "EQUAL",
-    "comma": "COMMA", "period": "DOT", "dot": "DOT", "slash": "SLASH",
-    "backslash": "BACKSLASH", "semicolon": "SEMICOLON",
-    "apostrophe": "APOSTROPHE", "quote": "APOSTROPHE", "grave": "GRAVE",
-    "bracketleft": "LEFTBRACE", "bracketright": "RIGHTBRACE",
-    "volumeup": "VOLUMEUP", "volumedown": "VOLUMEDOWN", "volumemute": "MUTE",
-    "playpause": "PLAYPAUSE", "nexttrack": "NEXTSONG", "prevtrack": "PREVIOUSSONG",
+    "esc": "1", "escape": "1",
+    "minus": "12", "equal": "13", "plus": "13",
+    "backspace": "14", "tab": "15",
+    "bracketleft": "26", "bracketright": "27",
+    "enter": "28", "return": "28",
+    "ctrl": "29", "control": "29", "ctrlleft": "29",
+    "semicolon": "39", "apostrophe": "40", "quote": "40", "grave": "41",
+    "shift": "42", "shiftleft": "42",
+    "backslash": "43",
+    "comma": "51", "period": "52", "dot": "52", "slash": "53",
+    "shiftright": "54",
+    "printscreen": "99", "print_screen": "99",
+    "alt": "56", "altleft": "56",
+    "space": "57", "capslock": "58",
+    "up": "103", "down": "108", "left": "105", "right": "106",
+    "home": "102", "end": "107", "pageup": "104", "pagedown": "109",
+    "insert": "110", "delete": "111", "del": "111",
+    "ctrlright": "97", "altright": "100",
+    "win": "125", "super": "125", "meta": "125",
+    "cmd": "125", "command": "125",
+    "volumeup": "115", "volumedown": "114", "volumemute": "113",
+    "playpause": "164", "nexttrack": "163", "prevtrack": "165",
 }
-for _i in range(1, 25):
-    _KEYMAP[f"f{_i}"] = f"F{_i}"
-for _c in "abcdefghijklmnopqrstuvwxyz":
-    _KEYMAP[_c] = _c.upper()
-for _d in "0123456789":
-    _KEYMAP[_d] = _d
+# F1–F10 are 59–68; F11 and F12 jump to 87 and 88.
+for _i, _code in enumerate(range(59, 69), start=1):
+    _KEYMAP[f"f{_i}"] = str(_code)
+_KEYMAP["f11"], _KEYMAP["f12"] = "87", "88"
+
+# Letters and digits, in scancode order rather than alphabetical.
+for _c, _code in zip("qwertyuiop", range(16, 26)):
+    _KEYMAP[_c] = str(_code)
+for _c, _code in zip("asdfghjkl", range(30, 39)):
+    _KEYMAP[_c] = str(_code)
+for _c, _code in zip("zxcvbnm", range(44, 51)):
+    _KEYMAP[_c] = str(_code)
+for _d, _code in zip("1234567890", list(range(2, 11)) + [11]):
+    _KEYMAP[_d] = str(_code)
 
 # X11 keysym names for the xdotool backend.
 _X11_KEYMAP = {

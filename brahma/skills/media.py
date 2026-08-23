@@ -10,6 +10,8 @@ browser at all — better than the original behaviour, not just equivalent.
 
 from __future__ import annotations
 
+import contextlib
+import time
 import os
 import shutil
 import tempfile
@@ -18,7 +20,7 @@ import urllib.request
 from pathlib import Path
 
 from .. import config
-from ..platform import apps, detect, shell
+from ..platform import audio, apps, detect, shell
 from ..registry import skill
 from ..safety import Danger, check_path, enforce
 
@@ -270,3 +272,101 @@ def wallpaper_status() -> str:
             f"Install one with:  sudo pacman -S {suggestion}"
         )
     return f"Wallpaper tool: {tool} (session: {env.session_type}, desktop: {env.desktop})"
+
+
+# ---------------------------------------------------------------------------
+# Spotify — over MPRIS, not keystrokes
+# ---------------------------------------------------------------------------
+#
+# The Windows build focused Spotify's window and typed at it, which fails
+# whenever the window is slow, unfocused or laid out differently. MPRIS exposes
+# OpenUri, so navigating to a playlist is one D-Bus call with nothing to aim at
+# and nothing to verify visually.
+
+# Well-known Spotify URIs. "Liked songs" has no playlist id — it is a
+# collection, which is why searching for a playlist by that name never worked.
+_SPOTIFY_SHORTCUTS = {
+    "liked songs": "spotify:collection:tracks",
+    "liked": "spotify:collection:tracks",
+    "my liked songs": "spotify:collection:tracks",
+    "saved songs": "spotify:collection:tracks",
+    "favourites": "spotify:collection:tracks",
+    "favorites": "spotify:collection:tracks",
+    "queue": "spotify:queue",
+    "home": "spotify:home",
+}
+
+
+def _spotify_uri(what: str) -> str:
+    """Turn a plain request into a Spotify URI."""
+    text = (what or "").strip()
+    if not text:
+        return "spotify:collection:tracks"
+    if text.lower().startswith("spotify:"):
+        return text
+    shortcut = _SPOTIFY_SHORTCUTS.get(text.lower())
+    if shortcut:
+        return shortcut
+    # Anything else is a search. Spotify opens the search view for this.
+    return "spotify:search:" + urllib.parse.quote(text)
+
+
+def _wait_for_player(prefix: str, seconds: float = 15.0) -> str:
+    """Wait for a player to appear on the bus after launching it."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        name = audio.find_player(prefix)
+        if name:
+            return name
+        time.sleep(0.4)
+    return ""
+
+
+@skill(category="media", danger=Danger.MODERATE)
+def spotify_play(what: str = "liked songs") -> str:
+    """Open something in Spotify and play it.
+
+    Launches Spotify first if it is not already running.
+
+    Args:
+        what: "liked songs", a search phrase like "lo-fi beats", or a raw
+            spotify: URI such as spotify:playlist:37i9dQZF1DXcBWIGoYBM5M.
+    """
+    uri = _spotify_uri(what)
+
+    player = audio.find_player("spotify")
+    if not player:
+        launched = apps.launch_by_name("spotify")
+        if "No" in launched and "match" in launched:
+            return "Spotify does not appear to be installed."
+        player = _wait_for_player("spotify")
+        if not player:
+            return (
+                "Spotify was launched but never appeared on the D-Bus session "
+                "bus, so it cannot be controlled. Is it finished starting?"
+            )
+
+    try:
+        audio.open_uri(uri, player=player)
+    except RuntimeError as exc:
+        return f"Could not open {uri}: {exc}"
+
+    # OpenUri navigates; it does not always start playback.
+    with contextlib.suppress(Exception):
+        time.sleep(0.6)
+        shell.run(["playerctl", "-p", player, "play"], timeout=5)
+
+    label = "your liked songs" if uri == "spotify:collection:tracks" else uri
+    return f"Opened {label} in Spotify."
+
+
+@skill(category="media", danger=Danger.SAFE)
+def spotify_status() -> str:
+    """What Spotify is playing right now."""
+    player = audio.find_player("spotify")
+    if not player:
+        return "Spotify is not running."
+    line = audio.metadata(
+        player, "{{artist}} — {{title}} ({{album}}) [{{status}}]"
+    )
+    return line or "Spotify is running but nothing is playing."

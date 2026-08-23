@@ -201,3 +201,65 @@ def now_playing() -> str:
     if not result.ok:
         return "Nothing is playing."
     return result.stdout.strip() or "Nothing is playing."
+
+
+# ---------------------------------------------------------------------------
+# MPRIS OpenUri — the reliable way to navigate a player
+# ---------------------------------------------------------------------------
+#
+# The Windows build drove Spotify by focusing its window and firing keystrokes
+# at it, which breaks the moment the window is slow, unfocused or laid out
+# differently. MPRIS exposes OpenUri, so "play my liked songs" is one D-Bus
+# call with nothing to aim at.
+
+def players() -> list[str]:
+    """MPRIS player names currently on the bus."""
+    if not shell.have("playerctl"):
+        return []
+    result = shell.run(["playerctl", "-l"], timeout=5)
+    if not result.ok:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def find_player(prefix: str) -> str:
+    """Full bus name for a player, matched on its prefix ('spotify')."""
+    wanted = (prefix or "").strip().lower()
+    for name in players():
+        if name.lower().startswith(wanted):
+            return name
+    return ""
+
+
+def open_uri(uri: str, player: str = "") -> str:
+    """Ask a player to open a URI — MPRIS ``OpenUri``.
+
+    For Spotify this is what reaches a playlist or the liked-songs collection:
+    `spotify:collection:tracks`, `spotify:playlist:<id>`, `spotify:search:<q>`.
+    """
+    _require_playerctl()
+    args = ["playerctl"]
+    if player:
+        args += ["-p", player]
+    args += ["open", uri]
+
+    result = shell.run(args, timeout=8)
+    if not result.ok:
+        if "No players found" in result.stderr:
+            raise RuntimeError("no media player is running")
+        raise RuntimeError(result.output.strip() or "OpenUri failed")
+    return uri
+
+
+def metadata(player: str = "", keys: str = "") -> str:
+    """Read MPRIS metadata for a player."""
+    if not shell.have("playerctl"):
+        return ""
+    args = ["playerctl"]
+    if player:
+        args += ["-p", player]
+    args += ["metadata"]
+    if keys:
+        args += ["--format", keys]
+    result = shell.run(args, timeout=5)
+    return result.stdout.strip() if result.ok else ""

@@ -1973,3 +1973,127 @@ def test_close_app_scopes_by_workspace(monkeypatch):
         with pytest.raises(safety.ConfirmationRequired):
             apps_mod.close_app(app_name="foot", workspace="4")
     assert "workspace 4" in seen[0] and "workspace 2" not in seen[0]
+
+
+# ---------------------------------------------------------------------------
+# ydotool key codes
+# ---------------------------------------------------------------------------
+#
+# The keymap shipped symbolic names ("ENTER"). ydotool silently ignores those
+# and exits 0, so every press_keys call and every hotkey did nothing while
+# reporting success. Only numeric Linux input event codes are honoured.
+# Measured: `ydotool key 28:1 28:0` delivers Enter; `ENTER:1` and `KEY_ENTER:1`
+# do not.
+
+
+def test_ydotool_key_codes_are_numeric():
+    from brahma.platform import inputs
+
+    for name in ("enter", "return", "ctrl", "a", "f1", "tab", "escape"):
+        code = inputs._map_key(name, "ydotool")
+        assert code.isdigit(), f"{name!r} maps to {code!r}, which ydotool ignores"
+
+
+@pytest.mark.parametrize("name,code", [
+    ("enter", "28"), ("return", "28"), ("esc", "1"), ("tab", "15"),
+    ("space", "57"), ("backspace", "14"), ("ctrl", "29"), ("shift", "42"),
+    ("alt", "56"), ("super", "125"), ("up", "103"), ("down", "108"),
+    ("a", "30"), ("z", "44"), ("q", "16"), ("1", "2"), ("0", "11"),
+    ("f1", "59"), ("f10", "68"), ("f11", "87"), ("f12", "88"),
+])
+def test_known_key_codes(name, code):
+    from brahma.platform import inputs
+
+    assert inputs._map_key(name, "ydotool") == code
+
+
+def test_every_letter_and_digit_maps():
+    from brahma.platform import inputs
+
+    for char in "abcdefghijklmnopqrstuvwxyz0123456789":
+        assert inputs._map_key(char, "ydotool").isdigit()
+
+
+# ---------------------------------------------------------------------------
+# Terminal typing
+# ---------------------------------------------------------------------------
+
+def test_terminal_refuses_to_type_into_brahmas_own_window(fake_desktop, monkeypatch):
+    from brahma.skills import terminal as term
+
+    monkeypatch.setattr(term, "own_pids", lambda: {4242})
+    monkeypatch.setattr(term.inputs, "backend_name", lambda: "ydotool")
+    fake_desktop(_FakeBackend([_FakeWindow("mine", "foot", 3, pid=4242)]))
+
+    with safety.confirmer_scope(lambda *_: True):
+        out = term.type_into_terminal(command="ls", query="foot")
+    assert "Refusing" in out
+
+
+def test_terminal_command_is_risk_classified(fake_desktop, monkeypatch):
+    """Typing `rm -rf` at a shell is not safer than executing it."""
+    from brahma.skills import terminal as term
+
+    monkeypatch.setattr(term, "own_pids", lambda: set())
+    monkeypatch.setattr(term.inputs, "backend_name", lambda: "ydotool")
+    fake_desktop(_FakeBackend([_FakeWindow("t", "foot", 4, pid=9)]))
+
+    seen = []
+    with safety.confirmer_scope(lambda a, d, g: (seen.append((a, d, g)), False)[1]):
+        with pytest.raises(safety.ConfirmationRequired):
+            term.type_into_terminal(command="rm -rf ~/notes", query="foot")
+
+    action, detail, danger = seen[0]
+    assert danger >= Danger.DESTRUCTIVE
+    assert "removes files" in detail
+
+
+def test_terminal_refuses_an_ambiguous_target(fake_desktop, monkeypatch):
+    from brahma.skills import terminal as term
+
+    monkeypatch.setattr(term, "own_pids", lambda: set())
+    monkeypatch.setattr(term.inputs, "backend_name", lambda: "ydotool")
+    fake_desktop(_FakeBackend([
+        _FakeWindow("a", "foot", 2, pid=1), _FakeWindow("b", "foot", 4, pid=2),
+    ]))
+    out = term.type_into_terminal(command="ls", query="foot")
+    assert "matches 2 windows" in out
+
+
+def test_terminal_does_not_type_when_focus_fails(fake_desktop, monkeypatch):
+    """Typing into a window that was never focused types into something else."""
+    from brahma.skills import terminal as term
+
+    monkeypatch.setattr(term, "own_pids", lambda: set())
+    monkeypatch.setattr(term.inputs, "backend_name", lambda: "ydotool")
+    monkeypatch.setattr(term, "_focus_and_verify", lambda w: False)
+    typed = []
+    monkeypatch.setattr(term.inputs, "type_text", lambda t, **k: typed.append(t))
+    fake_desktop(_FakeBackend([_FakeWindow("t", "foot", 4, pid=9)]))
+
+    with safety.confirmer_scope(lambda *_: True):
+        out = term.type_into_terminal(command="ls", query="foot")
+    assert typed == [], "typed without confirming focus"
+    assert "Could not focus" in out
+
+
+# ---------------------------------------------------------------------------
+# Spotify URIs
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("ask,uri", [
+    ("liked songs", "spotify:collection:tracks"),
+    ("my liked songs", "spotify:collection:tracks"),
+    ("", "spotify:collection:tracks"),
+    ("spotify:playlist:abc", "spotify:playlist:abc"),
+])
+def test_spotify_uri_mapping(ask, uri):
+    from brahma.skills.media import _spotify_uri
+
+    assert _spotify_uri(ask) == uri
+
+
+def test_spotify_free_text_becomes_a_search():
+    from brahma.skills.media import _spotify_uri
+
+    assert _spotify_uri("lo-fi beats").startswith("spotify:search:")
