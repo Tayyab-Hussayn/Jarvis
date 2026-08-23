@@ -310,6 +310,24 @@ CRITICAL_PROCESSES = {
 }
 
 
+def own_pids() -> set[int]:
+    """This process and its ancestors — the terminal Brahma is running in.
+
+    Killing an ancestor kills the assistant. `check_process` only ever guarded
+    `os.getpid()`, so the parent terminal running `brahma serve` was fair game:
+    exactly the mistake that closed the wrong window, one layer down.
+    """
+    pids: set[int] = {os.getpid()}
+    try:
+        import psutil
+
+        for parent in psutil.Process().parents():
+            pids.add(parent.pid)
+    except Exception:
+        pass
+    return pids
+
+
 def check_process(name: str, pid: int | None = None) -> Verdict:
     """Classify killing a process."""
     verdict = Verdict(danger=Danger.DESTRUCTIVE, reasons=[f"terminates '{name}'"])
@@ -321,9 +339,13 @@ def check_process(name: str, pid: int | None = None) -> Verdict:
         verdict.block_reason = f"PID {pid} is the init system"
         return verdict
 
-    if pid is not None and pid == os.getpid():
+    if pid is not None and pid in own_pids():
         verdict.blocked = True
-        verdict.block_reason = "that PID is the assistant itself"
+        verdict.block_reason = (
+            "that PID is the assistant itself or the terminal running it"
+            if pid != os.getpid()
+            else "that PID is the assistant itself"
+        )
         return verdict
 
     for critical in CRITICAL_PROCESSES:

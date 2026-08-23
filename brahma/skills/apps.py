@@ -67,6 +67,7 @@ def list_apps(category: str = "", limit: int = 60) -> str:
 @skill(category="apps", danger=Danger.DESTRUCTIVE)
 def close_app(
     app_name: str,
+    workspace: str = "",
     force: bool = False,
     _source: str = "local",
     _confirm: bool = False,
@@ -79,11 +80,32 @@ def close_app(
 
     Args:
         app_name: Which application's windows to close.
+        workspace: Only close windows on this workspace. Use it whenever the
+            app could have windows open on more than one.
         force: Kill the client instead of asking it to close.
     """
     matches = desktop.find_windows(app_name)
+    if workspace:
+        want = str(workspace).strip()
+        matches = [w for w in matches if str(w.workspace) == want]
+        if not matches:
+            return f"No window matching '{app_name}' on workspace {want}."
     if not matches:
         return f"No open window matches '{app_name}'."
+
+    # Same protection as close_window and close_workspace: never take out the
+    # session doing the closing. Without a workspace scope, "close foot" means
+    # every foot terminal — including the one running the server.
+    from ..safety import own_pids
+
+    mine = own_pids()
+    protected = [w for w in matches if w.pid in mine]
+    matches = [w for w in matches if w.pid not in mine]
+    if not matches:
+        return (
+            f"Refusing: the only window matching '{app_name}' is the one "
+            "Brahma is running in."
+        )
 
     verb = "kill" if force else "close"
     verdict = Verdict(
@@ -91,6 +113,10 @@ def close_app(
         reasons=[f"{verb}s {len(matches)} window(s) of '{app_name}'"]
         + (["forced — the app cannot save first"] if force else []),
     )
+    listing = "; ".join(
+        f"workspace {w.workspace} · {w.title[:36]} · pid {w.pid}" for w in matches
+    )
+    verdict.reasons.append(f"targets: {listing}")
     enforce(verdict, f"{verb} {len(matches)} window(s) of '{app_name}'",
             targets=describe_targets(f"app:{app_name}",
                                      *[f"window:{m.id}" for m in matches]),

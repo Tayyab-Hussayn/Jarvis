@@ -1911,3 +1911,65 @@ def test_close_window_puts_the_user_back_where_they_were(fake_desktop):
         win.close_window(query="foot", workspace="4")
 
     assert switched == ["1"], f"did not restore the origin workspace: {switched}"
+
+
+def test_killing_the_terminal_running_brahma_is_blocked():
+    """A4-1: check_process only ever guarded os.getpid().
+
+    The parent terminal running `brahma serve` was fair game, and killing it
+    kills the assistant — the window bug one layer down.
+    """
+    import psutil
+
+    parent = psutil.Process().parent()
+    if parent is None:
+        pytest.skip("no parent process to test against")
+
+    verdict = safety.check_process("foot", pid=parent.pid)
+    assert verdict.blocked, "killing the terminal running Brahma was allowed"
+    assert "running it" in verdict.block_reason or "assistant" in verdict.block_reason
+
+
+def test_own_pids_covers_the_ancestor_chain():
+    import os
+
+    pids = safety.own_pids()
+    assert os.getpid() in pids
+    assert len(pids) > 1, "only the process itself — ancestors are unprotected"
+
+
+def test_close_app_excludes_brahmas_own_window(monkeypatch):
+    """A1-2: close_app closed every match everywhere, with no self-protection."""
+    from brahma.skills import apps as apps_mod
+
+    windows = [
+        _FakeWindow("mine", "foot", 3, pid=4242, title="claude"),
+        _FakeWindow("other", "foot", 4, pid=99, title="spare"),
+    ]
+    monkeypatch.setattr(apps_mod.desktop, "find_windows", lambda q: list(windows))
+    monkeypatch.setattr(safety, "own_pids", lambda: {4242})
+
+    seen = []
+    with safety.confirmer_scope(lambda a, d, g: (seen.append((a, d)), False)[1]):
+        with pytest.raises(safety.ConfirmationRequired):
+            apps_mod.close_app(app_name="foot")
+
+    action, detail = seen[0]
+    assert "1 window" in action, f"did not exclude its own window: {action}"
+    assert "workspace 4" in detail and "99" in detail
+
+
+def test_close_app_scopes_by_workspace(monkeypatch):
+    from brahma.skills import apps as apps_mod
+
+    windows = [
+        _FakeWindow("a", "foot", 2, pid=1), _FakeWindow("b", "foot", 4, pid=2),
+    ]
+    monkeypatch.setattr(apps_mod.desktop, "find_windows", lambda q: list(windows))
+    monkeypatch.setattr(safety, "own_pids", lambda: set())
+
+    seen = []
+    with safety.confirmer_scope(lambda a, d, g: (seen.append(d), False)[1]):
+        with pytest.raises(safety.ConfirmationRequired):
+            apps_mod.close_app(app_name="foot", workspace="4")
+    assert "workspace 4" in seen[0] and "workspace 2" not in seen[0]

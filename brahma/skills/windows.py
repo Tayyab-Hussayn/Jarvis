@@ -13,6 +13,7 @@ import time
 from ..platform import desktop
 from ..registry import skill
 from ..safety import Danger, Verdict, describe_targets, enforce
+from ..safety import own_pids as safety_own_pids
 
 # How long to wait for windows to actually disappear. Hyprland answering "ok"
 # only means the request was accepted — an app showing a save prompt stays put.
@@ -23,20 +24,10 @@ _GONE_POLL = 0.15
 def _own_pids() -> set[int]:
     """This process and its ancestors — i.e. the terminal hosting Brahma.
 
-    Closing a workspace must not close the session doing the closing. That has
-    happened: a window was targeted by list position and the assistant killed
-    its own terminal mid-task. A bulk close is exactly where that repeats, so
-    these are filtered out and reported rather than acted on.
+    Defined once in safety.py so window closes, process kills and bulk
+    operations all agree on what "us" means.
     """
-    pids: set[int] = {os.getpid()}
-    try:
-        import psutil
-
-        for parent in psutil.Process().parents():
-            pids.add(parent.pid)
-    except Exception:
-        pass
-    return pids
+    return safety_own_pids()
 
 
 class AmbiguousTarget(Exception):

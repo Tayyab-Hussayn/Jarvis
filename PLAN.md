@@ -4,7 +4,7 @@ Supersedes the frontend build-out plan (that work is done; see git history and
 `UI_AUDIT.md`). This plan covers three reported defects and a full audit of the
 agent as an autonomous system.
 
-**Status:** documentation complete, development in progress.
+**Status:** complete. D1–D3 fixed; audit written to `AGENT_AUDIT.md` with 8 findings fixed and 5 recorded. 248 tests passing.
 
 ---
 
