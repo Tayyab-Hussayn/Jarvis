@@ -4,7 +4,8 @@ Restores the automation the Windows build had, on mechanisms that suit Linux and
 Wayland. Previous plans are done; see git history, `UI_AUDIT.md` and
 `AGENT_AUDIT.md`.
 
-**Status:** all three built and driven against the real system. 135 skills, 280 tests passing.
+**Status:** built and driven against the real system. 139 skills, 292 tests passing.
+Browser, Spotify (MPRIS), real-terminal typing, and the graphical file manager.
 
 Found while building, and worth reading before touching input synthesis: **ydotool had never
 worked**. It accepts only numeric key codes, silently ignores names like `ENTER`, and exits 0

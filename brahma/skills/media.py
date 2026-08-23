@@ -292,8 +292,30 @@ _SPOTIFY_SHORTCUTS = {
     "saved songs": "spotify:collection:tracks",
     "favourites": "spotify:collection:tracks",
     "favorites": "spotify:collection:tracks",
-    "queue": "spotify:queue",
+    # The rest of Spotify's own views, reachable as URIs rather than by
+    # clicking the sidebar.
     "home": "spotify:home",
+    "search": "spotify:search",
+    "queue": "spotify:queue",
+    "library": "spotify:collection",
+    "your library": "spotify:collection",
+    "collection": "spotify:collection",
+    "albums": "spotify:collection:albums",
+    "saved albums": "spotify:collection:albums",
+    "artists": "spotify:collection:artists",
+    "podcasts": "spotify:collection:podcasts",
+    "playlists": "spotify:collection:playlists",
+}
+
+
+_SPOTIFY_LABELS = {
+    "spotify:collection:tracks": "your liked songs",
+    "spotify:collection": "your library",
+    "spotify:collection:albums": "your saved albums",
+    "spotify:collection:artists": "your artists",
+    "spotify:collection:playlists": "your playlists",
+    "spotify:home": "Spotify home",
+    "spotify:queue": "the queue",
 }
 
 
@@ -351,12 +373,31 @@ def spotify_play(what: str = "liked songs") -> str:
     except RuntimeError as exc:
         return f"Could not open {uri}: {exc}"
 
-    # OpenUri navigates; it does not always start playback.
-    with contextlib.suppress(Exception):
-        time.sleep(0.6)
-        shell.run(["playerctl", "-p", player, "play"], timeout=5)
+    # OpenUri navigates; whether it also starts playback depends on the URI.
+    # A collection or playlist plays; a search only shows results, because
+    # Spotify does not know which result you meant.
+    navigational = uri.startswith("spotify:search") or uri in {
+        "spotify:home", "spotify:collection", "spotify:queue",
+    }
+    if not navigational:
+        with contextlib.suppress(Exception):
+            time.sleep(0.6)
+            shell.run(["playerctl", "-p", player, "play"], timeout=5)
 
-    label = "your liked songs" if uri == "spotify:collection:tracks" else uri
+    label = _SPOTIFY_LABELS.get(uri, uri)
+    if navigational:
+        if uri.startswith("spotify:search:"):
+            return (
+                f"Searched Spotify for {what!r}. Results are on screen — say "
+                "which one to play, or use spotify_play with its spotify: URI."
+            )
+        return f"Opened {label} in Spotify."
+
+    with contextlib.suppress(Exception):
+        time.sleep(0.8)
+        playing = audio.metadata(player, "{{artist}} — {{title}}")
+        if playing:
+            return f"Playing {playing} from {label}."
     return f"Opened {label} in Spotify."
 
 

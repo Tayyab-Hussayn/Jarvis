@@ -163,6 +163,13 @@ def list_sinks() -> str:
 # Media transport (playerctl / MPRIS)
 # ---------------------------------------------------------------------------
 
+# shell.run forces LC_ALL=C so command output parses predictably. That breaks
+# playerctl: track titles are UTF-8, and the C locale cannot convert them, so
+# metadata came back as "Invalid byte sequence in conversion input" for
+# anything with an accent or an em dash. These calls get a UTF-8 locale back.
+_UTF8 = {"LC_ALL": "C.UTF-8", "LANG": "C.UTF-8"}
+
+
 def _require_playerctl() -> None:
     if not shell.have("playerctl"):
         raise RuntimeError("playerctl is not installed. Run: sudo pacman -S playerctl")
@@ -196,7 +203,7 @@ def now_playing() -> str:
     result = shell.run(
         ["playerctl", "metadata", "--format",
          "{{playerName}}: {{artist}} — {{title}} [{{status}}]"],
-        timeout=5,
+        timeout=5, env=_UTF8,
     )
     if not result.ok:
         return "Nothing is playing."
@@ -216,7 +223,7 @@ def players() -> list[str]:
     """MPRIS player names currently on the bus."""
     if not shell.have("playerctl"):
         return []
-    result = shell.run(["playerctl", "-l"], timeout=5)
+    result = shell.run(["playerctl", "-l"], timeout=5, env=_UTF8)
     if not result.ok:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -243,7 +250,7 @@ def open_uri(uri: str, player: str = "") -> str:
         args += ["-p", player]
     args += ["open", uri]
 
-    result = shell.run(args, timeout=8)
+    result = shell.run(args, timeout=8, env=_UTF8)
     if not result.ok:
         if "No players found" in result.stderr:
             raise RuntimeError("no media player is running")
@@ -261,5 +268,5 @@ def metadata(player: str = "", keys: str = "") -> str:
     args += ["metadata"]
     if keys:
         args += ["--format", keys]
-    result = shell.run(args, timeout=5)
+    result = shell.run(args, timeout=5, env=_UTF8)
     return result.stdout.strip() if result.ok else ""
