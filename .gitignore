@@ -56,4 +56,4 @@ web/node_modules/
 web/.next/
 web/out/
 # Built static export, produced by `npm run build` in web/
-brahma/web-dist/
+kravein/web-dist/

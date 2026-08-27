@@ -103,7 +103,7 @@ export function ConfirmCard({
           >
             {needsDoubleClick && armed
               ? "Click again — this is a critical action."
-              : "Brahma is waiting."}
+              : "Kravein is waiting."}
           </span>
         </div>
       ) : (

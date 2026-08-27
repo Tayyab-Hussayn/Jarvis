@@ -74,7 +74,7 @@ export function ActivityView() {
 
   return (
     <Screen
-      subtitle="Everything Brahma actually did — read this first when something looks wrong."
+      subtitle="Everything Kravein actually did — read this first when something looks wrong."
       actions={<Button onClick={() => void load(prefix)}>Refresh</Button>}
     >
       <div className="flex h-full min-h-0 flex-col gap-3">

@@ -1,5 +1,5 @@
-import BrahmaOrb from "@/components/BrahmaOrb";
+import KraveinOrb from "@/components/KraveinOrb";
 
 export default function Home() {
-  return <BrahmaOrb />;
+  return <KraveinOrb />;
 }

@@ -1,6 +1,6 @@
 ---
 name: orient
-description: Invoke before starting any work in this project, every session. Re-checks live git/test state instead of trusting a stale mental model of what's done. Use whenever work touches Brahma-Echo or anything under ~/code/Brahma-Echo.
+description: Invoke before starting any work in this project, every session. Re-checks live git/test state instead of trusting a stale mental model of what's done. Use whenever work touches Kravein or anything under ~/code/Kravein.
 ---
 
 # Orient — run this first, every session
@@ -19,7 +19,7 @@ of "what's done" is still accurate — check.
 ## 2. Fast health check
 
 ```
-.venv/bin/python -m compileall -q brahma/
+.venv/bin/python -m compileall -q kravein/
 ```
 
 Enough for orientation. Deeper verification (targeted `pytest` runs, manual checks) happens
@@ -34,7 +34,7 @@ live `git status` before continuing a task from where it left off.
 ## 4. Architecture
 
 Already fully documented in this repo's `CLAUDE.md` — "Two codebases live here" (the
-`brahma/` vs. Windows-original split) and "Architecture" (registry/safety/platform/audit). Read
+`kravein/` vs. Windows-original split) and "Architecture" (registry/safety/platform/audit). Read
 those before touching code; this skill is about process, not re-explaining what's already
 written there.
 

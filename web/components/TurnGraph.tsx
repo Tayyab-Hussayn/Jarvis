@@ -59,7 +59,10 @@ function buildNodes(message: Message, request: string): GraphNode[] {
 
 function ToolNode({ tool }: { tool: ToolCallView }) {
   const [open, setOpen] = useState(false);
-  const args = previewArgs(tool.args);
+  // Voice reports a call as one rendered string, so there is no args object to
+  // preview. Falling back to that text keeps the arguments on screen instead
+  // of showing a bare tool name for every spoken call.
+  const args = previewArgs(tool.args) || (tool.argsText ?? "");
 
   return (
     <div
@@ -96,6 +99,16 @@ function ToolNode({ tool }: { tool: ToolCallView }) {
 
       {open && (
         <div className="border-t border-[var(--border)] px-3 py-2">
+          {Object.keys(tool.args).length === 0 && tool.argsText && (
+            <>
+              <div className="text-[length:var(--text-xs)] uppercase tracking-[0.08em] text-[var(--text-faint)]">
+                Arguments
+              </div>
+              <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-muted)]">
+                {tool.argsText}
+              </pre>
+            </>
+          )}
           {Object.keys(tool.args).length > 0 && (
             <>
               <div className="text-[length:var(--text-xs)] uppercase tracking-[0.08em] text-[var(--text-faint)]">

@@ -2,11 +2,11 @@ import sys
 from pathlib import Path
 cwd = Path.cwd()
 sys.path.insert(0, str(cwd))
-from ui import BrahmaUI
-from brahma_connect.service import get_service
-ui = BrahmaUI(str(cwd / 'assets' / 'Brahma_Lite_Logo.png'), show_immediately=False)
+from ui import KraveinUI
+from kravein_connect.service import get_service
+ui = KraveinUI(str(cwd / 'assets' / 'Kravein_Lite_Logo.png'), show_immediately=False)
 svc = get_service(cwd)
-ui.set_brahma_connect_service(svc)
+ui.set_kravein_connect_service(svc)
 dp = ui._win._devices_page
 print('trigger add device')
 dp._trigger_add_device()

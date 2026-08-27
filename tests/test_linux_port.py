@@ -15,8 +15,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from brahma import llm, registry, safety  # noqa: E402
-from brahma.safety import Danger  # noqa: E402
+from kravein import llm, registry, safety  # noqa: E402
+from kravein.safety import Danger  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +300,7 @@ def test_agent_preserves_signatures_in_its_transcript():
 
 
 def test_gemini_default_model_is_not_the_retired_one():
-    from brahma import config
+    from kravein import config
 
     # gemini-2.5-flash returns 404 for keys created after its retirement.
     assert config.get("llm.gemini_model") != "gemini-2.5-flash"
@@ -331,7 +331,7 @@ def test_gemini_overload_propagates_instead_of_retrying(monkeypatch):
 
 def test_breaker_skips_a_failing_provider(monkeypatch, tmp_path):
     """An outage must cost the timeout once, not on every request."""
-    from brahma import config
+    from kravein import config
 
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
     _real_get = config.get
@@ -373,7 +373,7 @@ def test_breaker_skips_a_failing_provider(monkeypatch, tmp_path):
 
 
 def test_breaker_survives_a_new_process(monkeypatch, tmp_path):
-    from brahma import config
+    from kravein import config
 
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
 
@@ -381,13 +381,13 @@ def test_breaker_survives_a_new_process(monkeypatch, tmp_path):
     first._record_failure("gemini")
     first._record_failure("gemini")
 
-    # A completely separate instance, as if a new `brahma ask` had started.
+    # A completely separate instance, as if a new `kravein ask` had started.
     second = llm.LLM()
     assert second._is_cooling("gemini"), "breaker state must persist to disk"
 
 
 def test_breaker_resets_after_a_success(monkeypatch, tmp_path):
-    from brahma import config
+    from kravein import config
 
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
     _real_get = config.get
@@ -408,7 +408,7 @@ def test_breaker_resets_after_a_success(monkeypatch, tmp_path):
 
 def test_breaker_never_leaves_zero_providers(monkeypatch, tmp_path):
     """If everything is cooling, try anyway rather than refusing outright."""
-    from brahma import config
+    from kravein import config
 
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
     facade = llm.LLM()
@@ -432,7 +432,7 @@ def test_default_provider_is_cline_not_gemini():
 
     It stays configured for voice (Live native-audio) and vision only.
     """
-    from brahma import config
+    from kravein import config
 
     assert config.get("llm.provider") == "cline"
     assert "gemini" not in (config.get("llm.provider_order") or [])
@@ -441,7 +441,7 @@ def test_default_provider_is_cline_not_gemini():
 
 
 def test_gemini_remains_available_for_voice_and_vision():
-    from brahma import config, live
+    from kravein import config, live
 
     # Removing Gemini from the text chain must not touch the voice pipeline.
     assert live.LIVE_MODEL == "models/gemini-2.5-flash-native-audio-preview-12-2025"
@@ -452,7 +452,7 @@ def test_gemini_remains_available_for_voice_and_vision():
 
 def test_provider_order_is_exclusive(monkeypatch):
     """A provider left out of provider_order is left out on purpose."""
-    from brahma import config
+    from kravein import config
 
     facade = llm.LLM()
     monkeypatch.setattr(
@@ -469,7 +469,7 @@ def test_provider_order_is_exclusive(monkeypatch):
 
 def test_failover_hands_gemini_503_to_cline(monkeypatch, tmp_path):
     """The whole point: one clear hop when Gemini is overloaded."""
-    from brahma import config
+    from kravein import config
 
     # Isolate breaker state so a real outage on this machine cannot leak in.
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
@@ -509,7 +509,7 @@ def test_failover_hands_gemini_503_to_cline(monkeypatch, tmp_path):
 
 
 def test_live_fallback_chain_is_audio_capable():
-    from brahma import live
+    from kravein import live
 
     assert live.LIVE_MODEL in live.LIVE_FALLBACKS
     assert live.LIVE_FALLBACKS[0] == live.LIVE_MODEL
@@ -550,7 +550,7 @@ class _StubProvider:
 
 
 def _agent_with(script, **kwargs):
-    from brahma.agent import Agent
+    from kravein.agent import Agent
 
     stub = _StubProvider(script)
     agent = Agent(source="test", **kwargs)
@@ -627,7 +627,7 @@ def test_agent_reset_clears_history():
 # ---------------------------------------------------------------------------
 
 def test_cline_renders_compact_tool_signatures():
-    from brahma import cline
+    from kravein import cline
 
     rendered = cline._render_tool({
         "name": "kill_process",
@@ -647,7 +647,7 @@ def test_cline_renders_compact_tool_signatures():
 
 
 def test_cline_prompt_includes_tools_and_transcript():
-    from brahma import cline
+    from kravein import cline
 
     prompt = cline.build_prompt(
         [
@@ -667,7 +667,7 @@ def test_cline_prompt_includes_tools_and_transcript():
 
 
 def test_cline_prompt_trims_huge_tool_output():
-    from brahma import cline
+    from kravein import cline
 
     prompt = cline.build_prompt(
         [{"role": "tool", "name": "big", "content": "x" * 20000}], None
@@ -677,7 +677,7 @@ def test_cline_prompt_trims_huge_tool_output():
 
 
 def test_cline_parses_ndjson_run_result():
-    from brahma import cline
+    from kravein import cline
 
     stream = "\n".join([
         '{"type":"hook_event","hookEventName":"agent_start"}',
@@ -692,7 +692,7 @@ def test_cline_parses_ndjson_run_result():
 
 
 def test_cline_parse_ignores_junk_lines():
-    from brahma import cline
+    from kravein import cline
 
     text, _ = cline._parse_ndjson(
         "hostname: command not found\nnot json\n"
@@ -703,7 +703,7 @@ def test_cline_parse_ignores_junk_lines():
 
 def _cline_reply(monkeypatch, model_output: str, tools=None):
     """Drive ClineProvider.complete with a canned CLI response."""
-    from brahma import cline
+    from kravein import cline
 
     provider = cline.ClineProvider()
     monkeypatch.setattr(
@@ -772,7 +772,7 @@ def test_cline_tolerates_a_single_object_tool_call(monkeypatch):
 
 def test_cline_routes_ungated_models_direct(monkeypatch):
     """Ungated models must skip the CLI entirely — that is the whole point."""
-    from brahma import cline
+    from kravein import cline
 
     provider = cline.ClineProvider()
     assert provider._use_cli("deepseek/deepseek-v3.2") is False
@@ -782,7 +782,7 @@ def test_cline_routes_ungated_models_direct(monkeypatch):
 
 
 def test_cline_direct_path_is_used_by_default(monkeypatch):
-    from brahma import cline
+    from kravein import cline
 
     provider = cline.ClineProvider()
     called = {}
@@ -804,7 +804,7 @@ def test_cline_direct_path_is_used_by_default(monkeypatch):
 
 def test_cline_falls_back_to_cli_when_gated(monkeypatch):
     """A 403 must route to the CLI rather than failing the turn."""
-    from brahma import cline
+    from kravein import cline
 
     provider = cline.ClineProvider()
     used = {}
@@ -827,7 +827,7 @@ def test_cline_falls_back_to_cli_when_gated(monkeypatch):
 
 
 def test_cline_direct_decodes_native_tool_calls(monkeypatch):
-    from brahma import cline
+    from kravein import cline
 
     provider = cline.ClineProvider()
     monkeypatch.setattr(cline, "direct_complete", lambda *a, **k: {
@@ -845,7 +845,7 @@ def test_cline_direct_decodes_native_tool_calls(monkeypatch):
 
 
 def test_cline_openai_message_translation():
-    from brahma import cline
+    from kravein import cline
 
     out = cline._to_openai_messages([
         {"role": "user", "content": "hi"},
@@ -861,9 +861,9 @@ def test_cline_openai_message_translation():
 
 
 def test_cline_token_cache_never_writes_to_clines_own_config():
-    from brahma import cline, config
+    from kravein import cline, config
 
-    # Brahma must only ever read Cline's file.
+    # Kravein must only ever read Cline's file.
     assert cline._token_cache_path() != cline.CREDENTIALS_PATH
     assert str(config.STATE_DIR) in str(cline._token_cache_path())
 
@@ -874,7 +874,7 @@ def test_agent_prompt_guards_against_overclaiming():
     The system prompt must forbid substituting a loosely related tool and
     describing the result as the thing the user asked for.
     """
-    from brahma.agent import SYSTEM_PROMPT
+    from kravein.agent import SYSTEM_PROMPT
 
     lowered = SYSTEM_PROMPT.lower()
     assert "never overclaim" in lowered
@@ -885,14 +885,14 @@ def test_agent_prompt_guards_against_overclaiming():
 
 
 def test_cline_default_model_is_not_gated():
-    from brahma import cline, config
+    from kravein import cline, config
 
     model = config.get("llm.cline_model", cline.DEFAULT_MODEL)
     assert model not in cline.CLI_ONLY_MODELS, "default must use the fast path"
 
 
 def test_cline_auth_reader_never_returns_tokens():
-    from brahma import cline
+    from kravein import cline
 
     auth = cline.read_auth()
     rendered = auth.describe() + repr(auth)
@@ -902,7 +902,7 @@ def test_cline_auth_reader_never_returns_tokens():
 
 
 def test_cline_workspace_is_isolated_from_the_repo():
-    from brahma import cline
+    from kravein import cline
 
     workspace = cline._workspace()
     assert workspace.is_dir()
@@ -917,24 +917,24 @@ def test_cline_workspace_is_isolated_from_the_repo():
 
 def _hypr(monkeypatch, *, lua=True):
     """A Hyprland backend with the dialect pinned and calls recorded."""
-    from brahma.platform import desktop
+    from kravein.platform import desktop
 
     backend = desktop.HyprlandBackend()
     backend._lua = lua
     calls: list[list[str]] = []
 
     def fake_run(args, **kwargs):
-        from brahma.platform import shell
+        from kravein.platform import shell
 
         calls.append(list(args))
         return shell.Result(list(args), 0, "ok", "")
 
-    monkeypatch.setattr("brahma.platform.shell.run", fake_run)
+    monkeypatch.setattr("kravein.platform.shell.run", fake_run)
     return backend, calls
 
 
 def _window(addr="0xABC"):
-    from brahma.platform import desktop
+    from kravein.platform import desktop
 
     return desktop.Window(
         id=addr, title="t", app="a", pid=1, workspace="1", focused=False
@@ -942,7 +942,7 @@ def _window(addr="0xABC"):
 
 
 def test_hyprland_lua_escaping_blocks_injection():
-    from brahma.platform.desktop import _lua_string, _lua_value
+    from kravein.platform.desktop import _lua_string, _lua_value
 
     # Window titles and user commands reach hyprctl eval as Lua source.
     assert _lua_string('a"b') == '"a\\"b"'
@@ -961,7 +961,7 @@ def test_hyprland_close_focuses_before_acting(monkeypatch):
     any address argument, so close must focus the target first and confirm the
     focus landed. Passing an address alone destroys whatever is focused.
     """
-    from brahma.platform import desktop
+    from kravein.platform import desktop
 
     backend, calls = _hypr(monkeypatch)
     target = _window("0xDEAD")
@@ -982,7 +982,7 @@ def test_hyprland_close_focuses_before_acting(monkeypatch):
 
 def test_hyprland_close_aborts_if_focus_does_not_land(monkeypatch):
     """If focus fails, closing would destroy the wrong window — so refuse."""
-    from brahma.platform import desktop
+    from kravein.platform import desktop
 
     backend, calls = _hypr(monkeypatch)
     # activewindow never becomes the target.
@@ -1019,31 +1019,31 @@ def test_hyprland_workspace_switch_uses_focus_table(monkeypatch):
 
 def test_hyprland_rejects_warnings_as_failure(monkeypatch):
     """'window not found' comes back as a warning, not a non-zero exit."""
-    from brahma.platform import desktop, shell
+    from kravein.platform import desktop, shell
 
     backend = desktop.HyprlandBackend()
     backend._lua = True
     monkeypatch.setattr(
-        "brahma.platform.shell.run",
+        "kravein.platform.shell.run",
         lambda args, **k: shell.Result(list(args), 0, "warning: window not found", ""),
     )
     assert backend._eval("return 1") is False
 
 
 def test_hyprland_accepts_plain_ok(monkeypatch):
-    from brahma.platform import desktop, shell
+    from kravein.platform import desktop, shell
 
     backend = desktop.HyprlandBackend()
     backend._lua = True
     monkeypatch.setattr(
-        "brahma.platform.shell.run",
+        "kravein.platform.shell.run",
         lambda args, **k: shell.Result(list(args), 0, "ok", ""),
     )
     assert backend._eval("return 1") is True
 
 
 def test_hyprland_lua_detection_is_cached(monkeypatch):
-    from brahma.platform import desktop, shell
+    from kravein.platform import desktop, shell
 
     backend = desktop.HyprlandBackend()
     probes = []
@@ -1052,14 +1052,14 @@ def test_hyprland_lua_detection_is_cached(monkeypatch):
         probes.append(list(args))
         return shell.Result(list(args), 0, "ok", "")
 
-    monkeypatch.setattr("brahma.platform.shell.run", fake_run)
+    monkeypatch.setattr("kravein.platform.shell.run", fake_run)
     assert backend.uses_lua() is True
     assert backend.uses_lua() is True
     assert len(probes) == 1, "dialect must be probed only once"
 
 
 def test_every_backend_implements_kill():
-    from brahma.platform import desktop
+    from kravein.platform import desktop
 
     for cls in (desktop.HyprlandBackend, desktop.SwayBackend,
                 desktop.X11Backend, desktop.NullBackend):
@@ -1069,7 +1069,7 @@ def test_every_backend_implements_kill():
 def test_move_to_workspace_accepts_a_target_window():
     import inspect
 
-    from brahma.platform import desktop
+    from kravein.platform import desktop
 
     for cls in (desktop.HyprlandBackend, desktop.SwayBackend,
                 desktop.X11Backend, desktop.NullBackend):
@@ -1087,7 +1087,7 @@ def test_cline_prompt_overrides_the_harness_tool_context():
     The CLI wraps us in its own agent context that advertises other tools and
     reports them blocked; the prompt must explicitly override that.
     """
-    from brahma import cline
+    from kravein import cline
 
     prompt = cline.build_prompt(
         [{"role": "user", "content": "close chrome"}],
@@ -1100,7 +1100,7 @@ def test_cline_prompt_overrides_the_harness_tool_context():
 
 
 def test_cline_prompt_states_the_tool_count():
-    from brahma import cline
+    from kravein import cline
 
     tools = registry.tool_declarations()
     prompt = cline.build_prompt([{"role": "user", "content": "hi"}], tools)
@@ -1112,7 +1112,7 @@ def test_cline_prompt_states_the_tool_count():
 # ---------------------------------------------------------------------------
 
 def test_tts_player_cannot_be_broken_by_user_config():
-    from brahma.platform import tts
+    from kravein.platform import tts
 
     player = tts._player()
     if player and player[0] == "mpv":
@@ -1125,7 +1125,7 @@ def test_mic_rms_distinguishes_silence_from_signal():
     import array
     import math
 
-    from brahma.platform import mic
+    from kravein.platform import mic
 
     silence = array.array("h", [0] * 800).tobytes()
     assert mic._rms(silence) < 0.001
@@ -1140,7 +1140,7 @@ def test_mic_writes_a_readable_wav(tmp_path):
     import array
     import wave
 
-    from brahma.platform import mic
+    from kravein.platform import mic
 
     pcm = array.array("h", [100] * mic.SAMPLE_RATE).tobytes()
     path = tmp_path / "x.wav"
@@ -1153,7 +1153,7 @@ def test_mic_writes_a_readable_wav(tmp_path):
 
 
 def test_mic_record_commands_are_16k_mono():
-    from brahma.platform import mic
+    from kravein.platform import mic
 
     for tool in ("pw-record", "parec", "arecord", "ffmpeg"):
         command = mic._record_command(tool)
@@ -1163,7 +1163,7 @@ def test_mic_record_commands_are_16k_mono():
 
 
 def test_voice_shortens_long_replies():
-    from brahma.voice import _shorten_for_speech
+    from kravein.voice import _shorten_for_speech
 
     long_text = "First sentence here. " + ("padding words " * 200)
     out = _shorten_for_speech(long_text, 120)
@@ -1176,19 +1176,19 @@ def test_voice_shortens_long_replies():
 
 
 def test_voice_wake_word_gating():
-    from brahma.voice import VoiceConfig, VoiceSession
+    from kravein.voice import VoiceConfig, VoiceSession
 
-    session = VoiceSession(settings=VoiceConfig(wake_word="brahma"))
+    session = VoiceSession(settings=VoiceConfig(wake_word="kravein"))
 
-    handled, command = session._wake_word_ok("brahma what is the time")
-    assert handled and "brahma" not in command.lower()
+    handled, command = session._wake_word_ok("kravein what is the time")
+    assert handled and "kravein" not in command.lower()
 
     handled, _ = session._wake_word_ok("what is the time")
     assert not handled
 
 
 def test_voice_without_wake_word_passes_everything_through():
-    from brahma.voice import VoiceConfig, VoiceSession
+    from kravein.voice import VoiceConfig, VoiceSession
 
     session = VoiceSession(settings=VoiceConfig(wake_word=""))
     handled, command = session._wake_word_ok("turn the volume down")
@@ -1196,15 +1196,15 @@ def test_voice_without_wake_word_passes_everything_through():
 
 
 def test_voice_stop_phrases_are_recognised():
-    from brahma import voice
+    from kravein import voice
 
     assert any(p in "ok stop listening now" for p in voice.STOP_PHRASES)
     assert not any(p in "what is my disk usage" for p in voice.STOP_PHRASES)
 
 
 def test_voice_confirmation_accepts_spoken_yes(monkeypatch):
-    from brahma.voice import VoiceSession
-    from brahma.safety import Danger
+    from kravein.voice import VoiceSession
+    from kravein.safety import Danger
 
     session = VoiceSession()
     session.settings.speak_replies = False
@@ -1213,8 +1213,8 @@ def test_voice_confirmation_accepts_spoken_yes(monkeypatch):
 
 
 def test_voice_confirmation_accepts_spoken_no(monkeypatch):
-    from brahma.voice import VoiceSession
-    from brahma.safety import Danger
+    from kravein.voice import VoiceSession
+    from kravein.safety import Danger
 
     session = VoiceSession()
     session.settings.speak_replies = False
@@ -1223,8 +1223,8 @@ def test_voice_confirmation_accepts_spoken_no(monkeypatch):
 
 
 def test_voice_confirmation_cancels_when_nothing_is_heard(monkeypatch):
-    from brahma.voice import VoiceSession
-    from brahma.safety import Danger
+    from kravein.voice import VoiceSession
+    from kravein.safety import Danger
 
     session = VoiceSession()
     session.settings.speak_replies = False
@@ -1234,8 +1234,8 @@ def test_voice_confirmation_cancels_when_nothing_is_heard(monkeypatch):
 
 
 def test_voice_session_stops_on_repeated_empty_capture(monkeypatch):
-    from brahma import voice
-    from brahma.platform import mic, stt
+    from kravein import voice
+    from kravein.platform import mic, stt
 
     monkeypatch.setattr(stt, "preload", lambda: "stubbed")
     monkeypatch.setattr(
@@ -1251,8 +1251,8 @@ def test_voice_session_stops_on_repeated_empty_capture(monkeypatch):
 
 
 def test_voice_readiness_reports_each_missing_piece(monkeypatch):
-    from brahma import voice
-    from brahma.platform import mic, stt, tts
+    from kravein import voice
+    from kravein.platform import mic, stt, tts
 
     monkeypatch.setattr(mic, "backend_name", lambda: "")
     monkeypatch.setattr(stt, "backend_name", lambda: "")
@@ -1264,7 +1264,7 @@ def test_voice_readiness_reports_each_missing_piece(monkeypatch):
 
 
 def test_live_mode_requires_a_gemini_key(monkeypatch):
-    from brahma import config, voice
+    from kravein import config, voice
 
     monkeypatch.setattr(config, "gemini_api_key", lambda: "")
     ok, why = voice.live_available()
@@ -1273,7 +1273,7 @@ def test_live_mode_requires_a_gemini_key(monkeypatch):
 
 
 def test_live_uses_the_original_audio_constants():
-    from brahma import live
+    from kravein import live
 
     # These must match the Windows build exactly or the stream desyncs.
     assert live.SEND_SAMPLE_RATE == 16000
@@ -1283,7 +1283,7 @@ def test_live_uses_the_original_audio_constants():
 
 
 def test_tts_voice_matches_the_original():
-    from brahma import config
+    from kravein import config
 
     # The Windows build used en-US-GuyNeural; keep the assistant sounding same.
     assert config.get("voice.tts_voice") == "en-US-GuyNeural"
@@ -1294,7 +1294,7 @@ def test_tts_voice_matches_the_original():
 # ---------------------------------------------------------------------------
 
 def test_environment_detection_reports_linux():
-    from brahma.platform import detect
+    from kravein.platform import detect
 
     env = detect.environment()
     assert env.distro
@@ -1303,15 +1303,15 @@ def test_environment_detection_reports_linux():
 
 
 def test_shell_runner_captures_output():
-    from brahma.platform import shell
+    from kravein.platform import shell
 
-    result = shell.run(["echo", "brahma"])
+    result = shell.run(["echo", "kravein"])
     assert result.ok
-    assert result.stdout.strip() == "brahma"
+    assert result.stdout.strip() == "kravein"
 
 
 def test_shell_runner_handles_a_missing_binary():
-    from brahma.platform import shell
+    from kravein.platform import shell
 
     result = shell.run(["definitely-not-a-real-binary-xyz"])
     assert not result.ok
@@ -1319,14 +1319,14 @@ def test_shell_runner_handles_a_missing_binary():
 
 
 def test_shell_runner_times_out():
-    from brahma.platform import shell
+    from kravein.platform import shell
 
     result = shell.run(["sleep", "5"], timeout=0.5)
     assert result.timed_out
 
 
 def test_desktop_entries_are_indexed():
-    from brahma.platform import apps
+    from kravein.platform import apps
 
     entries = apps.index()
     assert entries, "no .desktop entries found"
@@ -1334,7 +1334,7 @@ def test_desktop_entries_are_indexed():
 
 
 def test_config_resolves_user_directories():
-    from brahma import config
+    from kravein import config
 
     assert config.resolve_user_path("home") == Path.home()
     assert config.resolve_user_path("~/x") == Path.home() / "x"
@@ -1346,7 +1346,7 @@ def test_config_resolves_user_directories():
 # ---------------------------------------------------------------------------
 
 def test_audit_redacts_secrets(tmp_path, monkeypatch):
-    from brahma import audit, config
+    from kravein import audit, config
 
     monkeypatch.setattr(config, "AUDIT_LOG", tmp_path / "audit.jsonl")
     monkeypatch.setattr(audit, "_fd", None)
@@ -1360,7 +1360,7 @@ def test_audit_redacts_secrets(tmp_path, monkeypatch):
 
 
 def test_audit_writes_valid_json(tmp_path, monkeypatch):
-    from brahma import audit, config
+    from kravein import audit, config
 
     monkeypatch.setattr(config, "AUDIT_LOG", tmp_path / "audit.jsonl")
     monkeypatch.setattr(audit, "_fd", None)
@@ -1653,7 +1653,7 @@ class _FakeBackend:
 
 @pytest.fixture
 def fake_desktop(monkeypatch):
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     def install(backend):
         monkeypatch.setattr(win.desktop, "backend", lambda: backend)
@@ -1670,7 +1670,7 @@ def test_close_workspace_is_registered_and_destructive():
 
 def test_close_workspace_asks_once_for_the_whole_workspace(fake_desktop):
     """One prompt, not one per window — the point of the skill."""
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     backend = fake_desktop(_FakeBackend([
         _FakeWindow("a", "foot", 2), _FakeWindow("b", "chrome", 2),
@@ -1687,13 +1687,13 @@ def test_close_workspace_asks_once_for_the_whole_workspace(fake_desktop):
     assert [w.id for w in backend.windows] == ["z"], "touched another workspace"
 
 
-def test_close_workspace_never_closes_the_window_hosting_brahma(fake_desktop, monkeypatch):
+def test_close_workspace_never_closes_the_window_hosting_kravein(fake_desktop, monkeypatch):
     """Structural, not a matter of what the user answers.
 
     A window was once targeted by list position and the assistant killed its
     own terminal mid-task. A bulk close is exactly where that repeats.
     """
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     monkeypatch.setattr(win, "_own_pids", lambda: {4242})
     backend = fake_desktop(_FakeBackend([
@@ -1705,13 +1705,13 @@ def test_close_workspace_never_closes_the_window_hosting_brahma(fake_desktop, mo
     with safety.confirmer_scope(lambda *_: True):
         out = win.close_workspace(workspace="2")
 
-    assert "mine" not in backend.closed, "closed the window running Brahma"
+    assert "mine" not in backend.closed, "closed the window running Kravein"
     assert backend.closed == ["other"]
     assert "skipped" in out.lower()
 
 
 def test_close_workspace_refuses_when_only_its_own_window_is_there(fake_desktop, monkeypatch):
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     monkeypatch.setattr(win, "_own_pids", lambda: {4242})
     backend = fake_desktop(_FakeBackend([_FakeWindow("mine", "foot", 2, pid=4242)]))
@@ -1726,7 +1726,7 @@ def test_close_workspace_refuses_when_only_its_own_window_is_there(fake_desktop,
 
 
 def test_close_workspace_on_an_empty_workspace_asks_nothing(fake_desktop):
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     fake_desktop(_FakeBackend([_FakeWindow("z", "other", 3)]))
     asked = []
@@ -1738,7 +1738,7 @@ def test_close_workspace_on_an_empty_workspace_asks_nothing(fake_desktop):
 
 def test_close_workspace_reports_windows_that_would_not_close(fake_desktop):
     """An app showing a save prompt must be named, not silently counted."""
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     fake_desktop(_FakeBackend(
         [_FakeWindow("a", "foot", 2), _FakeWindow("b", "editor", 2)],
@@ -1753,7 +1753,7 @@ def test_close_workspace_reports_windows_that_would_not_close(fake_desktop):
 
 
 def test_close_workspace_declined_blocks_the_forced_retry(fake_desktop):
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     backend = fake_desktop(_FakeBackend([_FakeWindow("a", "foot", 2)]))
     asked = []
@@ -1771,7 +1771,7 @@ def test_wait_until_gone_returns_as_soon_as_windows_disappear():
     """It used to sleep a fixed 0.9s per window regardless."""
     import time as _time
 
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     backend = _FakeBackend([_FakeWindow("a", "foot", 2)])
     backend.windows = []                      # already gone
@@ -1787,7 +1787,7 @@ def test_wait_until_gone_returns_as_soon_as_windows_disappear():
 #
 # Reported: asked to close the `foot` terminal on workspace 4, having walked
 # back to workspace 1 by hand. Approving closed the terminal on workspace 2 —
-# the one running the Brahma server.
+# the one running the Kravein server.
 #
 # `close_window(query='foot')` resolved through find_windows, which returns
 # EVERY match, and then took matches[0]. Three foot terminals were open. The
@@ -1796,7 +1796,7 @@ def test_wait_until_gone_returns_as_soon_as_windows_disappear():
 
 
 def test_resolve_refuses_an_ambiguous_query(fake_desktop):
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     fake_desktop(_FakeBackend([
         _FakeWindow("a", "foot", 2, title="server"),
@@ -1814,7 +1814,7 @@ def test_resolve_refuses_an_ambiguous_query(fake_desktop):
 
 
 def test_resolve_scopes_by_workspace(fake_desktop):
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     fake_desktop(_FakeBackend([
         _FakeWindow("a", "foot", 2), _FakeWindow("b", "foot", 4),
@@ -1824,7 +1824,7 @@ def test_resolve_scopes_by_workspace(fake_desktop):
 
 def test_close_window_will_not_guess_between_candidates(fake_desktop):
     """The exact call that destroyed the wrong terminal."""
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     backend = fake_desktop(_FakeBackend([
         _FakeWindow("server", "foot", 2), _FakeWindow("target", "foot", 4),
@@ -1840,7 +1840,7 @@ def test_close_window_will_not_guess_between_candidates(fake_desktop):
 
 def test_close_window_confirmation_names_the_workspace(fake_desktop):
     """A confirmation that cannot be reviewed is theatre."""
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     fake_desktop(_FakeBackend([
         _FakeWindow("a", "foot", 2), _FakeWindow("b", "foot", 4, pid=777, title="spare"),
@@ -1855,8 +1855,8 @@ def test_close_window_confirmation_names_the_workspace(fake_desktop):
     assert "workspace 4" in detail and "777" in detail
 
 
-def test_close_window_refuses_brahmas_own_window(fake_desktop, monkeypatch):
-    from brahma.skills import windows as win
+def test_close_window_refuses_kraveins_own_window(fake_desktop, monkeypatch):
+    from kravein.skills import windows as win
 
     monkeypatch.setattr(win, "_own_pids", lambda: {4242})
     backend = fake_desktop(_FakeBackend([_FakeWindow("mine", "foot", 2, pid=4242)]))
@@ -1868,7 +1868,7 @@ def test_close_window_refuses_brahmas_own_window(fake_desktop, monkeypatch):
 
 def test_close_window_rechecks_the_target_before_acting(fake_desktop):
     """Resolution, confirmation and action are three separate moments."""
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     backend = fake_desktop(_FakeBackend([_FakeWindow("a", "foot", 4)]))
 
@@ -1885,7 +1885,7 @@ def test_close_window_rechecks_the_target_before_acting(fake_desktop):
 
 def test_close_window_puts_the_user_back_where_they_were(fake_desktop):
     """Acting has to focus the target; the user should not be left there."""
-    from brahma.skills import windows as win
+    from kravein.skills import windows as win
 
     here = _FakeWindow("here", "chrome", 1)
     target = _FakeWindow("target", "foot", 4)
@@ -1913,10 +1913,10 @@ def test_close_window_puts_the_user_back_where_they_were(fake_desktop):
     assert switched == ["1"], f"did not restore the origin workspace: {switched}"
 
 
-def test_killing_the_terminal_running_brahma_is_blocked():
+def test_killing_the_terminal_running_kravein_is_blocked():
     """A4-1: check_process only ever guarded os.getpid().
 
-    The parent terminal running `brahma serve` was fair game, and killing it
+    The parent terminal running `kravein serve` was fair game, and killing it
     kills the assistant — the window bug one layer down.
     """
     import psutil
@@ -1926,7 +1926,7 @@ def test_killing_the_terminal_running_brahma_is_blocked():
         pytest.skip("no parent process to test against")
 
     verdict = safety.check_process("foot", pid=parent.pid)
-    assert verdict.blocked, "killing the terminal running Brahma was allowed"
+    assert verdict.blocked, "killing the terminal running Kravein was allowed"
     assert "running it" in verdict.block_reason or "assistant" in verdict.block_reason
 
 
@@ -1938,9 +1938,9 @@ def test_own_pids_covers_the_ancestor_chain():
     assert len(pids) > 1, "only the process itself — ancestors are unprotected"
 
 
-def test_close_app_excludes_brahmas_own_window(monkeypatch):
+def test_close_app_excludes_kraveins_own_window(monkeypatch):
     """A1-2: close_app closed every match everywhere, with no self-protection."""
-    from brahma.skills import apps as apps_mod
+    from kravein.skills import apps as apps_mod
 
     windows = [
         _FakeWindow("mine", "foot", 3, pid=4242, title="claude"),
@@ -1960,7 +1960,7 @@ def test_close_app_excludes_brahmas_own_window(monkeypatch):
 
 
 def test_close_app_scopes_by_workspace(monkeypatch):
-    from brahma.skills import apps as apps_mod
+    from kravein.skills import apps as apps_mod
 
     windows = [
         _FakeWindow("a", "foot", 2, pid=1), _FakeWindow("b", "foot", 4, pid=2),
@@ -1987,7 +1987,7 @@ def test_close_app_scopes_by_workspace(monkeypatch):
 
 
 def test_ydotool_key_codes_are_numeric():
-    from brahma.platform import inputs
+    from kravein.platform import inputs
 
     for name in ("enter", "return", "ctrl", "a", "f1", "tab", "escape"):
         code = inputs._map_key(name, "ydotool")
@@ -2002,13 +2002,13 @@ def test_ydotool_key_codes_are_numeric():
     ("f1", "59"), ("f10", "68"), ("f11", "87"), ("f12", "88"),
 ])
 def test_known_key_codes(name, code):
-    from brahma.platform import inputs
+    from kravein.platform import inputs
 
     assert inputs._map_key(name, "ydotool") == code
 
 
 def test_every_letter_and_digit_maps():
-    from brahma.platform import inputs
+    from kravein.platform import inputs
 
     for char in "abcdefghijklmnopqrstuvwxyz0123456789":
         assert inputs._map_key(char, "ydotool").isdigit()
@@ -2018,8 +2018,8 @@ def test_every_letter_and_digit_maps():
 # Terminal typing
 # ---------------------------------------------------------------------------
 
-def test_terminal_refuses_to_type_into_brahmas_own_window(fake_desktop, monkeypatch):
-    from brahma.skills import terminal as term
+def test_terminal_refuses_to_type_into_kraveins_own_window(fake_desktop, monkeypatch):
+    from kravein.skills import terminal as term
 
     monkeypatch.setattr(term, "own_pids", lambda: {4242})
     monkeypatch.setattr(term.inputs, "backend_name", lambda: "ydotool")
@@ -2032,7 +2032,7 @@ def test_terminal_refuses_to_type_into_brahmas_own_window(fake_desktop, monkeypa
 
 def test_terminal_command_is_risk_classified(fake_desktop, monkeypatch):
     """Typing `rm -rf` at a shell is not safer than executing it."""
-    from brahma.skills import terminal as term
+    from kravein.skills import terminal as term
 
     monkeypatch.setattr(term, "own_pids", lambda: set())
     monkeypatch.setattr(term.inputs, "backend_name", lambda: "ydotool")
@@ -2049,7 +2049,7 @@ def test_terminal_command_is_risk_classified(fake_desktop, monkeypatch):
 
 
 def test_terminal_refuses_an_ambiguous_target(fake_desktop, monkeypatch):
-    from brahma.skills import terminal as term
+    from kravein.skills import terminal as term
 
     monkeypatch.setattr(term, "own_pids", lambda: set())
     monkeypatch.setattr(term.inputs, "backend_name", lambda: "ydotool")
@@ -2062,7 +2062,7 @@ def test_terminal_refuses_an_ambiguous_target(fake_desktop, monkeypatch):
 
 def test_terminal_does_not_type_when_focus_fails(fake_desktop, monkeypatch):
     """Typing into a window that was never focused types into something else."""
-    from brahma.skills import terminal as term
+    from kravein.skills import terminal as term
 
     monkeypatch.setattr(term, "own_pids", lambda: set())
     monkeypatch.setattr(term.inputs, "backend_name", lambda: "ydotool")
@@ -2088,13 +2088,13 @@ def test_terminal_does_not_type_when_focus_fails(fake_desktop, monkeypatch):
     ("spotify:playlist:abc", "spotify:playlist:abc"),
 ])
 def test_spotify_uri_mapping(ask, uri):
-    from brahma.skills.media import _spotify_uri
+    from kravein.skills.media import _spotify_uri
 
     assert _spotify_uri(ask) == uri
 
 
 def test_spotify_free_text_becomes_a_search():
-    from brahma.skills.media import _spotify_uri
+    from kravein.skills.media import _spotify_uri
 
     assert _spotify_uri("lo-fi beats").startswith("spotify:search:")
 
@@ -2111,7 +2111,7 @@ def test_playerctl_calls_use_a_utf8_locale():
     """
     import inspect
 
-    from brahma.platform import audio
+    from kravein.platform import audio
 
     source = inspect.getsource(audio)
     assert '_UTF8' in source
@@ -2130,13 +2130,13 @@ def test_playerctl_calls_use_a_utf8_locale():
 ])
 def test_spotify_views_are_reachable_as_uris(ask, uri):
     """Sidebar navigation without touching the GUI."""
-    from brahma.skills.media import _spotify_uri
+    from kravein.skills.media import _spotify_uri
 
     assert _spotify_uri(ask) == uri
 
 
 def test_rename_keeps_the_file_in_place(tmp_path):
-    from brahma.skills import filemanager as fm
+    from kravein.skills import filemanager as fm
 
     target = tmp_path / "notes.txt"
     target.write_text("hi")
@@ -2148,7 +2148,7 @@ def test_rename_keeps_the_file_in_place(tmp_path):
 
 
 def test_rename_refuses_a_path_as_a_name(tmp_path):
-    from brahma.skills import filemanager as fm
+    from kravein.skills import filemanager as fm
 
     target = tmp_path / "notes.txt"
     target.write_text("hi")
@@ -2158,7 +2158,7 @@ def test_rename_refuses_a_path_as_a_name(tmp_path):
 
 
 def test_rename_refuses_to_overwrite(tmp_path):
-    from brahma.skills import filemanager as fm
+    from kravein.skills import filemanager as fm
 
     (tmp_path / "a.txt").write_text("a")
     (tmp_path / "b.txt").write_text("b")
@@ -2172,10 +2172,10 @@ def test_file_manager_only_replaces_a_window_it_opened(monkeypatch):
     """Navigating must not accumulate windows, and must not kill a stranger's.
 
     Dolphin opens a new window per invocation and exposes no D-Bus method to
-    retarget one, so Brahma replaces the window it opened — identified by pid
+    retarget one, so Kravein replaces the window it opened — identified by pid
     *and* verified by command line, so a reused pid is left alone.
     """
-    from brahma.skills import filemanager as fm
+    from kravein.skills import filemanager as fm
 
     killed = []
 
@@ -2203,3 +2203,416 @@ def test_file_manager_only_replaces_a_window_it_opened(monkeypatch):
     monkeypatch.setattr(psutil, "Process", lambda pid: _Proc(["dolphin", "/tmp"]))
     fm._replace_previous("dolphin")
     assert killed and "dolphin" in killed[0]
+
+
+# ---------------------------------------------------------------------------
+# Gentle scroll
+# ---------------------------------------------------------------------------
+
+def test_parse_rate_accepts_numbers_and_words():
+    from kravein import gentle
+
+    assert gentle.parse_rate("2") == (2.0, "")
+    assert gentle.parse_rate(3) == (3.0, "")
+    assert gentle.parse_rate("slow")[0] < 1.0
+    assert gentle.parse_rate("fast")[0] > 1.0
+    assert gentle.parse_rate("", 1.5) == (1.5, "")
+
+    _, problem = gentle.parse_rate("banana")
+    assert "banana" in problem
+    _, problem = gentle.parse_rate("999")
+    assert "between" in problem
+
+
+def test_gentle_scroll_refuses_a_page_with_nothing_to_scroll(monkeypatch):
+    """A page that cannot scroll must say so, not go quiet.
+
+    The first version reported success and then sat there doing nothing,
+    because the scrollable element was only chosen inside the animation frame
+    loop — after the return value the caller checks had been built.
+    """
+    from kravein import gentle
+
+    monkeypatch.setattr(gentle, "_apply_to_page", lambda rate, direction: {"found": False})
+    monkeypatch.setattr(gentle, "_cancel_page", lambda: None)
+    started = []
+    monkeypatch.setattr(gentle, "_start", lambda session: started.append(session))
+
+    message = gentle.start_browser(1.0, "down", 60, "the page")
+    assert "can scroll" in message
+    assert not started, "started a session on a page with nothing to scroll"
+
+
+def test_gentle_scroll_stop_is_safe_when_nothing_is_running():
+    from kravein import gentle
+
+    gentle.stop()
+    assert gentle.stop() == ""
+    assert gentle.current() is None
+
+
+def test_gentle_scroll_refuses_an_ambiguous_window(monkeypatch):
+    """Same rule as close_window: three matches means refuse and list them."""
+    from kravein.skills import gentle as skill
+    from kravein.skills import windows as win
+
+    def _ambiguous(query, workspace):
+        raise win.AmbiguousTarget("3 windows match 'foot'; say which one.")
+
+    monkeypatch.setattr(skill, "_resolve_one", _ambiguous)
+    monkeypatch.setattr(skill.desktop, "backend", lambda: _StubBackend())
+
+    message = skill.gentle_scroll(target="foot")
+    assert "3 windows match" in message
+
+
+def test_gentle_scroll_refuses_kraveins_own_window(monkeypatch):
+    """Parking the pointer on the assistant's own terminal helps nobody."""
+    import os
+
+    from kravein.skills import gentle as skill
+
+    window = _StubWindow(pid=os.getpid())
+    monkeypatch.setattr(skill, "_resolve_one", lambda q, w: window)
+    monkeypatch.setattr(skill.desktop, "backend", lambda: _StubBackend())
+
+    message = skill.gentle_scroll(target="foot")
+    assert "Refusing" in message
+
+
+def test_gentle_scroll_sends_nothing_when_focus_does_not_land(monkeypatch):
+    """Wheel events follow the pointer, so an unfocused target is a hazard."""
+    from kravein.skills import gentle as skill
+
+    window = _StubWindow(pid=999999)
+    monkeypatch.setattr(skill, "_resolve_one", lambda q, w: window)
+    monkeypatch.setattr(skill.desktop, "backend", lambda: _StubBackend())
+    monkeypatch.setattr(skill.desktop, "focus_and_verify", lambda w: False)
+    monkeypatch.setattr(skill.inputs, "pointer_position", lambda: (10, 10))
+    monkeypatch.setattr(
+        skill.gentle, "start_window",
+        lambda *a, **k: pytest.fail("scrolled a window that was never focused"),
+    )
+
+    message = skill.gentle_scroll(target="foot")
+    assert "Could not focus" in message
+
+
+def test_place_pointer_raises_when_the_pointer_did_not_land(monkeypatch):
+    """ydotool's absolute mode exits 0 while parking the pointer in a corner.
+
+    Believing it is how wheel events end up scrolling a window nobody asked
+    about, so the position is read back and a miss is an error.
+    """
+    from kravein.platform import inputs
+
+    monkeypatch.setattr(inputs, "move_mouse", lambda x, y, absolute=True: "ok")
+    monkeypatch.setattr(inputs, "pointer_position", lambda: (1364, 766))
+
+    from kravein.platform import desktop
+
+    monkeypatch.setattr(desktop, "backend", lambda: _StubBackend())
+
+    with pytest.raises(inputs.InputError):
+        inputs.place_pointer(683, 384)
+
+
+def test_param_docs_keep_wrapped_lines():
+    """A wrapped Args: description used to be cut off mid-sentence."""
+    from kravein.registry import _parse_param_docs
+
+    doc = (
+        "Do a thing.\n\n"
+        "Args:\n"
+        "    query: Which terminal — app name or part of its title.\n"
+        "        Omit for the focused window.\n"
+        "    other: Something else.\n"
+    )
+    parsed = _parse_param_docs(doc)
+    assert parsed["query"].endswith("Omit for the focused window.")
+    assert parsed["other"] == "Something else."
+
+
+class _StubWindow:
+    def __init__(self, pid):
+        self.id = "0xabc"
+        self.title = "a terminal"
+        self.app = "foot"
+        self.pid = pid
+        self.workspace = "2"
+        self.focused = False
+        self.geometry = (0, 0, 800, 600)
+
+
+class _StubBackend:
+    def available(self):
+        return True
+
+    def focused(self):
+        return None
+
+    def move_cursor(self, x, y):
+        return False
+
+    def list_windows(self):
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Voice pipeline selection
+# ---------------------------------------------------------------------------
+
+def _stub_pipelines(monkeypatch, *, live: bool, local: bool):
+    from kravein import voice
+
+    monkeypatch.setattr(
+        voice, "live_available", lambda: (live, "" if live else "no Gemini key"))
+    monkeypatch.setattr(
+        voice, "readiness", lambda: (local, [] if local else ["no speech recognition"]))
+
+
+def test_resolve_mode_auto_prefers_live_and_falls_back(monkeypatch):
+    from kravein import config, voice
+
+    monkeypatch.setattr(config, "get", lambda key, default=None: "auto")
+
+    _stub_pipelines(monkeypatch, live=True, local=True)
+    assert voice.resolve_mode() == ("live", "")
+
+    _stub_pipelines(monkeypatch, live=False, local=True)
+    assert voice.resolve_mode() == ("local", "")
+
+    _stub_pipelines(monkeypatch, live=False, local=False)
+    mode, problem = voice.resolve_mode()
+    assert mode == ""
+    assert "speech recognition" in problem
+
+
+def test_resolve_mode_refuses_rather_than_switching_pipelines(monkeypatch):
+    """An explicit choice is a requirement, not a hint.
+
+    Quietly starting the metered cloud pipeline because the free one was
+    unavailable — or the reverse — is a surprise worth refusing over.
+    """
+    from kravein import config, voice
+
+    monkeypatch.setattr(config, "get", lambda key, default=None: "auto")
+
+    _stub_pipelines(monkeypatch, live=True, local=False)
+    assert voice.resolve_mode("local")[0] == ""
+
+    _stub_pipelines(monkeypatch, live=False, local=True)
+    assert voice.resolve_mode("live")[0] == ""
+
+
+def test_resolve_mode_honours_the_setting_when_nothing_is_requested(monkeypatch):
+    """`voice.mode` used to be read by nothing at all."""
+    from kravein import config, voice
+
+    _stub_pipelines(monkeypatch, live=True, local=True)
+
+    monkeypatch.setattr(config, "get", lambda key, default=None: "local")
+    assert voice.resolve_mode() == ("local", "")
+
+    monkeypatch.setattr(config, "get", lambda key, default=None: "live")
+    assert voice.resolve_mode() == ("live", "")
+
+    # An unrecognised value must not disable voice.
+    monkeypatch.setattr(config, "get", lambda key, default=None: "nonsense")
+    assert voice.resolve_mode()[0] in {"live", "local"}
+
+
+# ---------------------------------------------------------------------------
+# Microphone capture
+# ---------------------------------------------------------------------------
+
+class _ScriptedRecorder:
+    """Stands in for pw-record, replaying a fixed sequence of PCM chunks."""
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.stdout = self
+
+    def read(self, _size):
+        return self._chunks.pop(0) if self._chunks else b""
+
+    def terminate(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        pass
+
+
+def _pcm(level: int, chunks: int):
+    """`chunks` chunks of a constant-amplitude square wave."""
+    from kravein.platform import mic
+
+    frame = int(level).to_bytes(2, "little", signed=True)
+    return [frame * mic.CHUNK_FRAMES] * chunks
+
+
+def test_a_blip_does_not_end_the_listen(monkeypatch):
+    """One noisy chunk must not consume the whole listen.
+
+    It used to: the blip set `speaking`, the following 1.2s of quiet closed
+    the "utterance", and the 30ms of audio was thrown away as "nothing said" —
+    before `start_timeout` was ever consulted. Every listen died in about 1.3
+    seconds, so voice mode gave up with "heard nothing usable 8 times in a
+    row" while the microphone was working perfectly.
+    """
+    from kravein.platform import mic
+
+    loud, quiet = 12000, 5
+    script = [
+        *_pcm(quiet, 5),
+        *_pcm(loud, 1),        # the blip
+        *_pcm(quiet, 60),      # 1.8s of silence — long enough to have ended it
+        *_pcm(loud, 40),       # then somebody actually speaks
+        *_pcm(quiet, 60),
+    ]
+    monkeypatch.setattr(mic.subprocess, "Popen", lambda *a, **k: _ScriptedRecorder(script))
+    monkeypatch.setattr(mic, "backend_name", lambda: "pw-record")
+    monkeypatch.setattr(mic, "_write_wav", lambda path, pcm: path.write_bytes(pcm))
+
+    result = mic.listen(
+        silence_threshold=0.05, silence_seconds=1.2,
+        max_seconds=30, start_timeout=30, min_speech_seconds=0.35,
+    )
+
+    assert result.path is not None, f"lost the utterance: {result.reason}"
+    assert result.seconds >= 0.35
+    if result.path:
+        result.path.unlink(missing_ok=True)
+
+
+def test_a_dead_recorder_is_not_reported_as_silence(monkeypatch):
+    """EOF on the capture pipe is a failure, not a pause."""
+    from kravein.platform import mic
+
+    monkeypatch.setattr(
+        mic.subprocess, "Popen",
+        lambda *a, **k: _ScriptedRecorder(_pcm(5, 400)),
+    )
+    monkeypatch.setattr(mic, "backend_name", lambda: "pw-record")
+
+    result = mic.listen(
+        silence_threshold=0.05, max_seconds=30, start_timeout=1.0,
+    )
+    assert result.path is None
+    # The scripted recorder runs out of audio rather than waiting on a clock,
+    # which is exactly the case that must not be reported as "nothing said":
+    # a recorder that stopped is a different problem from a quiet room, and
+    # conflating them sends the user debugging the wrong thing.
+    assert "recorder stopped" in result.reason
+
+
+# ---------------------------------------------------------------------------
+# Searching inside a site
+# ---------------------------------------------------------------------------
+
+def test_web_search_does_not_default_to_google(monkeypatch):
+    """Google serves its bot interstitial to an automated profile.
+
+    A user asked to search inside YouTube and ended up on Google's "unusual
+    traffic" captcha instead. Half of that was tool choice; the other half was
+    an engine that will not serve this browser at all.
+    """
+    from kravein.skills import browser as skill
+
+    opened: list[str] = []
+    monkeypatch.setattr(skill, "browser_open", lambda url, **k: opened.append(url) or "ok")
+
+    skill.browser_search_web("hyprland")
+    assert "duckduckgo" in opened[0]
+
+    skill.browser_search_web("hyprland", engine="google")
+    assert "google" in opened[1], "an explicit engine must still be honoured"
+
+
+def test_site_search_reports_when_there_is_no_search_box(monkeypatch):
+    """And points at the web-search skill rather than silently doing nothing."""
+    from kravein.skills import browser as skill
+
+    monkeypatch.setattr(skill.browser, "available", lambda: (True, ""))
+    monkeypatch.setattr(skill.browser, "running", lambda: True)
+    monkeypatch.setattr(
+        skill.browser, "call",
+        lambda fn, **k: {"found": False, "url": "https://example.com/", "title": "Example"},
+    )
+
+    message = skill.browser_search_site("anything")
+    assert "No search box" in message
+    assert "browser_search_web" in message
+
+
+def test_site_search_does_not_claim_success_when_nothing_moved(monkeypatch):
+    """Submitting is not the same as having searched.
+
+    A site search is usually a client-side route change, so a load event can
+    fire instantly having gone nowhere. Saying "searched" there would assert a
+    result the assistant has not seen.
+    """
+    from kravein.skills import browser as skill
+
+    monkeypatch.setattr(skill.browser, "available", lambda: (True, ""))
+    monkeypatch.setattr(skill.browser, "running", lambda: True)
+    monkeypatch.setattr(
+        skill.browser, "call",
+        lambda fn, **k: {
+            "found": True, "moved": False, "url": "https://site.test/",
+            "before": "https://site.test/", "title": "Site",
+        },
+    )
+
+    message = skill.browser_search_site("kittens")
+    assert "did not change" in message
+    assert not message.startswith("Searched")
+
+
+def test_site_search_needs_a_site_to_search(monkeypatch):
+    from kravein.skills import browser as skill
+
+    monkeypatch.setattr(skill.browser, "available", lambda: (True, ""))
+    monkeypatch.setattr(skill.browser, "running", lambda: False)
+
+    message = skill.browser_search_site("kittens")
+    assert "browser_open" in message
+
+
+def test_search_field_prefers_the_visible_input(monkeypatch):
+    """Responsive layouts ship two search boxes and hide one."""
+    from kravein.platform import browser as platform_browser
+
+    class _Item:
+        def __init__(self, visible):
+            self._visible = visible
+
+        def is_visible(self):
+            return self._visible
+
+        def is_enabled(self):
+            return True
+
+    class _Locator:
+        def __init__(self, items):
+            self._items = items
+
+        def count(self):
+            return len(self._items)
+
+        def nth(self, i):
+            return self._items[i]
+
+    hidden, shown = _Item(False), _Item(True)
+
+    class _Page:
+        def locator(self, selector):
+            if selector == 'input[type="search"]':
+                return _Locator([])
+            return _Locator([hidden, shown])
+
+    found = platform_browser.search_field(_Page(), reveal=False)
+    assert found is shown

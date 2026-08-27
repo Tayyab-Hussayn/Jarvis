@@ -1,5 +1,5 @@
 # actions/open_app.py
-# Brahma AI - Cross-Platform App Launcher
+# Kravein AI - Cross-Platform App Launcher
 
 import time
 import subprocess

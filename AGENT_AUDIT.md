@@ -1,6 +1,6 @@
 # Agent audit
 
-A pass over Brahma as an autonomous system, not just its frontend. Prompted by
+A pass over Kravein as an autonomous system, not just its frontend. Prompted by
 a real incident: asked to close a terminal on workspace 4, it closed the one on
 workspace 2 that was running its own server.
 
@@ -84,7 +84,7 @@ names the unit. Those are reviewable. Not systematically swept.
 ### A4-1 · `kill_process` could kill the terminal running the server · **P0 · fixed**
 
 `check_process` blocked only `pid == os.getpid()`. The parent terminal running
-`brahma serve` was fair game — killing it kills the assistant. This is the same
+`kravein serve` was fair game — killing it kills the assistant. This is the same
 mistake as the window bug, one layer down.
 
 Fixed: `safety.own_pids()` covers the whole ancestor chain and is now the single
@@ -93,7 +93,7 @@ definition used by `check_process`, `close_window`, `close_app` and
 
 ### A4-2 · Nothing protects the server's own listening socket or state dir · **P2 · not fixed**
 
-`delete_path` on `~/.local/state/brahma-echo` is merely destructive, not
+`delete_path` on `~/.local/state/kravein` is merely destructive, not
 blocked. Losing the audit log is bad but recoverable, so it is noted.
 
 ---
@@ -133,7 +133,7 @@ Not bugs — things a full assistant should do that this cannot yet.
 | **No undo** | Every destructive action is one-way. `delete_path` uses the trash, but closed windows and killed processes are gone. A short "undo the last thing" window would change the risk profile more than any confirmation. |
 | **No memory of the user's layout** | It cannot answer "put things back how they were" because it never records where they were. |
 | **No proactive reporting** | Nothing surfaces without being asked — no "your disk is nearly full". `notify` exists; nothing drives it. |
-| **Unported Windows features** | `send_message`, `smart_home_control`, `brahma_connect`, `flight_finder`, `file_processor`; gesture tracking blocked on Python 3.14 wheels. |
+| **Unported Windows features** | `send_message`, `smart_home_control`, `kravein_connect`, `flight_finder`, `file_processor`; gesture tracking blocked on Python 3.14 wheels. |
 
 ---
 

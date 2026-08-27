@@ -14,7 +14,7 @@ def get_base_dir():
 
 BASE_DIR         = get_base_dir()
 API_CONFIG_PATH  = BASE_DIR / "config" / "api_keys.json"
-PROJECTS_DIR     = Path.home() / "Desktop" / "BrahmaProjects"
+PROJECTS_DIR     = Path.home() / "Desktop" / "KraveinProjects"
 MAX_FIX_ATTEMPTS = 5
 MODEL_PLANNER    = "gemini-2.5-flash"
 MODEL_WRITER     = "gemini-2.5-flash"
@@ -441,7 +441,7 @@ def _resolve_workspace_directory(
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    project_dir = PROJECTS_DIR / (project_name or "brahma_project")
+    project_dir = PROJECTS_DIR / (project_name or "kravein_project")
     project_dir.mkdir(parents=True, exist_ok=True)
     return project_dir
 
@@ -475,7 +475,7 @@ def _build_project(
         if speak: speak(msg)
         return msg
 
-    proj_name    = project_name or plan.get("project_name", "brahma_project")
+    proj_name    = project_name or plan.get("project_name", "kravein_project")
     proj_name    = re.sub(r"[^\w\-]", "_", proj_name)
     project_dir  = _resolve_workspace_directory(workspace_path=workspace_path, project_name=proj_name)
 

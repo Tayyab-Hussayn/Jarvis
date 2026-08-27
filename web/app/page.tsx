@@ -34,17 +34,17 @@ import {
   type ViewId,
 } from "@/components/Shell";
 import { SystemView } from "@/components/SystemView";
-import { VoicePanel } from "@/components/VoicePanel";
 import { WindowsView } from "@/components/WindowsView";
 import type { SkillInfo, StateSnapshot, SystemSnapshot } from "@/lib/protocol";
+import { isVoiceLive } from "@/lib/protocol";
 import { useResource } from "@/lib/useApi";
-import { useBrahma } from "@/lib/useBrahma";
+import { useKravein } from "@/lib/useKravein";
 
 const IDS = new Set<string>(VIEWS.map((view) => view.id));
 const TITLES: Record<string, string> = Object.fromEntries(
   VIEWS.map((view) => [view.id, view.label]),
 );
-const RAIL_KEY = "brahma.railExpanded";
+const RAIL_KEY = "kravein.railExpanded";
 
 function useHashView(): [ViewId, (view: ViewId) => void] {
   const [view, setView] = useState<ViewId>("console");
@@ -81,21 +81,19 @@ export default function Page() {
     dismissPanelConfirm,
     reset,
     voicePhase,
-    voiceLines,
     voiceMode,
     voiceError,
+    voiceNotes,
     startVoice,
     stopVoice,
     restartVoice,
-    clearVoiceLines,
+    dismissVoiceError,
     voiceStopping,
-    voicePartial,
-  } = useBrahma();
+  } = useKravein();
 
   const [view, setView] = useHashView();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railExpanded, setRailExpanded] = useState(false);
-  const [voiceOpen, setVoiceOpen] = useState(false);
 
   const skills = useResource<{ skills: SkillInfo[] }>("/api/skills");
   const state = useResource<StateSnapshot>("/api/state");
@@ -109,32 +107,30 @@ export default function Page() {
     live_configured: boolean;
   }>("/api/voice");
 
-  // Voice needs both halves of the pipeline: something to hear with and
-  // something to answer through. Reporting "ready" on one of the two would
-  // hand the user a control that starts and then immediately fails.
-  const voiceReady = Boolean(
-    voice.data?.stt_backend && voice.data?.tts_available,
-  );
-  const voiceUnavailableReason = voice.data
-    ? !voice.data.stt_backend
-      ? "No speech recognition available on this machine."
-      : !voice.data.tts_available
-        ? "No audio playback — install mpv."
-        : ""
-    : "";
+  // There are two independent pipelines and either one is enough. The
+  // on-device path needs both halves — something to hear with and something to
+  // answer through — while Live needs only a Gemini key, since it does both
+  // itself. Gating everything on the local halves is what disabled voice
+  // entirely on a machine with a key but no local speech model, even though
+  // the server would happily have started Live.
+  const localReady = Boolean(voice.data?.stt_backend && voice.data?.tts_available);
+  const liveConfigured = Boolean(voice.data?.live_configured);
+  const voiceReady = localReady || liveConfigured;
+  const voiceUnavailableReason = voiceReady || !voice.data
+    ? ""
+    : [
+        !voice.data.stt_backend ? "no speech recognition" : "",
+        !voice.data.tts_available ? "no audio playback (install mpv)" : "",
+        "no Gemini key for Live",
+      ]
+        .filter(Boolean)
+        .join(", ");
 
-  // Selecting Voice also reveals the panel, so the full transcript and the
-  // local/live choice are one click away rather than hidden behind the top bar.
-  //
-  // Live is the default when a key is configured: it answers in ~7s against
-  // ~19s for the on-device pipeline, and it hears continuously instead of
-  // recording an utterance at a time. The panel still offers "Start" for the
-  // free local path, and this falls back to it when Live is unavailable rather
-  // than presenting a button that cannot work.
-  const selectVoice = useCallback(() => {
-    setVoiceOpen(true);
-    startVoice(voice.data?.live_configured ? "live" : "local");
-  }, [startVoice, voice.data?.live_configured]);
+  // Send the preference, not a decision. `voice.mode` in settings picks the
+  // pipeline and the server resolves it — "auto" prefers Live when a key is
+  // present, because it answers in ~7s against ~19s and hears continuously
+  // rather than an utterance at a time.
+  const selectVoice = useCallback(() => startVoice("auto"), [startVoice]);
 
   useEffect(() => {
     setRailExpanded(localStorage.getItem(RAIL_KEY) === "1");
@@ -153,18 +149,21 @@ export default function Page() {
         event.preventDefault();
         setPaletteOpen((open) => !open);
       }
+      // There is no panel to show or hide any more, so this starts and stops
+      // the session itself.
       if (
         (event.metaKey || event.ctrlKey) &&
         event.shiftKey &&
         event.key.toLowerCase() === "v"
       ) {
         event.preventDefault();
-        setVoiceOpen((open) => !open);
+        if (isVoiceLive(voicePhase)) stopVoice();
+        else selectVoice();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [voicePhase, stopVoice, selectVoice]);
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -177,15 +176,15 @@ export default function Page() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
-          title={TITLES[view] ?? "Brahma"}
+          title={TITLES[view] ?? "Kravein"}
           hostname={state.data?.hostname}
           environment={hello?.environment}
           system={system.data}
           connection={connection}
           onPalette={() => setPaletteOpen(true)}
-          voiceActive={voicePhase !== "off" && voicePhase !== "error"}
-          voiceOpen={voiceOpen}
-          onToggleVoice={() => setVoiceOpen((open) => !open)}
+          voiceActive={isVoiceLive(voicePhase)}
+          voiceOpen={isVoiceLive(voicePhase)}
+          onToggleVoice={() => (isVoiceLive(voicePhase) ? stopVoice() : selectVoice())}
         />
 
         <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -207,7 +206,7 @@ export default function Page() {
                 }}
               >
                 No valid token. Start the server with{" "}
-                <code className="font-[family-name:var(--font-mono)]">brahma serve</code>{" "}
+                <code className="font-[family-name:var(--font-mono)]">kravein serve</code>{" "}
                 and open the URL it prints — it carries the token.
               </div>
             )}
@@ -223,12 +222,16 @@ export default function Page() {
                 onReset={reset}
                 voicePhase={voicePhase}
                 voiceStopping={voiceStopping}
-                voiceLines={voiceLines}
-                voicePartial={voicePartial}
+                voiceMode={voiceMode}
+                voiceError={voiceError}
+                voiceNote={voiceNotes[voiceNotes.length - 1] ?? ""}
                 voiceReady={voiceReady}
+                canSwitchPipeline={localReady && liveConfigured}
                 voiceUnavailableReason={voiceUnavailableReason}
                 onSelectText={stopVoice}
                 onSelectVoice={selectVoice}
+                onRestartVoice={restartVoice}
+                onDismissVoiceError={dismissVoiceError}
               />
             )}
             {view === "system" && <SystemView run={run} system={system.data} />}
@@ -243,21 +246,6 @@ export default function Page() {
           </div>
         </main>
 
-        <VoicePanel
-          open={voiceOpen}
-          onClose={() => setVoiceOpen(false)}
-          phase={voicePhase}
-          lines={voiceLines}
-          partial={voicePartial}
-          mode={voiceMode}
-          error={voiceError}
-          readiness={voice.data}
-          connected={connection === "open"}
-          onStart={startVoice}
-          onStop={stopVoice}
-          onRestart={() => restartVoice(voice.data?.live_configured ? "live" : "local")}
-          onClear={clearVoiceLines}
-        />
         </div>
       </div>
 

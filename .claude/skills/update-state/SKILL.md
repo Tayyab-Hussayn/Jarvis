@@ -13,7 +13,7 @@ Run these steps in order, then report a short summary of what changed.
 ```
 git status --short
 git log -1 --format="%H %ci"
-.venv/bin/python -m compileall -q brahma/
+.venv/bin/python -m compileall -q kravein/
 ```
 
 Local git only — no remote/branch state to check. Note whether the compile check currently

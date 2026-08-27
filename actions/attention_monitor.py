@@ -350,10 +350,10 @@ def speak_native(text: str) -> None:
     except Exception:
         pass
 
-    audio_path = os.path.join(tempfile.gettempdir(), f"brahma_edge_tts_{uuid.uuid4().hex}.mp3")
+    audio_path = os.path.join(tempfile.gettempdir(), f"kravein_edge_tts_{uuid.uuid4().hex}.mp3")
     try:
         # Use a male neural voice for app speech so daily briefing and alerts sound
-        # closer to Brahma's normal male audio output.
+        # closer to Kravein's normal male audio output.
         communicator = edge_tts.Communicate(text, voice="en-US-GuyNeural")
         communicator.save_sync(audio_path)
     except Exception as exc:  # pragma: no cover
@@ -361,7 +361,7 @@ def speak_native(text: str) -> None:
         _cleanup_current_audio()
         return
 
-    player_alias = f"brahma_tts_{uuid.uuid4().hex}"
+    player_alias = f"kravein_tts_{uuid.uuid4().hex}"
     try:
         result = ctypes.windll.winmm.mciSendStringW(
             f'open "{audio_path}" type mpegvideo alias {player_alias}',
@@ -627,7 +627,7 @@ class AttentionMonitor:
                 continue
 
             hay = f"{title} {win.get('class') or ''} {proc_name}".lower()
-            if "brahma" in hay:
+            if "kravein" in hay:
                 continue
 
             if app in {"Zoom", "Teams", "WhatsApp"} and _contains_any(hay, ("meeting", "call", "incoming", "ringing", "conference", "joined")):

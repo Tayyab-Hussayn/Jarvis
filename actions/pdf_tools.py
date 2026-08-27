@@ -1,5 +1,5 @@
 """
-pdf_tools.py - Brahma AI PDF support
+pdf_tools.py - Kravein AI PDF support
 
 Creates editable-in-spirit PDF documents from structured content and converts
 existing DOCX / text files into readable PDFs without relying on LibreOffice.
@@ -15,7 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_NAME = "Brahma AI - Lite"
+PROJECT_NAME = "Kravein AI - Lite"
 DEFAULT_OUTPUT_DIR = Path.home() / "Downloads"
 
 
@@ -225,17 +225,17 @@ def _render_title_page(story, pdf, title: str, subtitle: str | None, styles):
     story.append(
         pdf["Paragraph"](
             title,
-            styles["brahma_doc_title"],
+            styles["kravein_doc_title"],
         )
     )
     if subtitle:
         story.append(pdf["Spacer"](1, 0.15 * pdf["inch"]))
-        story.append(pdf["Paragraph"](subtitle, styles["brahma_doc_subtitle"]))
+        story.append(pdf["Paragraph"](subtitle, styles["kravein_doc_subtitle"]))
     story.append(pdf["Spacer"](1, 0.35 * pdf["inch"]))
     story.append(
         pdf["Paragraph"](
             f"Created by {PROJECT_NAME} on {datetime.now().strftime('%B %d, %Y')}",
-            styles["brahma_doc_meta"],
+            styles["kravein_doc_meta"],
         )
     )
     story.append(pdf["Spacer"](1, 0.5 * pdf["inch"]))
@@ -253,18 +253,18 @@ def _pdf_story_from_blocks(blocks: list[dict], pdf, styles):
         if kind == "heading":
             number_index = 1
             level = int(block.get("level") or 1)
-            story.append(pdf["Paragraph"](text, styles.get(f"brahma_h{min(max(level, 1), 3)}", styles["brahma_h1"])))
+            story.append(pdf["Paragraph"](text, styles.get(f"kravein_h{min(max(level, 1), 3)}", styles["kravein_h1"])))
             story.append(pdf["Spacer"](1, 0.1 * pdf["inch"]))
         elif kind == "bullet":
-            story.append(pdf["Paragraph"](f"- {text}", styles["brahma_body"]))
+            story.append(pdf["Paragraph"](f"- {text}", styles["kravein_body"]))
             story.append(pdf["Spacer"](1, 0.03 * pdf["inch"]))
         elif kind == "numbered":
-            story.append(pdf["Paragraph"](f"{number_index}. {text}", styles["brahma_body"]))
+            story.append(pdf["Paragraph"](f"{number_index}. {text}", styles["kravein_body"]))
             number_index += 1
             story.append(pdf["Spacer"](1, 0.06 * pdf["inch"]))
         elif kind == "table":
             rows = block.get("text") or []
-            table_data = [[pdf["Paragraph"](cell, styles["brahma_table_cell"]) for cell in row.split(" | ")] for row in rows]
+            table_data = [[pdf["Paragraph"](cell, styles["kravein_table_cell"]) for cell in row.split(" | ")] for row in rows]
             if table_data:
                 table = pdf["Table"](table_data, repeatRows=0)
                 table.setStyle(pdf["TableStyle"]([
@@ -280,7 +280,7 @@ def _pdf_story_from_blocks(blocks: list[dict], pdf, styles):
                 story.append(table)
                 story.append(pdf["Spacer"](1, 0.15 * pdf["inch"]))
         else:
-            story.append(pdf["Paragraph"](text, styles["brahma_body"]))
+            story.append(pdf["Paragraph"](text, styles["kravein_body"]))
             story.append(pdf["Spacer"](1, 0.09 * pdf["inch"]))
     return story
 
@@ -289,7 +289,7 @@ def create_pdf(parameters: dict, player=None) -> str:
     pdf = _import_pdf()
     title = (parameters.get("title") or parameters.get("name") or "Document").strip()
     subtitle = (parameters.get("subtitle") or "").strip()
-    output_path = _resolve_output_path(parameters.get("output_path"), title, ".pdf", "brahma_ai_output")
+    output_path = _resolve_output_path(parameters.get("output_path"), title, ".pdf", "kravein_ai_output")
     auto_open = parameters.get("auto_open", True)
     action = (parameters.get("action") or "create").lower().strip()
     source_path_str = (parameters.get("file_path") or "").strip()
@@ -297,7 +297,7 @@ def create_pdf(parameters: dict, player=None) -> str:
 
     styles = pdf["getSampleStyleSheet"]()
     styles.add(pdf["ParagraphStyle"](
-        name="brahma_doc_title",
+        name="kravein_doc_title",
         parent=styles["Title"],
         fontName="Helvetica-Bold",
         fontSize=22,
@@ -307,7 +307,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         spaceAfter=10,
     ))
     styles.add(pdf["ParagraphStyle"](
-        name="brahma_doc_subtitle",
+        name="kravein_doc_subtitle",
         parent=styles["BodyText"],
         fontName="Helvetica",
         fontSize=12,
@@ -317,7 +317,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         spaceAfter=6,
     ))
     styles.add(pdf["ParagraphStyle"](
-        name="brahma_doc_meta",
+        name="kravein_doc_meta",
         parent=styles["BodyText"],
         fontName="Helvetica",
         fontSize=9,
@@ -326,7 +326,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         alignment=pdf["TA_CENTER"],
     ))
     styles.add(pdf["ParagraphStyle"](
-        name="brahma_body",
+        name="kravein_body",
         parent=styles["BodyText"],
         fontName="Helvetica",
         fontSize=10.5,
@@ -335,7 +335,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         spaceAfter=6,
     ))
     styles.add(pdf["ParagraphStyle"](
-        name="brahma_h1",
+        name="kravein_h1",
         parent=styles["Heading1"],
         fontName="Helvetica-Bold",
         fontSize=15,
@@ -345,7 +345,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         spaceAfter=6,
     ))
     styles.add(pdf["ParagraphStyle"](
-        name="brahma_h2",
+        name="kravein_h2",
         parent=styles["Heading2"],
         fontName="Helvetica-Bold",
         fontSize=12.5,
@@ -355,7 +355,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         spaceAfter=5,
     ))
     styles.add(pdf["ParagraphStyle"](
-        name="brahma_h3",
+        name="kravein_h3",
         parent=styles["Heading3"],
         fontName="Helvetica-Bold",
         fontSize=11,
@@ -365,7 +365,7 @@ def create_pdf(parameters: dict, player=None) -> str:
         spaceAfter=4,
     ))
     styles.add(pdf["ParagraphStyle"](
-        name="brahma_table_cell",
+        name="kravein_table_cell",
         parent=styles["BodyText"],
         fontName="Helvetica",
         fontSize=9.5,
@@ -407,7 +407,7 @@ def create_pdf(parameters: dict, player=None) -> str:
     story = []
     if title or subtitle:
         _render_title_page(story, pdf, title, subtitle, styles)
-        story.append(pdf["Paragraph"]("<hr/>", styles["brahma_body"]))
+        story.append(pdf["Paragraph"]("<hr/>", styles["kravein_body"]))
         story.append(pdf["Spacer"](1, 0.18 * pdf["inch"]))
 
     if action == "create_letter":
@@ -418,20 +418,20 @@ def create_pdf(parameters: dict, player=None) -> str:
         signature = (parameters.get("signature") or parameters.get("author") or "Tayyab Hussayn").strip()
         body_text = parameters.get("body") or parameters.get("content") or ""
 
-        story.append(pdf["Paragraph"](date_value, styles["brahma_body"]))
+        story.append(pdf["Paragraph"](date_value, styles["kravein_body"]))
         story.append(pdf["Spacer"](1, 0.08 * pdf["inch"]))
         if recipient:
-            story.append(pdf["Paragraph"](recipient, styles["brahma_body"]))
+            story.append(pdf["Paragraph"](recipient, styles["kravein_body"]))
             story.append(pdf["Spacer"](1, 0.06 * pdf["inch"]))
-        story.append(pdf["Paragraph"](salutation, styles["brahma_body"]))
+        story.append(pdf["Paragraph"](salutation, styles["kravein_body"]))
         story.append(pdf["Spacer"](1, 0.08 * pdf["inch"]))
         for para in _normalize_list(parameters.get("paragraphs")) or [p.strip() for p in re.split(r"\n\s*\n", str(body_text)) if p.strip()]:
-            story.append(pdf["Paragraph"](str(para), styles["brahma_body"]))
+            story.append(pdf["Paragraph"](str(para), styles["kravein_body"]))
             story.append(pdf["Spacer"](1, 0.08 * pdf["inch"]))
         story.append(pdf["Spacer"](1, 0.18 * pdf["inch"]))
-        story.append(pdf["Paragraph"](closing, styles["brahma_body"]))
+        story.append(pdf["Paragraph"](closing, styles["kravein_body"]))
         story.append(pdf["Spacer"](1, 0.3 * pdf["inch"]))
-        story.append(pdf["Paragraph"](signature, styles["brahma_body"]))
+        story.append(pdf["Paragraph"](signature, styles["kravein_body"]))
     else:
         story.extend(_pdf_story_from_blocks(blocks, pdf, styles))
 

@@ -20,8 +20,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from brahma import events, webauth  # noqa: E402
-from brahma.safety import Danger  # noqa: E402
+from kravein import events, webauth  # noqa: E402
+from kravein.safety import Danger  # noqa: E402
 
 
 @pytest.fixture
@@ -83,7 +83,7 @@ def test_loopback_hosts_allowed(host):
 
 @pytest.mark.parametrize("host", [
     "evil.example.com:8787",     # a rebound name still carries its own Host
-    "brahma.attacker.test",
+    "kravein.attacker.test",
     "192.168.1.10:8787",
 ])
 def test_non_loopback_hosts_rejected(host):
@@ -260,7 +260,7 @@ async def test_observer_emits_structured_tool_frames():
 
 def test_two_argument_observers_still_work():
     """The REPL and voice session pass a 2-arg callback; it must not break."""
-    from brahma.agent import _normalize_observer
+    from kravein.agent import _normalize_observer
 
     seen = []
     normalized = _normalize_observer(lambda kind, text: seen.append((kind, text)))
@@ -269,7 +269,7 @@ def test_two_argument_observers_still_work():
 
 
 def test_three_argument_observers_receive_data():
-    from brahma.agent import _normalize_observer
+    from kravein.agent import _normalize_observer
 
     seen = []
     normalized = _normalize_observer(
@@ -281,7 +281,7 @@ def test_three_argument_observers_receive_data():
 
 def test_bound_method_observer_arity_is_detected():
     """`self` must not be counted — that's how a 2-arg method gets misread."""
-    from brahma.agent import _normalize_observer
+    from kravein.agent import _normalize_observer
 
     class Repl:
         def __init__(self):
@@ -300,7 +300,7 @@ def test_bound_method_observer_arity_is_detected():
 # ---------------------------------------------------------------------------
 
 def test_settings_redaction_hides_key_material():
-    from brahma.server import _redact
+    from kravein.server import _redact
 
     out = _redact({
         "llm": {"provider": "cline", "api_key": "sk-secret", "model": "x"},
@@ -317,7 +317,7 @@ def test_settings_redaction_hides_key_material():
 
 def test_patching_settings_ignores_redaction_placeholders():
     """A client that GETs then POSTs settings must not overwrite a real key."""
-    from brahma.server import _deep_merge
+    from kravein.server import _deep_merge
 
     base = {"llm": {"api_key": "real-key", "model": "old"}}
     merged = _deep_merge(base, {"llm": {"api_key": "***", "model": "new"}})
@@ -341,7 +341,7 @@ WS_HEADERS = {"Host": "127.0.0.1:8787"}
 def client():
     from fastapi.testclient import TestClient
 
-    from brahma.server import create_app
+    from kravein.server import create_app
 
     return TestClient(create_app(TOKEN), base_url="http://127.0.0.1:8787")
 
@@ -441,7 +441,7 @@ def test_stale_confirm_reply_is_reported(client):
 
 def _stub_llm(monkeypatch, script):
     """Drive the agent with a fixed sequence of replies instead of a model."""
-    from brahma import llm as _llm
+    from kravein import llm as _llm
 
     calls = {"n": 0}
 
@@ -471,7 +471,7 @@ def test_destructive_skill_asks_the_browser_and_honours_a_denial(
     monkeypatch, tmp_path, client
 ):
     """The whole bridge: model -> skill -> enforce() -> browser -> back."""
-    from brahma.llm import Reply, ToolCall
+    from kravein.llm import Reply, ToolCall
 
     victim = tmp_path / "victim.txt"
     victim.write_text("do not delete me")
@@ -517,7 +517,7 @@ def test_destructive_skill_asks_the_browser_and_honours_a_denial(
 
 def test_second_ask_while_busy_is_rejected_not_queued(monkeypatch, client):
     """Queuing would stack requests behind an unanswered confirmation."""
-    from brahma.llm import Reply
+    from kravein.llm import Reply
 
     slow = Reply(provider="cline", model="stub")
     slow.text = "done"
@@ -554,7 +554,7 @@ def test_approved_confirmation_actually_runs_the_skill(
     Without this, a bridge that denied *everything* would still pass the
     denial test and look correct.
     """
-    from brahma.llm import Reply, ToolCall
+    from kravein.llm import Reply, ToolCall
 
     doomed = tmp_path / "doomed.txt"
     doomed.write_text("delete me")
@@ -738,7 +738,7 @@ def test_processes_snapshot_reports_real_cpu_on_first_call():
     """
     import time
 
-    from brahma import server
+    from kravein import server
 
     server._PROC_CACHE.clear()
     server.prime_cpu_counters()
@@ -754,7 +754,7 @@ def test_processes_snapshot_reports_real_cpu_on_first_call():
 
 def test_processes_snapshot_prunes_dead_entries():
     """The cache must not grow without bound on a long-running server."""
-    from brahma import server
+    from kravein import server
 
     server._PROC_CACHE.clear()
     server._PROC_CACHE[-1] = object()      # a pid that cannot exist
@@ -764,7 +764,7 @@ def test_processes_snapshot_prunes_dead_entries():
 
 def test_state_snapshot_carries_a_hostname():
     """The top bar names the machine being controlled."""
-    from brahma import server
+    from kravein import server
 
     assert isinstance(server._state_snapshot()["hostname"], str)
 
@@ -780,7 +780,7 @@ def test_state_snapshot_carries_a_hostname():
 
 
 def test_voice_start_reports_readiness_problems_instead_of_starting(client, monkeypatch):
-    from brahma import voice
+    from kravein import voice
 
     monkeypatch.setattr(
         voice, "readiness", lambda: (False, ["No microphone", "No speech recognition"])
@@ -819,8 +819,8 @@ def test_voice_session_uses_an_injected_confirmer_rather_than_asking_aloud():
     exact path or pid being acted on. This asserts the injection is honoured
     and that nothing is spoken to reach that decision.
     """
-    from brahma import voice
-    from brahma.safety import Danger
+    from kravein import voice
+    from kravein.safety import Danger
 
     seen: list[tuple[str, str]] = []
 
@@ -842,7 +842,7 @@ def test_voice_agent_is_separate_from_the_text_conversation():
     its own. If that ever changed to share the web agent, the two transcripts
     would interleave and each would misrepresent what the model actually saw.
     """
-    from brahma import voice
+    from kravein import voice
 
     convo = voice.VoiceSession()
     assert convo.agent is not None
@@ -904,7 +904,7 @@ def _drive(session, responses):
 
 def test_live_transcription_deltas_become_one_line():
     """Gemini streams a syllable at a time; the UI must see a sentence."""
-    from brahma.live import LiveSession
+    from kravein.live import LiveSession
 
     seen: list[tuple[str, str]] = []
     live = LiveSession(observer=lambda k, t: seen.append((k, t)))
@@ -924,7 +924,7 @@ def test_live_transcription_deltas_become_one_line():
 
 def test_live_emits_the_assistants_reply():
     """Replies used to be dropped: only `speaking` was sent, carrying phase."""
-    from brahma.live import LiveSession
+    from kravein.live import LiveSession
 
     seen: list[tuple[str, str]] = []
     live = LiveSession(observer=lambda k, t: seen.append((k, t)))
@@ -941,7 +941,7 @@ def test_live_emits_the_assistants_reply():
 
 
 def test_live_partials_are_emitted_for_live_feedback():
-    from brahma.live import LiveSession
+    from kravein.live import LiveSession
 
     seen: list[tuple[str, str]] = []
     live = LiveSession(observer=lambda k, t: seen.append((k, t)))
@@ -952,7 +952,7 @@ def test_live_partials_are_emitted_for_live_feedback():
 
 
 def test_live_barge_in_keeps_what_was_already_said():
-    from brahma.live import LiveSession
+    from kravein.live import LiveSession
 
     seen: list[tuple[str, str]] = []
     live = LiveSession(observer=lambda k, t: seen.append((k, t)))
@@ -972,7 +972,7 @@ def test_live_stop_is_seen_by_a_coroutine_parked_on_the_event():
     import asyncio
     import threading
 
-    from brahma.live import LiveSession
+    from kravein.live import LiveSession
 
     live = LiveSession()
     woke = threading.Event()
@@ -1002,7 +1002,7 @@ def test_live_audio_playback_does_not_block_the_event_loop():
     import time
     import types as _types
 
-    from brahma.live import LiveSession
+    from kravein.live import LiveSession
 
     class _Stream:
         def start(self): pass
@@ -1057,7 +1057,7 @@ def test_local_voice_emits_answer_before_the_shortened_spoken_form():
     """
     import inspect
 
-    from brahma import voice
+    from kravein import voice
 
     source = inspect.getsource(voice.VoiceSession.run)
     answer_at = source.find('_emit("answer"')
@@ -1080,7 +1080,7 @@ def test_voice_stop_is_answered_even_when_nothing_is_running():
     """
     from fastapi.testclient import TestClient
 
-    from brahma.server import create_app
+    from kravein.server import create_app
 
     client = TestClient(create_app(TOKEN), base_url="http://127.0.0.1:8787")
     with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
@@ -1096,7 +1096,7 @@ def test_voice_stop_is_idempotent():
     """Clicking Text repeatedly must not need a session to exist."""
     from fastapi.testclient import TestClient
 
-    from brahma.server import create_app
+    from kravein.server import create_app
 
     client = TestClient(create_app(TOKEN), base_url="http://127.0.0.1:8787")
     with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
@@ -1115,7 +1115,7 @@ def test_live_does_not_truncate_speech_when_the_model_starts_replying():
     audio itself reached the model intact, so the reply was correct and only
     the transcript was wrong.
     """
-    from brahma.live import LiveSession
+    from kravein.live import LiveSession
 
     seen: list[tuple[str, str]] = []
     live = LiveSession(observer=lambda k, t: seen.append((k, t)))
@@ -1136,7 +1136,7 @@ def test_live_does_not_truncate_speech_when_the_model_starts_replying():
 
 def test_live_pins_the_transcription_language(monkeypatch):
     """Auto-detect rendered English speech in Malayalam and Hindi script."""
-    from brahma import live as live_mod
+    from kravein import live as live_mod
 
     session = live_mod.LiveSession()
     cfg = session._config()
@@ -1152,8 +1152,8 @@ def test_live_pins_the_transcription_language(monkeypatch):
     ("", "en-US"),
 ])
 def test_voice_language_setting_is_honoured(monkeypatch, configured, expected):
-    from brahma import config as cfg_mod
-    from brahma import live as live_mod
+    from kravein import config as cfg_mod
+    from kravein import live as live_mod
 
     real = cfg_mod.get
     monkeypatch.setattr(
@@ -1210,7 +1210,7 @@ def test_voice_confirmation_is_announced_in_the_transcript(monkeypatch):
     """The panel showed the tool call and then nothing at all."""
     import inspect
 
-    from brahma import server
+    from kravein import server
 
     source = inspect.getsource(server.create_app)
     assert "Waiting for your confirmation" in source, (
@@ -1236,7 +1236,7 @@ def test_live_tool_timeout_returns_a_result_to_the_model():
     """
     import asyncio
 
-    from brahma import live as live_mod
+    from kravein import live as live_mod
 
     session = live_mod.LiveSession()
     monkey = live_mod.TOOL_TIMEOUT
@@ -1260,7 +1260,7 @@ def test_live_tool_timeout_returns_a_result_to_the_model():
 def test_live_tool_failure_returns_a_result_rather_than_raising():
     import asyncio
 
-    from brahma import live as live_mod
+    from kravein import live as live_mod
 
     session = live_mod.LiveSession()
 
@@ -1275,8 +1275,32 @@ def test_live_tool_failure_returns_a_result_rather_than_raising():
 def test_live_tool_success_is_passed_through():
     import asyncio
 
-    from brahma import live as live_mod
+    from kravein import live as live_mod
 
     session = live_mod.LiveSession()
     session._run_tool = lambda name, args: "Battery is 99%."
     assert asyncio.run(session._call_tool("battery_status", {})) == "Battery is 99%."
+
+
+def test_voice_start_resolves_the_pipeline_server_side(client, monkeypatch):
+    """The browser sends a preference; the server decides.
+
+    It used to send a pipeline it had chosen from a readiness snapshot, which
+    disabled voice entirely on a machine with a Gemini key but no local speech
+    model — the server would have started Live quite happily.
+    """
+    from kravein import voice
+
+    monkeypatch.setattr(voice, "readiness", lambda: (False, ["No speech recognition"]))
+    monkeypatch.setattr(voice, "live_available", lambda: (False, "No Gemini key"))
+
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())          # hello
+        ws.send_text(json.dumps({"t": "voice_start", "mode": "auto"}))
+        frame = json.loads(ws.receive_text())
+
+    assert frame["phase"] == "error"
+    # Both halves reported, so the user knows neither path is available rather
+    # than only hearing about the one that happened to be checked first.
+    assert "No speech recognition" in frame["text"]
+    assert "No Gemini key" in frame["text"]

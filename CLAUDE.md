@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## The assistant is called Kravein
+
+Renamed from **Brahma / Brahma-Echo** on 2026-08-24. Any surviving `brahma` name, import, path or
+string is a leftover, not a decision — replace it with `kravein` on sight rather than working
+around it. The `brahma-echo` XDG directories were migrated, and `config.py` still falls back to
+them; delete that fallback and the old paths once nothing is using them. The one deliberate
+exception is `brahma-connect-android/`, left untouched because its Java package move cannot be
+build-tested here.
+
 ## How we work
 
 Solo, fully local project — just the user and Claude Code. No task list, no third-party review,
@@ -38,9 +47,9 @@ per-phase updates during active work happen on their own, without that command.
 
 | Tree | Status |
 |---|---|
-| `brahma/` | **The live Linux port. Work here.** |
-| `web/` | **The frontend (Next.js). Work here.** Built output lands in `brahma/web-dist/`. |
-| `main.py`, `ui.py`, `actions/`, `agent/`, `smart_home/`, `brahma_connect/`, `dashboard/`, `extra/` | Original Windows build. Kept for reference; **do not assume it runs.** |
+| `kravein/` | **The live Linux port. Work here.** |
+| `web/` | **The frontend (Next.js). Work here.** Built output lands in `kravein/web-dist/`. |
+| `main.py`, `ui.py`, `actions/`, `agent/`, `smart_home/`, `kravein_connect/`, `dashboard/`, `extra/` | Original Windows build. Kept for reference; **do not assume it runs.** |
 
 `actions/attention_monitor.py` imports `ctypes.wintypes` and `pyautogui` at module top level, so `main.py` cannot even import on Linux. The Windows tree was deliberately left untouched rather than half-migrated. `README-LINUX.md` documents what was ported and what was not.
 
@@ -52,30 +61,30 @@ Everything runs from the venv; there is no global install.
 ./install-linux.sh                          # venv + native tool check + optional systemd unit
 .venv/bin/python -m pytest tests/test_linux_port.py -q     # the port's own suite (130 tests)
 .venv/bin/python -m pytest tests/test_linux_port.py::test_name -q   # single test
-.venv/bin/python -m compileall -q brahma/   # fast syntax check
+.venv/bin/python -m compileall -q kravein/   # fast syntax check
 
-.venv/bin/python -m brahma                  # interactive REPL
-.venv/bin/python -m brahma doctor           # environment + provider health
-.venv/bin/python -m brahma run <skill> k=v  # run one skill, no model involved
-.venv/bin/python -m brahma ask "..."        # one request
-.venv/bin/python -m brahma audit -n 30      # what the assistant actually did
-.venv/bin/python -m brahma voice test       # prove the whole voice chain
+.venv/bin/python -m kravein                  # interactive REPL
+.venv/bin/python -m kravein doctor           # environment + provider health
+.venv/bin/python -m kravein run <skill> k=v  # run one skill, no model involved
+.venv/bin/python -m kravein ask "..."        # one request
+.venv/bin/python -m kravein audit -n 30      # what the assistant actually did
+.venv/bin/python -m kravein voice test       # prove the whole voice chain
 .venv/bin/python tools/eval_models.py MODEL # score a model on this workload
 
-.venv/bin/python -m brahma serve            # web UI on 127.0.0.1:8787
+.venv/bin/python -m kravein serve            # web UI on 127.0.0.1:8787
 .venv/bin/python -m pytest tests/test_web_transport.py -q   # transport suite (48 tests)
 cd web && npm run dev                       # frontend dev server on :3000 (talks to :8787)
-cd web && npm run build                     # static export -> brahma/web-dist/
+cd web && npm run build                     # static export -> kravein/web-dist/
 ```
 
-`tests/test_brahma_connect*.py` are from the Windows tree. `tests/test_screen_processor.py` and `test_gesture_utils.py` need `cv2`/`mediapipe`, which have no Python 3.14 wheels — those failures are expected.
+`tests/test_kravein_connect*.py` are from the Windows tree. `tests/test_screen_processor.py` and `test_gesture_utils.py` need `cv2`/`mediapipe`, which have no Python 3.14 wheels — those failures are expected.
 
 ## Architecture
 
 Request → `agent.Agent.ask()` → `llm.LLM.complete()` → model returns tool calls →
 `registry.dispatch()` → skill function → `safety.enforce()` → result fed back → repeat.
 
-**`registry.py` is the spine.** A skill is a plain function with `@skill(...)`. The decorator reads the signature, type hints and docstring `Args:` block to build the LLM tool schema — there is no hand-written tool list anywhere. Adding a capability means dropping a function into `brahma/skills/`; no core file changes. This replaced a 1,000-line `TOOL_DECLARATIONS` array plus an `if name == ...` chain in the old `main.py`.
+**`registry.py` is the spine.** A skill is a plain function with `@skill(...)`. The decorator reads the signature, type hints and docstring `Args:` block to build the LLM tool schema — there is no hand-written tool list anywhere. Adding a capability means dropping a function into `kravein/skills/`; no core file changes. This replaced a 1,000-line `TOOL_DECLARATIONS` array plus an `if name == ...` chain in the old `main.py`.
 
 Parameters named `_source`, `_confirm`, `_context` are injected by the dispatcher and hidden from the model.
 
@@ -85,16 +94,16 @@ The confirmer is **thread-local** (`safety.confirmer_scope`). The REPL supplies 
 
 **`platform/` wraps every OS concern.** Skills never shell out directly. Each module picks a backend at runtime (`detect.py`), so the same skill works on Hyprland, Sway or X11. `platform/shell.py` is the only place subprocesses are spawned, which is what makes the audit trail complete.
 
-**`server.py` + `events.py` are the web transport.** `brahma serve` only. The agent loop is
+**`server.py` + `events.py` are the web transport.** `kravein serve` only. The agent loop is
 blocking, so it runs on a worker thread; `events.Session` carries frames out to the websocket and
 confirmations back in. `safety.Confirmer` is a *blocking* call, so the worker parks on a
 `threading.Event` while the browser is asked — and every failure path (timeout, dropped socket,
 unknown id) resolves to **deny**. `webauth.py` gates access on a token plus Origin and Host
 checks; loopback binding alone is not a security boundary.
 
-**`audit.py`** appends JSONL to `~/.local/state/brahma-echo/audit.jsonl` with key-like fields redacted. When debugging "why did it do that", read the audit log first — it records tool calls, arguments, results, confirmations and provider failovers.
+**`audit.py`** appends JSONL to `~/.local/state/kravein/audit.jsonl` with key-like fields redacted. When debugging "why did it do that", read the audit log first — it records tool calls, arguments, results, confirmations and provider failovers.
 
-Config is XDG (`~/.config/brahma-echo/settings.json`), not repo-local. `config.py` still reads the old `config/*.json` as a fallback.
+Config is XDG (`~/.config/kravein/settings.json`), not repo-local. `config.py` still reads the old `config/*.json` as a fallback.
 
 ## Hard-won knowledge
 
@@ -147,7 +156,7 @@ event codes work (`28:1 28:0` for Enter). The port shipped symbolic names, which
 **Clear the prompt before typing into a terminal.** Synthetic input appends to whatever is
 already staged on the line, so a half-typed command or a previous failed attempt gets
 concatenated and the shell runs the result. `echo DIRECT_OK` arrived as
-`/tmp/brahma-term-test. OK DIRECT_OK`. `skills/terminal.py` sends Ctrl+C then Ctrl+U first.
+`/tmp/kravein-term-test. OK DIRECT_OK`. `skills/terminal.py` sends Ctrl+C then Ctrl+U first.
 
 **Synthetic input cannot be confirmed.** Keystrokes go to the compositor and nothing comes back,
 so a skill that types must report what it *did* rather than assert the command ran. The first
@@ -174,9 +183,9 @@ listening but unable to answer, recoverable only by stopping it by hand. `live.p
 call at `TOOL_TIMEOUT` and always returns *something*, and records
 `voice.live_tool_start`/`_end`/`_timeout` so a real stall leaves evidence.
 
-**A bulk window operation must exclude Brahma's own session.** `close_workspace` filters out any
+**A bulk window operation must exclude Kravein's own session.** `close_workspace` filters out any
 window whose pid is this process or one of its ancestors — normally the terminal running
-`brahma serve` — and says it skipped them. This is structural, not a confirmation: it holds even
+`kravein serve` — and says it skipped them. This is structural, not a confirmation: it holds even
 when the user answers yes, because "close workspace 2" is not a request to kill the thing doing
 the closing. An earlier session killed the user's terminal exactly this way.
 
@@ -214,6 +223,100 @@ hints to tell a request object from a query parameter. Postponed annotations are
 against module scope, where the lazily-imported `Request`/`WebSocket` names don't exist, so every
 handler's request argument gets misread as a required query parameter and the route 422s.
 
+**"Search YouTube for X" is not a web search, and the tool name decided it.** The only search
+skill was `browser_search`, whose name reads exactly like "search in the browser" and whose
+docstring never said it navigates away to a search engine. Asked to search inside an open YouTube
+tab, the model picked it, landed on Google, and got the "unusual traffic" captcha. Two fixes:
+`browser_search_site` finds the page's *own* search box, and the web one is now
+`browser_search_web` with a docstring that names the other. **The docstring is the tool schema —
+a name that reads ambiguously is a bug, not a style question.** Also: Google will not serve an
+automated Chrome profile, so the web default is DuckDuckGo.
+
+**Find a site's search box structurally, never by name.** Sites call it "Search", "Search Amazon",
+"Search or jump to…", "What do you want to play?" — asking the model to guess the label is what
+made `browser_type` unreliable for this. `platform/browser.search_field()` goes by
+`input[type=search]`, `role=searchbox`, `form[role=search]`, then aria-label/placeholder, and
+**checks visibility**, because responsive layouts routinely ship two search inputs and hide one.
+When nothing is on show it clicks a control whose accessible name contains "search" and *polls*
+for the field: GitHub's is a bare `<button aria-label="Search or jump to, type / to search">`
+opening a dialog that takes over a second to render, so a fixed short sleep found nothing and the
+whole site reported "no search box".
+
+**A site search that submits has not necessarily searched.** It is usually a client-side route
+change, so `wait_for_load_state` can fire instantly having gone nowhere. Wait for the URL to
+actually move and report "typed it but the page did not change" when it does not — asserting
+"searched" there is claiming a result nothing has seen.
+
+**One blip made the microphone useless.** A single 30ms chunk crossing the VAD threshold — a fan
+surge, a key click — set `speaking`, and 1.2s of quiet then closed the "utterance". The 30ms was
+below `min_speech_seconds` so the whole listen was discarded as **"nothing said"**, and
+`start_timeout` was never consulted. Every listen died in ~1.3s, so local voice gave up with
+"heard nothing usable 8 times in a row" in about five seconds while `pw-record` was capturing
+perfectly. A false start now resets to waiting instead of ending the listen. Related: EOF on the
+capture pipe is reported as *the recorder stopped*, not as silence — conflating a dead recorder
+with a quiet room sends you debugging the wrong end.
+
+**`voice.mode` used to be read by nothing.** It was displayed in `kravein voice status` and
+consumed nowhere: the CLI hardcoded local, and the browser guessed a pipeline from a readiness
+snapshot and sent it as a decision. That snapshot only covered the *local* halves, so a machine
+with a Gemini key but no local speech model had voice disabled in the UI while `kravein voice live`
+worked fine. `voice.resolve_mode()` is now the single resolver for every surface; the browser
+sends a preference and the server answers with the pipeline it actually started. An explicit
+`live` or `local` that cannot run is refused rather than downgraded — silently switching to the
+metered pipeline, or away from it, is not a decision to make on someone's behalf.
+
+**Voice and text share one transcript, and one rendering path.** Spoken turns are built into
+the same `messages` array as typed ones (`s…` ids alongside `t…`) and render through `TurnGraph`
+like everything else — there is no voice-specific component. The parallel `voiceLines` array and
+its side panel are gone. Two things made this work: the user's message is created on the *first*
+`heard_partial` and rewritten in place, so the late-arriving final transcript does not file the
+question after the answer it prompted; and `listening` is the turn boundary, which both pipelines
+emit even though local sends it before the next utterance and live sends it after `turn_complete`.
+Session chatter ("connecting to…", "ended") is *not* conversation and stays in a status line —
+folding it into the transcript would render infrastructure as something Kravein said.
+
+**Client-side voice turn ids must not be `v…`.** The server already uses that prefix for the voice
+confirmer's `session.turn_id`. They are unrelated namespaces that would silently collide, so
+spoken turns are `s…`.
+
+**A tool that fails is not a dead voice session.** `live.py` emits tool timeouts and session
+failures through the same `error` phase, so treating every one as fatal put the whole toggle into
+an error state because one tool took too long. It is a turn error when a turn is open, a session
+error only when there is none.
+
+**A wheel event goes where the *pointer* is, not where focus is.** This is the whole difficulty
+of scrolling a native window, and it is why `gentle_scroll` parks the pointer over its target and
+stops the moment the pointer or focus moves. Focus-based reasoning is correct for typing and wrong
+for scrolling.
+
+**`ydotool mousemove --absolute` does not work.** Given any coordinates it parks the pointer in
+the bottom-right corner — its uinput device has no usable absolute axis range — and exits 0, so
+nothing surfaces. This is the same shape of failure as the symbolic key codes: ydotool reports
+success for input it never delivered. On Hyprland use the compositor instead:
+`hl.dsp.cursor.move({x=…,y=…})` — and note it *requires* the named table, since `cursor.move(x, y)`
+and `cursor.move({x, y})` both fail with "'x' is required". `desktop.backend().move_cursor()`
+wraps this, and `inputs.place_pointer()` reads the position back and raises if it missed. Never
+trust a pointer move you have not verified.
+
+**Focusing a window on Hyprland warps the cursor onto it.** So "remember where the pointer was,
+then focus the target" records the position *after* the warp, and putting the pointer back puts it
+exactly where it already is. Capture before focusing; `gentle.start_window()` takes `restore_to`
+for this reason.
+
+**A page-side scroller has to pick its element, and pick it eagerly.** Spotify, YouTube and most
+app-shell sites scroll an inner div while `document.scrollingElement` never moves, so
+`window.scrollBy` silently does nothing. Worse, the first version only chose the element inside its
+`requestAnimationFrame` loop — but the caller reads the injected script's *return value* to decide
+whether there is anything to scroll, and that happens before the first frame. Every page reported
+"nothing can scroll" and then scrolled fine. Also keep the scroll offset as a float in JS: writing
+`scrollTop` truncates, so a sub-pixel-per-frame pace accumulated in the DOM stalls at zero.
+
+**The registry dropped wrapped `Args:` lines.** `_parse_param_docs` only kept the first line of
+each parameter, so any description that wrapped reached the model cut off mid-sentence — "Omit for
+the" instead of "Omit for the focused window." It now joins continuation lines by indentation.
+Worth knowing that the docstring *is* the tool schema: sloppy `Args:` formatting is a model-facing
+bug, not a style issue.
+
 **Benchmark with the real tool schema.** Latency rankings invert once ~10k tokens of tool definitions are attached; a "say OK" benchmark is actively misleading. What matters is calls-to-completion, not single-call speed. `tools/eval_models.py` exists for this and retries 5xx so server hiccups are not scored as model failures.
 
 ## Testing conventions
@@ -222,4 +325,4 @@ Tests stub **all three** providers (`_llm.cline`, `.gemini`, `.openrouter`) — 
 
 ## Style
 
-Follow the surrounding code: comments explain *why*, especially where a workaround encodes a platform quirk. Every non-obvious platform decision in `brahma/platform/` carries a comment naming the failure it prevents. Keep that.
+Follow the surrounding code: comments explain *why*, especially where a workaround encodes a platform quirk. Every non-obvious platform decision in `kravein/platform/` carries a comment naming the failure it prevents. Keep that.

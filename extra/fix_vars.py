@@ -9,16 +9,16 @@ def fix_file(f, replacements):
         file.write(content)
 
 fix_file('main.py', [
-    ('brahma echo = BrahmaLive(', 'brahma_echo = BrahmaLive('),
-    ('brahma echo.plugin_manager', 'brahma_echo.plugin_manager'),
-    ('plugin_manager.register_brahma(brahma echo)', 'plugin_manager.register_brahma(brahma_echo)'),
-    ('plugin_manager.dispatch("on_startup", brahma echo)', 'plugin_manager.dispatch("on_startup", brahma_echo)'),
-    ('asyncio.run(brahma echo.run())', 'asyncio.run(brahma_echo.run())')
+    ('kravein = KraveinLive(', 'kravein = KraveinLive('),
+    ('kravein.plugin_manager', 'kravein.plugin_manager'),
+    ('plugin_manager.register_kravein(kravein)', 'plugin_manager.register_kravein(kravein)'),
+    ('plugin_manager.dispatch("on_startup", kravein)', 'plugin_manager.dispatch("on_startup", kravein)'),
+    ('asyncio.run(kravein.run())', 'asyncio.run(kravein.run())')
 ])
 
 fix_file('plugin_manager.py', [
-    ('self.brahma echo', 'self.brahma_echo'),
-    ('brahma echo=self.brahma_echo', 'brahma_echo=self.brahma_echo')
+    ('self.kravein', 'self.kravein'),
+    ('kravein=self.kravein', 'kravein=self.kravein')
 ])
 
 print('Fixes applied!')

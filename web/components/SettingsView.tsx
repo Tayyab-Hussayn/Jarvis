@@ -51,10 +51,90 @@ function groupName(key: string): string {
   return GROUP_NAMES[key] ?? humanise(key);
 }
 
+/**
+ * Settings whose values are a fixed set rather than free text.
+ *
+ * This screen is otherwise deliberately generic — it renders whatever keys the
+ * server sends, so a new setting needs no frontend change. An enum is the one
+ * case where that is not good enough: a typo in a free-text field is accepted,
+ * saved, and then silently ignored by whatever reads it. Keyed by dotted path,
+ * because the *consumer* of the setting is what knows its domain.
+ */
+const CHOICES: Record<string, { value: string; label: string; hint: string }[]> = {
+  "voice.mode": [
+    {
+      value: "auto",
+      label: "Auto",
+      hint: "Recommended — Live first, falling back to on-device if there is no Gemini key",
+    },
+    {
+      value: "live",
+      label: "Live only",
+      hint: "Gemini native audio — ~7s to first word, metered. Refuses to start without a key rather than falling back",
+    },
+    {
+      value: "local",
+      label: "On-device only",
+      hint: "Runs entirely on this machine — free, ~19s to first word, an utterance at a time",
+    },
+  ],
+};
+
 interface Row {
   path: string[];
   key: string;
   value: Json;
+}
+
+function ChoiceRow({
+  row,
+  choices,
+  onSave,
+  saving,
+}: {
+  row: Row;
+  choices: { value: string; label: string; hint: string }[];
+  onSave: (path: string[], value: Json) => void;
+  saving: boolean;
+}) {
+  const current = String(row.value ?? "");
+  const active = choices.find((c) => c.value === current);
+  return (
+    <div className="py-2">
+      <div className="flex items-center justify-between gap-4">
+        <span className="shrink-0 text-[length:var(--text-sm)] text-[var(--text-muted)]">
+          {humanise(row.key)}
+        </span>
+        <div className="flex flex-wrap justify-end gap-1">
+          {choices.map((choice) => (
+            <button
+              key={choice.value}
+              type="button"
+              disabled={saving}
+              title={choice.hint}
+              onClick={() => onSave(row.path, choice.value)}
+              className="rounded-[var(--radius-sm)] border px-2 py-0.5 text-[length:var(--text-xs)] disabled:opacity-50"
+              style={{
+                transition: "all var(--motion-fast) var(--ease)",
+                borderColor:
+                  choice.value === current ? "var(--accent)" : "var(--border-strong)",
+                background:
+                  choice.value === current ? "var(--accent-dim)" : "transparent",
+                color: choice.value === current ? "var(--accent)" : "var(--text-muted)",
+              }}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="mt-1 text-right text-[length:var(--text-xs)] text-[var(--text-faint)]">
+        {/* A value saved by hand that is not one of the choices must not look
+            like one of them is selected. */}
+        {active ? active.hint : `“${current}” is not a recognised value.`}
+      </p>
+    </div>
+  );
 }
 
 /** Flatten to editable leaves, keeping the path so a patch can be rebuilt. */
@@ -279,7 +359,7 @@ export function SettingsView() {
 
   return (
     <Screen
-      subtitle="Stored at ~/.config/brahma-echo/settings.json. Changes save immediately."
+      subtitle="Stored at ~/.config/kravein/settings.json. Changes save immediately."
       actions={
         <>
           {saved && (
@@ -320,14 +400,25 @@ export function SettingsView() {
             {groups.map((group) => (
               <Panel key={group.key} title={group.name}>
                 <div className="divide-y divide-[var(--border)]">
-                  {group.rows.map((row) => (
-                    <EditableRow
-                      key={row.path.join(".")}
-                      row={row}
-                      onSave={save}
-                      saving={saving}
-                    />
-                  ))}
+                  {group.rows.map((row) => {
+                    const choices = CHOICES[row.path.join(".")];
+                    return choices ? (
+                      <ChoiceRow
+                        key={row.path.join(".")}
+                        row={row}
+                        choices={choices}
+                        onSave={save}
+                        saving={saving}
+                      />
+                    ) : (
+                      <EditableRow
+                        key={row.path.join(".")}
+                        row={row}
+                        onSave={save}
+                        saving={saving}
+                      />
+                    );
+                  })}
                 </div>
               </Panel>
             ))}
@@ -342,7 +433,7 @@ export function SettingsView() {
             credentials the server refuses to send to the browser. Editing them
             here is not possible by design; change them in{" "}
             <code className="font-[family-name:var(--font-mono)]">
-              ~/.config/brahma-echo/api_keys.json
+              ~/.config/kravein/api_keys.json
             </code>
             . Some changes — provider and model in particular — take effect on the
             next request.

@@ -1,5 +1,5 @@
 /**
- * The wire protocol, mirrored from `brahma/events.py` and `brahma/server.py`.
+ * The wire protocol, mirrored from `kravein/events.py` and `kravein/server.py`.
  *
  * Kept as a discriminated union on `t` so adding a frame server-side and
  * forgetting to handle it here is a compile error, not a silent no-op.
@@ -34,8 +34,10 @@ export type ClientFrame =
   | { t: "confirm_reply"; confirm_id: string; approve: boolean }
   | { t: "reset" }
   // Voice runs server-side (same machine, loopback only), so the browser only
-  // starts and stops it — audio never crosses the socket.
-  | { t: "voice_start"; mode: "local" | "live" }
+  // starts and stops it — audio never crosses the socket. `mode` is a
+  // *preference*: only the server knows what is installed and keyed, so it
+  // resolves "auto" and reports what actually started in the `started` frame.
+  | { t: "voice_start"; mode: "local" | "live" | "auto" }
   | { t: "voice_stop" }
   | { t: "ping" };
 
@@ -108,6 +110,11 @@ export interface ToolCallView {
   display: string;
   result?: string;
   done: boolean;
+  /** Arguments as text, for calls that arrive already rendered rather than
+   *  structured. The voice pipeline reports `name(k='v')` as one string, so
+   *  there is no object to preview — this keeps the arguments visible instead
+   *  of inventing a fake `args` object to hold them. */
+  argsText?: string;
 }
 
 export interface ConfirmView {
@@ -118,14 +125,6 @@ export interface ConfirmView {
   /** Epoch ms when the server stops waiting and denies. */
   expiresAt: number;
   status: "pending" | "approved" | "denied" | "expired";
-}
-
-/** One line of the spoken exchange. Kept separate from `Message` so a voice
- *  session can never rewrite the text console's history. */
-export interface VoiceLine {
-  id: number;
-  role: "you" | "brahma" | "tool" | "note";
-  text: string;
 }
 
 /** Phases in which a voice session is genuinely live.

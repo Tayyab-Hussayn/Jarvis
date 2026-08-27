@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Brahma Echo — Linux installer.
+# Kravein — Linux installer.
 #
 # Sets up the virtualenv, checks for the native tools the assistant drives,
 # and optionally installs the systemd user service.
@@ -11,7 +11,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$REPO_DIR/.venv"
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/brahma-echo"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kravein"
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()    { printf '  \033[32m✓\033[0m %s\n' "$*"; }
@@ -123,8 +123,8 @@ if [[ ! -f "$CONFIG_DIR/env" ]]; then
   cat > "$CONFIG_DIR/env" <<'ENVFILE'
 # Environment for the systemd user service. Keys set here override
 # api_keys.json and never appear in the unit file or the journal.
-# BRAHMA_GEMINI_API_KEY=
-# BRAHMA_OPENROUTER_API_KEY=
+# KRAVEIN_GEMINI_API_KEY=
+# KRAVEIN_OPENROUTER_API_KEY=
 ENVFILE
   chmod 600 "$CONFIG_DIR/env"
 fi
@@ -154,18 +154,18 @@ fi
 # ---------------------------------------------------------------------------
 bold "6. systemd user service (optional)"
 
-UNIT_SRC="$REPO_DIR/systemd/brahma-echo.service"
-UNIT_DST="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/brahma-echo.service"
+UNIT_SRC="$REPO_DIR/systemd/kravein.service"
+UNIT_DST="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/kravein.service"
 
 read -r -p "  Install the background service? [y/N] " reply
 if [[ "${reply,,}" == "y" ]]; then
   mkdir -p "$(dirname "$UNIT_DST")"
   # Rewrite the paths so the unit works from wherever the repo actually is.
-  sed "s|%h/code/Brahma-Echo|$REPO_DIR|g" "$UNIT_SRC" > "$UNIT_DST"
+  sed "s|%h/code/Kravein|$REPO_DIR|g" "$UNIT_SRC" > "$UNIT_DST"
   systemctl --user daemon-reload
   ok "installed $UNIT_DST"
-  echo "    Start it with:  systemctl --user enable --now brahma-echo"
-  echo "    Watch logs:     journalctl --user -u brahma-echo -f"
+  echo "    Start it with:  systemctl --user enable --now kravein"
+  echo "    Watch logs:     journalctl --user -u kravein -f"
 else
   ok "skipped (run it in a terminal instead)"
 fi
@@ -180,8 +180,8 @@ if command -v npm >/dev/null 2>&1; then
   read -r -p "  Build the web UI? (needs npm, takes a few minutes) [y/N] " reply
   if [[ "${reply,,}" == "y" ]]; then
     (cd "$REPO_DIR/web" && npm install --no-fund --no-audit && npm run build) \
-      && ok "built $REPO_DIR/brahma/web-dist" \
-      || echo "    Build failed — 'brahma serve' will still serve the API."
+      && ok "built $REPO_DIR/kravein/web-dist" \
+      || echo "    Build failed — 'kravein serve' will still serve the API."
   else
     ok "skipped (build later with: cd web && npm install && npm run build)"
   fi
@@ -193,9 +193,9 @@ fi
 echo
 bold "Done."
 echo
-echo "  Interactive:  $VENV/bin/python -m brahma"
-echo "  One-shot:     $VENV/bin/python -m brahma ask 'what is using my disk?'"
-echo "  Web UI:       $VENV/bin/python -m brahma serve"
-echo "  Check setup:  $VENV/bin/python -m brahma doctor"
-echo "  Skills:       $VENV/bin/python -m brahma skills"
+echo "  Interactive:  $VENV/bin/python -m kravein"
+echo "  One-shot:     $VENV/bin/python -m kravein ask 'what is using my disk?'"
+echo "  Web UI:       $VENV/bin/python -m kravein serve"
+echo "  Check setup:  $VENV/bin/python -m kravein doctor"
+echo "  Skills:       $VENV/bin/python -m kravein skills"
 echo

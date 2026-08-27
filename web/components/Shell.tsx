@@ -20,7 +20,7 @@
 import type { ReactNode } from "react";
 
 import type { ConfirmView, SystemSnapshot } from "@/lib/protocol";
-import type { Connection } from "@/lib/useBrahma";
+import type { Connection } from "@/lib/useKravein";
 import { ConfirmCard } from "./ConfirmCard";
 import { Icon, type IconName } from "./icons";
 import { classNames } from "@/lib/format";
@@ -188,7 +188,7 @@ export function Rail({
         </span>
         {expanded && (
           <span className="truncate text-[length:var(--text-sm)] font-semibold tracking-[-0.01em]">
-            Brahma
+            Kravein
           </span>
         )}
       </div>

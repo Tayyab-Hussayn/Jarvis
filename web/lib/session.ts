@@ -1,7 +1,7 @@
 /**
  * Where the API lives and how we authenticate to it.
  *
- * `brahma serve` opens the browser at `/?token=…`. We stash that token in
+ * `kravein serve` opens the browser at `/?token=…`. We stash that token in
  * sessionStorage and strip it from the address bar, so it does not sit in the
  * URL to be shoulder-surfed, copied into a bug report, or leaked through a
  * Referer header. sessionStorage rather than localStorage: the token rotates
@@ -9,7 +9,7 @@
  * confusing 401 later.
  */
 
-const TOKEN_KEY = "brahma.token";
+const TOKEN_KEY = "kravein.token";
 
 /**
  * In `npm run dev` the page is served by Next on :3000 while the API is on

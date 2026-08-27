@@ -1,4 +1,4 @@
-# Brahma Echo — Linux dependencies.
+# Kravein — Linux dependencies.
 #
 # The Windows-only packages from the original requirements.txt are gone; see
 # the table below for what replaced each one. Everything that replaced them
@@ -51,8 +51,8 @@ pillow>=10.0
 # Implements the freedesktop trash spec, so deletes are recoverable.
 send2trash>=1.8
 
-# --- Web UI (`brahma serve`) --------------------------------------------
-# Also covers the legacy brahma_connect gateway, which was never ported.
+# --- Web UI (`kravein serve`) --------------------------------------------
+# Also covers the legacy kravein_connect gateway, which was never ported.
 fastapi>=0.110
 uvicorn[standard]>=0.27
 cryptography>=42.0
@@ -72,7 +72,7 @@ pytest-asyncio>=1.0
 sounddevice>=0.4
 
 # --- Browser automation -------------------------------------------------
-# Drives Chrome in Brahma's own profile (~/.local/share/brahma-echo/
+# Drives Chrome in Kravein's own profile (~/.local/share/kravein/
 # chrome-profile), never the browser you are using. Uses the system Chrome via
 # channel="chrome", so no bundled browser download is needed.
 playwright>=1.40

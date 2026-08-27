@@ -1,4 +1,4 @@
-"""Score candidate LLMs on Brahma-Echo's real agentic workload.
+"""Score candidate LLMs on Kravein's real agentic workload.
 
 Not a generic benchmark. Probes the failure modes that bite an autonomous
 agent holding 118 tools on a live desktop:
@@ -24,9 +24,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from brahma import registry  # noqa: E402
-from brahma.agent import Agent  # noqa: E402
-from brahma.cline import COMPLETIONS_URL, _to_openai_messages, access_token  # noqa: E402
+from kravein import registry  # noqa: E402
+from kravein.agent import Agent  # noqa: E402
+from kravein.cline import COMPLETIONS_URL, _to_openai_messages, access_token  # noqa: E402
 
 REPEATS = 3
 
@@ -102,7 +102,7 @@ def run(model: str, prompt: str) -> dict:
         usage["completion"] += int(u.get("completion_tokens") or 0)
         usage["prompt"] += int(u.get("prompt_tokens") or 0)
 
-        from brahma.llm import Reply, ToolCall, extract_json
+        from kravein.llm import Reply, ToolCall, extract_json
         msg = body["choices"][0].get("message") or {}
         reply = Reply(provider="cline", model=model)
         reply.text = (msg.get("content") or "").strip()

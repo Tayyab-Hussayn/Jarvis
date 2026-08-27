@@ -105,7 +105,7 @@ export function ModeToggle({
     : live
       ? (LIVE_LABEL[phase] ?? "Live")
       : voiceReady
-        ? "Speak to Brahma"
+        ? "Speak to Kravein"
         : "Unavailable";
 
   return (

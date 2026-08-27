@@ -160,7 +160,7 @@ export function BrainView({ run }: { run: RunSkill }) {
         )}
 
         {tab === "memory" && (
-          <Panel title="What Brahma remembers">
+          <Panel title="What Kravein remembers">
             <p className="mb-3 text-[length:var(--text-sm)] text-[var(--text-muted)]">
               Facts stored here are injected into the system prompt, so they
               shape every reply.
@@ -239,14 +239,14 @@ export function BrainView({ run }: { run: RunSkill }) {
               <div className="space-y-3 text-[length:var(--text-sm)] text-[var(--text-muted)]">
                 <p>
                   <code className="font-[family-name:var(--font-mono)] text-[var(--text)]">
-                    brahma voice
+                    kravein voice
                   </code>{" "}
                   runs entirely on this machine and costs nothing. Measured at
                   about 19s from the end of your sentence to the first spoken word.
                 </p>
                 <p>
                   <code className="font-[family-name:var(--font-mono)] text-[var(--text)]">
-                    brahma voice live
+                    kravein voice live
                   </code>{" "}
                   uses Gemini native audio — about 7s, because it transcribes
                   while you are still speaking. Metered per second of audio,

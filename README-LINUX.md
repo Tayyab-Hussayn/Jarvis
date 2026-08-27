@@ -1,6 +1,6 @@
 <div align="center">
 
-# Brahma Echo — Linux
+# Kravein — Linux
 
 **A JARVIS-style system assistant for Linux.**
 Modular skills · real machine control · confirmation before anything destructive
@@ -11,7 +11,7 @@ Modular skills · real machine control · confirmation before anything destructi
 
 ## What this is
 
-The original Brahma Echo was a Windows desktop assistant. This is the Linux
+The original Kravein was a Windows desktop assistant. This is the Linux
 port: same purpose, rebuilt on native Linux mechanisms, restructured around a
 modular skills system with a safety layer and a full audit trail.
 
@@ -27,9 +27,9 @@ games and the web.
 ## Quick start
 
 ```bash
-git clone <your-fork> Brahma-Echo && cd Brahma-Echo
+git clone <your-fork> Kravein && cd Kravein
 ./install-linux.sh
-.venv/bin/python -m brahma            # interactive assistant
+.venv/bin/python -m kravein            # interactive assistant
 ```
 
 ### The LLM backend
@@ -63,8 +63,8 @@ To put Gemini back in the chain:
 { "llm": { "provider": "gemini", "provider_order": ["gemini", "cline"] } }
 ```
 
-Keys live in `~/.config/brahma-echo/api_keys.json` (mode 0600), or set
-`BRAHMA_GEMINI_API_KEY` — the environment wins, so systemd can inject it
+Keys live in `~/.config/kravein/api_keys.json` (mode 0600), or set
+`KRAVEIN_GEMINI_API_KEY` — the environment wins, so systemd can inject it
 without it landing on disk.
 
 > **Model note.** `gemini-2.5-flash` — the original's model — now returns
@@ -87,7 +87,7 @@ If you do re-enable Gemini as primary, two safeguards apply automatically:
 - **A circuit breaker.** After 2 consecutive failures a provider is skipped
   for 3 minutes. Without it an outage costs the full timeout on *every*
   request; with it, once. State lives in
-  `~/.local/state/brahma-echo/llm-breaker.json`, because each `brahma ask` is
+  `~/.local/state/kravein/llm-breaker.json`, because each `kravein ask` is
   a fresh process and would otherwise forget.
 
 Measured during a real Gemini slowdown, with the breaker doing its job:
@@ -101,7 +101,7 @@ Measured during a real Gemini slowdown, with the breaker doing its job:
 A success clears the cooldown immediately. To retry the primary at once:
 
 ```bash
-.venv/bin/python -m brahma run reset_llm_failover
+.venv/bin/python -m kravein run reset_llm_failover
 ```
 
 **Cline** needs no key of ours — it reuses the CLI's own session:
@@ -110,30 +110,30 @@ A success clears the cooldown immediately. To retry the primary at once:
 cline auth          # once, if you have not already
 ```
 
-**Brahma decides nothing on its own authority**: every action goes through
-Brahma's safety layer and audit trail, whichever backend answers.
+**Kravein decides nothing on its own authority**: every action goes through
+Kravein's safety layer and audit trail, whichever backend answers.
 
 Switch backend or model at any time:
 
 ```bash
-.venv/bin/python -m brahma run llm_status
-.venv/bin/python -m brahma run set_llm_model model=z-ai/glm-4.6
-.venv/bin/python -m brahma doctor     # check the whole setup
+.venv/bin/python -m kravein run llm_status
+.venv/bin/python -m kravein run set_llm_model model=z-ai/glm-4.6
+.venv/bin/python -m kravein doctor     # check the whole setup
 ```
 
 ### Commands
 
 | Command | What it does |
 |---|---|
-| `python -m brahma` | Interactive assistant (default) |
-| `python -m brahma ask "..."` | One request, then exit |
-| `python -m brahma run <skill> k=v` | Run one skill directly, no model involved |
-| `python -m brahma skills [category]` | List skills |
-| `python -m brahma env` | Environment and capability report |
-| `python -m brahma doctor` | Diagnose setup problems |
-| `python -m brahma audit -n 50` | Read the audit trail |
-| `python -m brahma daemon` | Run as a background service |
-| `python -m brahma send "..."` | Talk to a running daemon |
+| `python -m kravein` | Interactive assistant (default) |
+| `python -m kravein ask "..."` | One request, then exit |
+| `python -m kravein run <skill> k=v` | Run one skill directly, no model involved |
+| `python -m kravein skills [category]` | List skills |
+| `python -m kravein env` | Environment and capability report |
+| `python -m kravein doctor` | Diagnose setup problems |
+| `python -m kravein audit -n 50` | Read the audit trail |
+| `python -m kravein daemon` | Run as a background service |
+| `python -m kravein send "..."` | Talk to a running daemon |
 
 Inside the REPL: `/voice`, `/say`, `/help`, `/skills`, `/skill <name>`,
 `/run <name> k=v`, `/env`, `/audit`, `/reset`, `/quit`.
@@ -153,9 +153,9 @@ Say **"stop listening"** or press **Ctrl-C** to go back to typing. Text mode is
 untouched — voice is a mode you enter and leave.
 
 ```bash
-.venv/bin/python -m brahma voice           # straight into voice
-.venv/bin/python -m brahma voice status    # check mic, recogniser, speech
-.venv/bin/python -m brahma voice --no-speak  # listen and act, but stay silent
+.venv/bin/python -m kravein voice           # straight into voice
+.venv/bin/python -m kravein voice status    # check mic, recogniser, speech
+.venv/bin/python -m kravein voice --no-speak  # listen and act, but stay silent
 ```
 
 ### The two pipelines
@@ -184,7 +184,7 @@ Text-to-speech is the original's own engine: **edge-tts**, voice
 from `winmm` to `mpv`.
 
 > If you keep `keep-open=yes` in `~/.config/mpv/mpv.conf`, that would normally
-> hang playback forever. Brahma runs mpv with `--no-config`, so your player
+> hang playback forever. Kravein runs mpv with `--no-config`, so your player
 > settings can't break speech.
 
 ### Confirmation by voice
@@ -199,7 +199,7 @@ killing the compositor, `rm -rf /`) still apply and cannot be talked past.
 
 ### Tuning
 
-In `~/.config/brahma-echo/settings.json`:
+In `~/.config/kravein/settings.json`:
 
 ```json
 {
@@ -214,7 +214,7 @@ In `~/.config/brahma-echo/settings.json`:
 
 - `stt_model` — `tiny.en` (fastest), `base.en` (default), `small.en` (most accurate)
 - `silence_seconds` — how long a pause ends your sentence
-- `wake_word` — set to e.g. `"brahma"` to require it before acting
+- `wake_word` — set to e.g. `"kravein"` to require it before acting
 
 Expect roughly **2s** to transcribe, **5s** to think, **2s** to speak.
 
@@ -245,7 +245,7 @@ The confirmation prompt is supplied by the front-end. The terminal provides
 one; **the daemon does not**, so a background request can never approve its
 own destructive action — it must carry `"confirm": true` explicitly.
 
-Configure in `~/.config/brahma-echo/settings.json`:
+Configure in `~/.config/kravein/settings.json`:
 
 ```json
 {
@@ -263,13 +263,13 @@ Setting `allow_destructive: false` makes destructive skills refuse rather than p
 ## Audit trail
 
 Every skill call, shell command, confirmation decision and LLM turn is written
-to `~/.local/state/brahma-echo/audit.jsonl`, one JSON object per line.
+to `~/.local/state/kravein/audit.jsonl`, one JSON object per line.
 API keys and anything key-like are redacted before writing.
 
 ```bash
-python -m brahma audit -n 50
-python -m brahma audit -e safety          # just the safety decisions
-python -m brahma audit -e shell | jq .    # just the commands run
+python -m kravein audit -n 50
+python -m kravein audit -e safety          # just the safety decisions
+python -m kravein audit -e shell | jq .    # just the commands run
 ```
 
 ---
@@ -277,7 +277,7 @@ python -m brahma audit -e shell | jq .    # just the commands run
 ## Architecture
 
 ```
-brahma/
+kravein/
 ├── config.py        XDG paths, settings, credentials
 ├── audit.py         append-only JSONL audit log
 ├── safety.py        risk classification + confirmation broker
@@ -295,7 +295,7 @@ brahma/
 
 ### Adding a skill
 
-Drop a function into any module under `brahma/skills/`. No core file changes:
+Drop a function into any module under `kravein/skills/`. No core file changes:
 
 ```python
 from ..registry import skill
@@ -356,21 +356,21 @@ Cline is itself a coding agent, so it is reduced to a pure reasoning engine:
 ```
 cline --json --auto-approve false --compaction off \
       -m deepseek/deepseek-v4-flash \
-      -s "<Brahma's system prompt>" \
-      -c ~/.cache/brahma-echo/cline-workspace \
+      -s "<Kravein's system prompt>" \
+      -c ~/.cache/kravein/cline-workspace \
       "<conversation + tool catalogue>"
 ```
 
 - **`--auto-approve false`** — Cline may not run any of its own tools.
-- **`-s`** — replaces its coding-agent prompt, so it reasons for Brahma instead.
+- **`-s`** — replaces its coding-agent prompt, so it reasons for Kravein instead.
 - **`-c`** — an empty scratch directory, so it never reads your repository.
 - Tool calling is structured JSON: Cline returns
-  `{"tool_calls":[…]}` or `{"reply":"…"}`, Brahma parses it and executes.
+  `{"tool_calls":[…]}` or `{"reply":"…"}`, Kravein parses it and executes.
 
 **The CLI is only the fallback.** `api.cline.bot` exposes an OpenAI-compatible
 `/chat/completions` endpoint that accepts your account's own OAuth token, so
 most models are reached over **one HTTPS request with native tool calling** —
-no CLI, no process boot. Brahma refreshes the token itself using the refresh
+no CLI, no process boot. Kravein refreshes the token itself using the refresh
 token from Cline's store, and caches the short-lived access token in its own
 state dir; **Cline's config file is only ever read, never written.**
 
@@ -407,7 +407,7 @@ Force the CLI for everything with `{"llm": {"cline_force_cli": true}}`.
 Health check:
 
 ```bash
-.venv/bin/python -m brahma run llm_status
+.venv/bin/python -m kravein run llm_status
 ```
 
 ---
@@ -422,7 +422,7 @@ $ hyprctl dispatch closewindow address:0x55f2ee251f50
 error: ')' expected near 'address'
 ```
 
-Brahma probes once at startup and speaks whichever dialect your compositor
+Kravein probes once at startup and speaks whichever dialect your compositor
 understands, so both old and new Hyprland work.
 
 **There is a sharp edge worth knowing about.** In the Lua API,
@@ -434,7 +434,7 @@ looks like it targets one window and actually destroys whatever is focused:
 hl.dispatch(hl.dsp.window.kill("address:0xTARGET"))  -- kills the FOCUSED window
 ```
 
-Brahma therefore focuses the target, confirms the focus landed, and only then
+Kravein therefore focuses the target, confirms the focus landed, and only then
 acts — and refuses outright if focus fails. `close_app` and `close_window` also
 verify the window actually went away instead of trusting the request, and
 report honestly when an app is showing a save prompt. Pass `force=true` to kill
@@ -463,7 +463,7 @@ systemctl --user enable --now ydotool.service
 
 If it fails on `/dev/uinput`: `sudo usermod -aG input $USER`, then re-login.
 
-`python -m brahma doctor` tells you exactly what is missing and the command to
+`python -m kravein doctor` tells you exactly what is missing and the command to
 fix it.
 
 ---
@@ -471,14 +471,14 @@ fix it.
 ## Running as a service
 
 ```bash
-systemctl --user enable --now brahma-echo
-journalctl --user -u brahma-echo -f
-python -m brahma send "what is using my disk?"
+systemctl --user enable --now kravein
+journalctl --user -u kravein -f
+python -m kravein send "what is using my disk?"
 ```
 
 It is a **user** service, not a system one — it needs your session bus,
 compositor socket, audio and file permissions. Put credentials in
-`~/.config/brahma-echo/env` so they never enter the unit file or the journal.
+`~/.config/kravein/env` so they never enter the unit file or the journal.
 
 ---
 

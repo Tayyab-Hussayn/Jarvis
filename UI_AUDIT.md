@@ -1,6 +1,6 @@
-# UI Audit — Brahma Echo frontend
+# UI Audit — Kravein frontend
 
-Audited live in Chrome against a running `brahma serve`, at 1600×1000 and 1448×625, on the
+Audited live in Chrome against a running `kravein serve`, at 1600×1000 and 1448×625, on the
 target machine. Computed styles and DOM state were read directly rather than judged from
 screenshots — two things that *looked* broken (a double-highlighted rail item) turned out to be
 JPEG artifacts, and one thing that looked fine (the font) turned out to be badly broken.

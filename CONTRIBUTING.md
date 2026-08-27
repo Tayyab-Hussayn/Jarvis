@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping improve Brahma AI - Lite.
+Thank you for helping improve Kravein AI - Lite.
 
 ## Before You Start
 

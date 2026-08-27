@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="assets/Brahma_Lite_Logo.png" alt="Brahma Echo" width="260" />
+  <img src="assets/Kravein_Lite_Logo.png" alt="Kravein" width="260" />
 
-  <h1>Brahma Echo</h1>
+  <h1>Kravein</h1>
 
   <p><strong>Open-source Windows desktop AI assistant</strong></p>
   <p>Voice-first automation · contextual desktop intelligence · productivity workflows</p>
@@ -23,15 +23,15 @@
 
 ## Overview
 
-Brahma Echo is a premium Windows desktop assistant that combines voice and text control with automated workflows, screen-aware intelligence, and rich content generation.
+Kravein is a premium Windows desktop assistant that combines voice and text control with automated workflows, screen-aware intelligence, and rich content generation.
 
-Designed for advanced desktop productivity, Brahma Echo delivers:
+Designed for advanced desktop productivity, Kravein delivers:
 
 - Voice-first command and desktop automation
 - Application control, browser workflows, and file handling
 - Contextual screen inspection and adaptive task execution
 - Presentation, document, and report generation
-- Remote control via Discord and Brahma Connect
+- Remote control via Discord and Kravein Connect
 
 ## Quick Highlights
 
@@ -45,12 +45,12 @@ Designed for advanced desktop productivity, Brahma Echo delivers:
 
 ## Key Benefits
 
-- Wake-word support for “Brahma Echo” and responsive assistant activation
+- Wake-word support for “Kravein” and responsive assistant activation
 - Gemini 2.5 Flash-powered AI with OpenRouter fallback resilience
 - Polished Qt interface with live status displays and workflow cards
 - Modular action architecture for clean extensibility and automation
 - Secure local configuration with file-based credential storage
-- Device pairing and remote routing through Brahma Connect
+- Device pairing and remote routing through Kravein Connect
 
 ## Features
 
@@ -81,7 +81,7 @@ Designed for advanced desktop productivity, Brahma Echo delivers:
 - Discord bridge for remote commands and collaboration
 - OpenRouter fallback for uninterrupted AI access
 - Configurable voice, UI, startup, and notification settings
-- Brahma Connect for device discovery and command routing
+- Kravein Connect for device discovery and command routing
 
 ## Getting Started
 
@@ -141,7 +141,7 @@ Create `config/api_keys.json` with your keys:
 
 If you want Discord remote control, populate `config/discord_bot.json` with your bot credentials and connection settings.
 
-### 6. Launch Brahma Echo
+### 6. Launch Kravein
 
 ```powershell
 python main.py
@@ -150,7 +150,7 @@ python main.py
 For a cleaner startup experience on Windows:
 
 ```powershell
-start_brahma.vbs
+start_kravein.vbs
 ```
 
 ## Configuration
@@ -159,7 +159,7 @@ Core configuration files:
 
 - `config/api_keys.json` — Gemini and OpenRouter credentials
 - `config/app_settings.json` — voice, UI, startup, and automation preferences
-- `config/brahma_connect.json` — device pairing, gateway, and discovery settings
+- `config/kravein_connect.json` — device pairing, gateway, and discovery settings
 - `config/discord_bot.json` — Discord bridge configuration
 
 ## Project Structure
@@ -167,20 +167,20 @@ Core configuration files:
 - `main.py` — application startup, AI orchestration, and command routing
 - `ui.py` — Qt-based desktop interface and live assistant controls
 - `actions/` — modular automation, document, and assistant tools
-- `brahma_connect/` — local gateway, pairing, and remote routing
+- `kravein_connect/` — local gateway, pairing, and remote routing
 - `config/` — local settings, credentials, and runtime configuration
 - `plugins/` — optional plugin extensions
 - `tests/` — integration and validation tests
 
 ## Plugin System
 
-Extend Brahma Echo with custom Python plugins by adding files to `plugins/`.
+Extend Kravein with custom Python plugins by adding files to `plugins/`.
 
 Supported hooks:
 
-- `on_brahma_created(brahma)` — called when the assistant instance is initialized
-- `on_startup(brahma)` — called after startup when plugins are registered
-- `on_text_command(text, source, brahma=None)` — called for each incoming text command; return `True` to indicate the command was handled
+- `on_kravein_created(kravein)` — called when the assistant instance is initialized
+- `on_startup(kravein)` — called after startup when plugins are registered
+- `on_text_command(text, source, kravein=None)` — called for each incoming text command; return `True` to indicate the command was handled
 
 ## Best Practices
 

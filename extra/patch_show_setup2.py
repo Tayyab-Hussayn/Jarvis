@@ -1,7 +1,7 @@
 import re
 import os
 
-file_path = r'd:\TiTech Prabha Solution\Brahma Echo\Brahma Echo\Brahma Echo-AI---Lite-main\Brahma Echo-AI---Lite-main\ui.py'
+file_path = r'd:\TiTech Prabha Solution\Kravein\Kravein\Kravein-AI---Lite-main\Kravein-AI---Lite-main\ui.py'
 with open(file_path, 'r', encoding='utf-8') as f:
     text = f.read()
 

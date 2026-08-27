@@ -7,13 +7,13 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 wd = Path.cwd()
 sys.path.insert(0, str(wd))
 
-from ui import BrahmaUI
-from brahma_connect.service import get_service
+from ui import KraveinUI
+from kravein_connect.service import get_service
 
 try:
-    ui = BrahmaUI(str(wd / 'assets' / 'Brahma_Lite_Logo.png'), show_immediately=False)
+    ui = KraveinUI(str(wd / 'assets' / 'Kravein_Lite_Logo.png'), show_immediately=False)
     svc = get_service(wd)
-    ui.set_brahma_connect_service(svc)
+    ui.set_kravein_connect_service(svc)
     dp = ui._win._devices_page
     print('device page created')
     print('wizard idx before', dp._wizard_stack.currentIndex())

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && rm -rf ../brahma/web-dist && cp -r out ../brahma/web-dist",
+    "build": "next build && rm -rf ../kravein/web-dist && cp -r out ../kravein/web-dist",
     "start": "next start",
     "lint": "eslint",
     "build:only": "next build"

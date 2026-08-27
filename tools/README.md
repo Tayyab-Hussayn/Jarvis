@@ -4,7 +4,7 @@ Developer utilities. Not part of the assistant runtime.
 
 ## eval_models.py
 
-Scores candidate LLMs on Brahma-Echo's **actual** workload, not a generic
+Scores candidate LLMs on Kravein's **actual** workload, not a generic
 benchmark. Model rankings routinely invert between the two — see below.
 
 ```bash
