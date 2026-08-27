@@ -7,6 +7,22 @@ import com.brahma.connect.core.AgentStateStore
 import com.brahma.connect.core.GatewayEndpoint
 
 class BrahmaGatewayDiscovery(private val context: Context) {
+    companion object {
+        /**
+         * Must match `service_name` on the gateway — see
+         * `kravein_connect/gateway/discovery.py` and `server.py`. If the two
+         * disagree the phone simply never finds the desktop, with no error to
+         * explain why, so this is the one string in the app that cannot be
+         * changed on its own.
+         *
+         * Was `_BRAHMA._tcp.` until the assistant was renamed to Kravein on
+         * 2026-08-24. It lived as a duplicated literal in two places here,
+         * which is how it was able to drift from the gateway in the first
+         * place; there is now one copy.
+         */
+        private const val SERVICE_TYPE = "_KRAVEIN._tcp."
+    }
+
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var resolveListener: NsdManager.ResolveListener? = null
@@ -23,7 +39,7 @@ class BrahmaGatewayDiscovery(private val context: Context) {
                 val port = serviceInfo.port
                 if (host.isNotBlank() && port > 0) {
                     val endpoint = GatewayEndpoint(
-                        name = serviceInfo.serviceName ?: "Brahma PC",
+                        name = serviceInfo.serviceName ?: "Kravein PC",
                         host = host,
                         port = port,
                     )
@@ -47,7 +63,7 @@ class BrahmaGatewayDiscovery(private val context: Context) {
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
                 val serviceType = serviceInfo.serviceType ?: return
-                if (!serviceType.contains("_BRAHMA._tcp", ignoreCase = true)) return
+                if (!serviceType.contains(SERVICE_TYPE.trimEnd('.'), ignoreCase = true)) return
                 resolveListener?.let { nsdManager.resolveService(serviceInfo, it) }
             }
 
@@ -55,7 +71,7 @@ class BrahmaGatewayDiscovery(private val context: Context) {
         }
 
         runCatching {
-            nsdManager.discoverServices("_BRAHMA._tcp.", NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+            nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
         }.onFailure {
             onError(it.message ?: "Discovery unavailable.")
         }

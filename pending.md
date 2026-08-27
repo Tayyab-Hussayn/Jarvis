@@ -71,3 +71,63 @@ and it is the weakest of the three on the merits:
   protocol the Cline CLI fallback uses (`cline.build_prompt`).
 
 Worth reaching for only if the API key is ruled out.
+
+---
+
+## Kravein Connect — finish or retire it
+
+**Status:** scaffolding. Nothing in the Linux port starts it.
+
+`kravein_connect/` is a FastAPI + WebSocket gateway on port 8765 that pairs
+with `brahma-connect-android/`, a Kotlin app. The phone is a *device the
+assistant controls*, not a remote control: the desktop sends `execute`, the
+phone runs it on itself (battery, flashlight, launch app, open URL, volume) and
+returns a `result`. `chat_message` also lets the phone talk to the assistant.
+
+The only reference in `kravein/` is `integrations.kravein_connect: False`.
+Nothing imports or starts the gateway. Its own 4 tests pass and it imports on
+3.14, but wiring it up is real work, not a flag flip.
+
+### Fix before it ever listens on a real network
+
+Windows-era code, never ported or audited, and well below the rest of the
+project's posture:
+
+- **Binds `0.0.0.0:8765`** — the whole LAN. `kravein serve` binds loopback and
+  *still* enforces a token plus Origin and Host checks, because loopback alone
+  is not a boundary.
+- **No TLS.** Plain `ws://`. Pairing secrets and every command cross the
+  network in the clear.
+- **No equivalent of `webauth.py`.** The pairing secret is the whole story.
+
+### Still outstanding on the Android side
+
+The rename left `brahma-connect-android/` alone by decision, since a Java
+package move cannot be build-tested on this machine. What remains:
+
+- Package `com.brahma.connect` and the `Brahma*` class and file names.
+- `.BrahmaConnectApplication` and `@style/Theme.BrahmaConnect` in the manifest —
+  identifier pairs, so both ends must move together.
+- The app has never been built here at all: needs Android Studio, JDK 17,
+  SDK 35.
+
+The mDNS service type and all user-visible text **were** fixed (2026-08-24),
+because those are the wire contract and the on-screen name.
+
+### A trap worth knowing about before wiring the first command
+
+The phone advertises capabilities as *categories* — `battery`, `flashlight`,
+`volume`, `device_info` — but implements *actions*: `get_battery`,
+`flashlight_on`, `flashlight_off`, `volume_get`, `volume_set`. Two different
+vocabularies for the same things.
+
+Nothing breaks today only because `command_router.route()` checks a
+`required_capabilities` list the *caller* passes, rather than deriving it from
+the action name. The moment someone does the obvious thing and passes
+`required_capabilities=["get_battery"]`, it returns `CAPABILITY_MISSING`
+against a phone that is perfectly capable of it.
+
+Also: `media`, `apps` and `wifi_state` are advertised but have no handler at
+all, so they answer `UNKNOWN_COMMAND`.
+
+Pick one vocabulary across both halves before building on this.
