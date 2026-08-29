@@ -117,6 +117,7 @@ class Turn:
     tool_calls: list[str] = field(default_factory=list)
     iterations: int = 0
     error: str = ""
+    cancelled: bool = False
 
     @property
     def ok(self) -> bool:
@@ -184,14 +185,44 @@ class Agent:
 
     # -- main loop -------------------------------------------------------
 
-    def ask(self, text: str) -> Turn:
-        """Handle one user request, running tools as needed."""
+    def ask(self, text: str, stop: threading.Event | None = None) -> Turn:
+        """Handle one user request, running tools as needed.
+
+        ``stop`` makes the turn interruptible. The loop runs on a worker
+        thread, so cancelling the asyncio task that wraps it does nothing —
+        the thread keeps going through all eight tool rounds. Stopping has to
+        be cooperative, which means checking a flag at the points where the
+        loop is between things:
+
+        * before asking the model again,
+        * before each tool call,
+        * after each tool result.
+
+        What it cannot do is interrupt work already in flight — an HTTP
+        request to a provider, or a tool that is mid-execution. Worst case you
+        wait for the current one to finish, and nothing further is started.
+        Claiming otherwise would be the kind of "it stopped" that is a lie.
+        """
         text = (text or "").strip()
         if not text:
             return Turn(reply="")
 
         max_iterations = int(config.get("llm.max_tool_iterations", 8))
         turn = Turn()
+
+        def cancelled() -> bool:
+            return stop is not None and stop.is_set()
+
+        def give_up(where: str) -> Turn:
+            turn.cancelled = True
+            turn.error = "Stopped at your request."
+            self._emit("cancelled", turn.error)
+            audit.record(
+                "agent.cancelled", source=self.source,
+                at=where, iterations=turn.iterations,
+                tool_calls=len(turn.tool_calls),
+            )
+            return turn
 
         audit.record("agent.request", source=self.source, text=text)
 
@@ -207,6 +238,8 @@ class Agent:
             with confirmer_scope(self.confirmer):
                 for iteration in range(1, max_iterations + 1):
                     turn.iterations = iteration
+                    if cancelled():
+                        return give_up("before_model")
 
                     try:
                         reply = self._llm.complete(
@@ -251,6 +284,18 @@ class Agent:
                         self._emit("thinking", reply.text)
 
                     for call in reply.tool_calls:
+                        if cancelled():
+                            # The assistant's tool-call message is already in
+                            # history, so every call it named needs a result or
+                            # the transcript is malformed for the next request.
+                            # Say plainly that it did not run.
+                            self.messages.append({
+                                "role": "tool",
+                                "name": call.name,
+                                "tool_call_id": call.id or call.name,
+                                "content": "Not run — the user stopped the request.",
+                            })
+                            continue
                         result = self._run_tool(call)
                         turn.tool_calls.append(call.name)
                         self.messages.append({
@@ -259,6 +304,9 @@ class Agent:
                             "tool_call_id": call.id or call.name,
                             "content": result,
                         })
+
+                    if cancelled():
+                        return give_up("after_tools")
 
                 # Budget exhausted.
                 turn.error = (

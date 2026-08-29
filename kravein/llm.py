@@ -478,6 +478,117 @@ class OpenRouterProvider:
         raise LLMError("no OpenRouter vision model answered")
 
 
+class NovaRouterProvider:
+    """NovaRouter (https://novarouter.site) — an OpenAI-compatible gateway.
+
+    Added as the failover behind Cline. `provider_order` had a single entry, so
+    one provider outage took the assistant down with nothing behind it — which
+    is tolerable at the desk and not tolerable from a phone.
+
+    What was verified against the live API on 2026-08-24, without a key:
+
+    * `/v1/models` returns an OpenAI-shaped list (`{"object": "list", ...}`).
+    * `kimi-k3` is present, served from nvidia-nim, 262k context, listing
+      text/vision/code/reasoning modalities.
+    * `/v1/chat/completions` exists and answers `401 authentication_error`.
+
+    What is **not** verified, because it needs a key: whether tool calling
+    actually works. The request is built to the OpenAI standard (`tools`, then
+    `tool_calls` on the reply), which is what "OpenAI-compatible" is supposed
+    to mean — but this workload lives or dies on native tool calling, so treat
+    it as unproven until a real turn has run. `tools/eval_models.py` against
+    the real schema is the check that settles it, not a "say OK" prompt.
+    """
+
+    name = "novarouter"
+
+    def available(self) -> bool:
+        return bool(config.novarouter_api_key())
+
+    def _base(self) -> str:
+        return str(
+            config.get("llm.novarouter_base_url", "https://novarouter.site/v1")
+        ).rstrip("/")
+
+    def model_name(self, override: str = "") -> str:
+        return override or str(config.get("llm.novarouter_model", "kimi-k3"))
+
+    def status(self) -> str:
+        if not self.available():
+            return (
+                "no key — add novarouter_api_key to "
+                f"{config.CONFIG_DIR / 'api_keys.json'}, or set NOVAROUTER_API_KEY"
+            )
+        return f"key present, model {self.model_name()}"
+
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str = "",
+        tools: list[dict] | None = None,
+        temperature: float = 0.4,
+        model: str = "",
+    ) -> Reply:
+        key = config.novarouter_api_key()
+        if not key:
+            raise LLMError("NovaRouter has no API key configured")
+
+        chosen = self.model_name(model)
+        payload: dict[str, Any] = {
+            "model": chosen,
+            "messages": _to_openai_messages(messages, system),
+            "temperature": temperature,
+        }
+        if tools:
+            payload["tools"] = [{"type": "function", "function": t} for t in tools]
+            payload["tool_choice"] = "auto"
+
+        try:
+            response = requests.post(
+                f"{self._base()}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            raise LLMError(f"NovaRouter unreachable: {exc}") from exc
+
+        if response.status_code == 401:
+            raise LLMError("NovaRouter rejected the API key")
+        if not response.ok:
+            raise LLMError(
+                f"NovaRouter returned {response.status_code}: {response.text[:200]}"
+            )
+
+        data = response.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise LLMError("NovaRouter returned no choices")
+
+        message = choices[0].get("message", {}) or {}
+        reply = Reply(
+            text=(message.get("content") or "").strip(),
+            provider=self.name,
+            model=data.get("model") or chosen,
+        )
+        for call in message.get("tool_calls", []) or []:
+            fn = call.get("function", {}) or {}
+            raw_args = fn.get("arguments", "{}")
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            if fn.get("name"):
+                reply.tool_calls.append(ToolCall(
+                    name=fn["name"], arguments=args, id=call.get("id", ""),
+                ))
+        return reply
+
+
 def _to_openai_messages(messages: list[dict[str, Any]], system: str) -> list[dict]:
     out: list[dict] = []
     if system:
@@ -533,13 +644,14 @@ class LLM:
         self.cline = ClineProvider()
         self.gemini = GeminiProvider()
         self.openrouter = OpenRouterProvider()
+        self.novarouter = NovaRouterProvider()
 
         self._failures: dict[str, int] = {}
         self._cooling_until: dict[str, float] = {}
         self._breaker_lock = threading.Lock()
 
     def _all(self) -> list[Any]:
-        return [self.cline, self.gemini, self.openrouter]
+        return [self.cline, self.gemini, self.openrouter, self.novarouter]
 
     # -- circuit breaker -------------------------------------------------
 
@@ -691,6 +803,8 @@ class LLM:
                 labels.append(f"gemini:{self.gemini.model_name()}")
             elif provider.name == "cline":
                 labels.append(f"cline:{configured_model()}")
+            elif provider.name == "novarouter":
+                labels.append(f"novarouter:{self.novarouter.model_name()}")
             else:
                 labels.append(provider.name)
 

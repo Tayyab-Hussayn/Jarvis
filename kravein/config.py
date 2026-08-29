@@ -136,9 +136,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # Gemini is still used for voice (Live native-audio) and vision, where
         # it is the only option — see voice.live_model below.
         "provider": "cline",
-        # Text/agent chain stays inside Cline, which has several fast models,
-        # rather than hopping to a provider that has proven unstable here.
-        "provider_order": ["cline"],
+        # Cline leads; NovaRouter is the backup. A single-entry chain meant one
+        # provider outage took the whole assistant down with nowhere to fail
+        # over, which matters much more now that the UI is reachable from a
+        # phone and nobody is sitting at the machine to notice why.
+        #
+        # NovaRouter stays inert until a key exists — `available()` is false
+        # without one, so the breaker skips it and nothing changes.
+        "provider_order": ["cline", "novarouter"],
         # Kept configured for vision; not in the agent's text chain.
         "gemini_model": "gemini-3.6-flash",
         # A stalled Gemini is as unusable as a down one, so cap the wait and
@@ -162,6 +167,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "cline_fallback_model": "minimax/minimax-m2.5",
         # Set true to force every Cline call through the CLI.
         "cline_force_cli": False,
+        # NovaRouter (https://novarouter.site) — an OpenAI-compatible gateway.
+        # Verified against the live API on 2026-08-24: `/v1/models` returns an
+        # OpenAI model list and `/v1/chat/completions` answers 401
+        # `authentication_error` without a key. kimi-k3 is served from
+        # nvidia-nim with a 262k context and text/vision/reasoning modalities.
+        #
+        # Base URL is configurable so a move does not need a code change.
+        "novarouter_base_url": "https://novarouter.site/v1",
+        "novarouter_model": "kimi-k3",
         "temperature": 0.4,
         "max_tool_iterations": 8,
     },
@@ -280,6 +294,7 @@ def api_keys() -> dict[str, str]:
     env_map = {
         "gemini_api_key": ("KRAVEIN_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
         "openrouter_api_key": ("KRAVEIN_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
+        "novarouter_api_key": ("KRAVEIN_NOVAROUTER_API_KEY", "NOVAROUTER_API_KEY"),
     }
     for key, env_names in env_map.items():
         for name in env_names:
@@ -297,6 +312,10 @@ def gemini_api_key() -> str:
 
 def openrouter_api_key() -> str:
     return api_keys().get("openrouter_api_key", "")
+
+
+def novarouter_api_key() -> str:
+    return api_keys().get("novarouter_api_key", "")
 
 
 # --------------------------------------------------------------------------

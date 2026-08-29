@@ -205,16 +205,24 @@ def create_app(token: str | None = None) -> Any:
 
         pump_task = asyncio.create_task(pump())
 
+        # One stop flag per turn. The agent loop runs on a worker thread, so
+        # cancelling the asyncio task around it does not reach the loop — the
+        # thread carries on through every remaining tool round. This is the
+        # signal it actually checks.
+        stop_turn = threading.Event()
+
         async def run_turn(turn_id: str, text: str) -> None:
             session.turn_id = turn_id
+            stop_turn.clear()
             session.emit("turn_start", id=turn_id)
             try:
-                turn = await asyncio.to_thread(agent.ask, text)
+                turn = await asyncio.to_thread(agent.ask, text, stop_turn)
                 session.emit(
                     "turn_end", id=turn_id,
                     iterations=turn.iterations,
                     tool_calls=turn.tool_calls,
                     error=turn.error,
+                    cancelled=turn.cancelled,
                 )
             except Exception as exc:  # never let one bad turn kill the socket
                 audit.record("web.turn_failed", error=f"{type(exc).__name__}: {exc}")
@@ -458,6 +466,25 @@ def create_app(token: str | None = None) -> Any:
                             "error",
                             message="That confirmation already expired.",
                         )
+
+                elif kind == "cancel":
+                    # Always answer, even with nothing running. A client that
+                    # shows "Stopping…" until the server confirms would wait
+                    # for ever otherwise — the same failure the voice toggle
+                    # had.
+                    if not busy.is_set():
+                        session.emit("cancelled", id="", pending_confirms=0)
+                        continue
+                    stop_turn.set()
+                    # A turn parked on a confirmation is not looping; it is
+                    # blocked. Answering the card is what lets it reach the
+                    # next stop check at all.
+                    released = session.deny_pending()
+                    audit.record("web.cancel", released_confirms=released)
+                    session.emit(
+                        "cancelled", id=session.turn_id or "",
+                        pending_confirms=released,
+                    )
 
                 elif kind == "reset":
                     if busy.is_set():
@@ -836,14 +863,39 @@ def serve(
         print("  .venv/bin/pip install fastapi uvicorn")
         return 1
 
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        # Remote access is a v3 feature with its own pairing and device
-        # tokens. Refuse rather than quietly exposing the machine.
-        print(f"Refusing to bind {host}: only loopback is supported.")
-        return 1
+    loopback = host in ("127.0.0.1", "localhost", "::1")
+    reachable = host
+
+    if not loopback:
+        # LAN exposure is opt-in and narrow. `0.0.0.0` means "every interface",
+        # which on a laptop can include a public one — that would put a machine
+        # with 144 skills and a shell on the open internet. Bind one address
+        # this machine actually holds, and only a private one.
+        if host in ("0.0.0.0", "::"):
+            print(
+                "Refusing to bind every interface. Name the address to serve "
+                "on, or use --lan to pick this machine's private one:"
+            )
+            for address in webauth.local_addresses():
+                print(f"  --host {address}")
+            return 1
+        if not webauth.is_private_address(host):
+            print(
+                f"Refusing to bind {host}: only private addresses "
+                "(loopback, 10.x, 172.16-31.x, 192.168.x, link-local) are allowed."
+            )
+            return 1
+        if host not in webauth.local_addresses():
+            print(f"Refusing to bind {host}: this machine does not hold that address.")
+            return 1
+
+        # Teach the Host and Origin checks about the address we are serving,
+        # so they keep rejecting everything else. Adding the literal IP — not a
+        # hostname, not a wildcard — is what preserves the rebinding defence.
+        webauth.allow_lan_host(host)
 
     token = webauth.issue_token()
-    url = f"http://{host}:{port}/?token={token}"
+    url = f"http://{reachable}:{port}/?token={token}"
 
     registry.load_skills()
     # Take the throwaway first CPU sample now rather than serving zeros to the
@@ -856,7 +908,19 @@ def serve(
     if not WEB_DIST.is_dir():
         print("(frontend not built yet — API only)")
 
-    if open_browser:
+    if not loopback:
+        # Said out loud, every time. The token and everything after it cross
+        # the network in the clear, which is fine on a WPA-protected home
+        # network and is not fine on open or shared wifi. Someone opening this
+        # on café wifi should not have to infer that from the docs.
+        print()
+        print("  LAN mode — reachable from other devices on this network.")
+        print("  Anyone who has the URL above has full control of this machine.")
+        print("  Traffic is plain HTTP: do not use this on open or shared wifi.")
+        print(f"  Revoke by restarting without --lan, or delete {webauth.token_path()}")
+        print()
+
+    if open_browser and loopback:
         import webbrowser
 
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()

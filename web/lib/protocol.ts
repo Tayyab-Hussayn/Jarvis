@@ -18,7 +18,8 @@ export type ServerFrame =
   | { t: "confirm_request"; id: string; confirm_id: string; action: string; detail: string; danger: Danger; timeout: number }
   | { t: "confirm_expired"; id: string; confirm_id: string }
   | { t: "answer"; id: string; text: string }
-  | { t: "turn_end"; id: string; iterations: number; tool_calls?: string[]; error?: string }
+  | { t: "turn_end"; id: string; iterations: number; tool_calls?: string[]; error?: string; cancelled?: boolean }
+  | { t: "cancelled"; id?: string; pending_confirms?: number }
   | { t: "error"; id?: string; message: string }
   | { t: "reset_ok" }
   | { t: "voice_state"; phase: string; text: string }
@@ -32,6 +33,10 @@ export type ClientFrame =
   // route through the same bridge as a model-issued call.
   | { t: "run"; id: string; skill: string; args: Record<string, unknown> }
   | { t: "confirm_reply"; confirm_id: string; approve: boolean }
+  // Stop a running turn. The agent loop checks a flag between tool rounds;
+  // work already in flight still has to finish, so this is "start nothing
+  // more", not "abort instantly".
+  | { t: "cancel" }
   | { t: "reset" }
   // Voice runs server-side (same machine, loopback only), so the browser only
   // starts and stops it — audio never crosses the socket. `mode` is a
@@ -153,4 +158,7 @@ export interface Message {
   iterations?: number;
   /** Assistant messages stay pending until `turn_end`. */
   pending?: boolean;
+  /** The user stopped this turn. Rendered differently from a failure — it did
+   *  what was asked, so it is not an error. */
+  cancelled?: boolean;
 }

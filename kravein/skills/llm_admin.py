@@ -40,13 +40,47 @@ def _gemini_report() -> str:
     return "\n".join(lines)
 
 
+def _novarouter_report() -> str:
+    """Describe the failover provider, keyed or not.
+
+    Reported even without a key: an empty backup slot is exactly the thing
+    worth seeing in `doctor`, because a chain with one working provider looks
+    identical to a healthy one until the day it does not.
+    """
+    from ..llm import NovaRouterProvider
+
+    provider = NovaRouterProvider()
+    lines = ["NovaRouter provider (failover)"]
+    lines.append(f"  model    : {provider.model_name()}")
+    lines.append(f"  endpoint : {provider._base()}")
+
+    key = config.novarouter_api_key()
+    if not key:
+        lines.append("  key      : NOT SET — the failover slot is empty")
+        lines.append(
+            f"  Fix      : add novarouter_api_key to "
+            f"{config.CONFIG_DIR / 'api_keys.json'}, or set NOVAROUTER_API_KEY"
+        )
+        return "\n".join(lines)
+
+    lines.append(f"  key      : present ({len(key)} chars, ends …{key[-4:]})")
+    lines.append("  available: yes")
+    lines.append(
+        "  Note     : tool calling over this gateway has not been verified "
+        "against a real turn — run tools/eval_models.py before relying on it"
+    )
+    return "\n".join(lines)
+
+
 @skill(category="llm", danger=Danger.SAFE)
 def llm_status() -> str:
     """Show which LLM provider and model the assistant is using."""
     from .. import cline
     from ..llm import client
 
-    return "\n\n".join([client().status(), _gemini_report(), cline.doctor()])
+    return "\n\n".join([
+        client().status(), _gemini_report(), cline.doctor(), _novarouter_report(),
+    ])
 
 
 @skill(category="llm", danger=Danger.MODERATE)

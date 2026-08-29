@@ -180,6 +180,26 @@ class Session:
         pending.event.set()
         return True
 
+    def deny_pending(self) -> int:
+        """Release every waiting confirmation as a denial. Returns how many.
+
+        Cancelling a turn that is parked on a confirmation has to answer it,
+        or the worker thread stays blocked until the 120s timeout and the stop
+        does nothing visible for two minutes. Denial is the only safe
+        resolution: a cancelled request must not carry on and perform the very
+        action it was waiting to be allowed to do.
+
+        Unlike `close()` this leaves the session usable — the socket is fine,
+        it is the turn that is being abandoned.
+        """
+        with self._pending_lock:
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for p in pending:
+            p.approved = False
+            p.event.set()
+        return len(pending)
+
     # -- teardown --------------------------------------------------------
 
     def close(self) -> None:

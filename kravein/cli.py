@@ -421,9 +421,13 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("text", nargs="+")
     send.add_argument("--socket", default="")
 
-    serve = sub.add_parser("serve", help="run the web UI on localhost")
+    serve = sub.add_parser("serve", help="run the web UI")
     serve.add_argument("--host", default="127.0.0.1",
-                       help="loopback only; remote access is not supported yet")
+                       help="address to bind; loopback by default. Only "
+                            "private addresses this machine holds are allowed")
+    serve.add_argument("--lan", action="store_true",
+                       help="bind this machine's private LAN address so a phone "
+                            "on the same network can reach it (plain HTTP)")
     serve.add_argument("--port", type=int, default=8787)
     serve.add_argument("--no-open", action="store_true",
                        help="do not open a browser tab")
@@ -545,10 +549,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if command == "serve":
+        from . import webauth
         from .server import serve as serve_web
 
+        host = args.host
+        if getattr(args, "lan", False):
+            # Resolve here rather than passing a sentinel down, so the address
+            # actually being exposed is printed before anything binds.
+            addresses = webauth.local_addresses()
+            if not addresses:
+                print(red("Could not find a private LAN address on this machine."))
+                return 1
+            if len(addresses) > 1 and args.host == "127.0.0.1":
+                # Several interfaces — a docker bridge and real wifi, say.
+                # Guessing would expose the wrong network.
+                print("This machine has more than one private address:")
+                for address in addresses:
+                    print(f"  kravein serve --host {address}")
+                return 1
+            host = addresses[0]
+
         return serve_web(
-            host=args.host, port=args.port, open_browser=not args.no_open
+            host=host, port=args.port, open_browser=not args.no_open
         )
 
     parser.print_help()

@@ -265,6 +265,28 @@ sends a preference and the server answers with the pipeline it actually started.
 `live` or `local` that cannot run is refused rather than downgraded — silently switching to the
 metered pipeline, or away from it, is not a decision to make on someone's behalf.
 
+**Cancelling has to be cooperative, and it can only bite between things.** The agent loop runs on
+a worker thread, so `turn_task.cancel()` on the asyncio wrapper never reached it — the thread ran
+all eight tool rounds regardless. `Agent.ask(text, stop)` now checks a `threading.Event` before
+each model call, before each tool call and after each tool result. Measured **0.0s** from cancel
+to `turn_end` when the loop is between rounds. What it cannot interrupt is work already in flight,
+and that is not a footnote: a slow provider call is exactly when you want to stop. A cancelled
+turn must still append a `tool` message for every call the assistant named, or the next request
+sees a malformed transcript.
+
+**A cancel arriving while a confirmation is open must answer it.** `events.Session.confirm` blocks
+the worker, so without `deny_pending()` the stop does nothing visible until the 120s timeout.
+Denial is the only safe resolution: a cancelled request must not go on to perform the action it
+was waiting to be allowed to do.
+
+**LAN exposure allows IP literals, never hostnames.** `kravein serve --lan` extends the Host and
+Origin allowlist with the literal address being served and nothing else, which is what keeps the
+DNS-rebinding defence intact — a rebound name still arrives carrying the attacker's hostname.
+Verified against a real LAN bind: a **valid token** with `Host: evil.example.com` is still
+rejected 400, as is another private address this machine holds but is not serving. Note that
+`ipaddress` calls `0.0.0.0` private (it is `0.0.0.0/8`), so `is_private_address()` rejects
+unspecified addresses explicitly rather than leaning on a string check upstream.
+
 **Voice and text share one transcript, and one rendering path.** Spoken turns are built into
 the same `messages` array as typed ones (`s…` ids alongside `t…`) and render through `TurnGraph`
 like everything else — there is no voice-specific component. The parallel `voiceLines` array and

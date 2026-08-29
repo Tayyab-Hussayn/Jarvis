@@ -66,6 +66,10 @@ export function useKravein() {
   const [hello, setHello] = useState<Hello | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
+  // Set optimistically on click and cleared by the server's reply. Stopping is
+  // not instant: the loop finishes whatever tool is already running before it
+  // reaches the next check.
+  const [cancelling, setCancelling] = useState(false);
   const [panelConfirms, setPanelConfirms] = useState<ConfirmView[]>([]);
   // A spoken exchange is a conversation, so it goes into `messages` alongside
   // the typed one and renders through the same template. It used to be held in
@@ -282,13 +286,24 @@ export function useKravein() {
 
         case "turn_end":
           setBusy(false);
+          setCancelling(false);
           liveTurns.current.delete(frame.id);
           patchTurn(frame.id, (message) => ({
             ...message,
             pending: false,
-            error: frame.error || undefined,
+            // A stop is not a failure: it did exactly what was asked. Keeping
+            // it out of `error` stops it rendering in the red error node.
+            error: frame.cancelled ? undefined : frame.error || undefined,
+            cancelled: frame.cancelled || undefined,
             iterations: frame.iterations,
           }));
+          break;
+
+        case "cancelled":
+          // The server always answers, even with nothing running, so the
+          // optimistic "Stopping…" flag can never wedge. `turn_end` follows
+          // when the loop actually unwinds.
+          if (!frame.id) setCancelling(false);
           break;
 
         case "error":
@@ -720,6 +735,12 @@ export function useKravein() {
     );
   }, []);
 
+  const cancel = useCallback(() => {
+    if (!busy) return;
+    setCancelling(true);
+    if (!send({ t: "cancel" })) setCancelling(false);
+  }, [busy, send]);
+
   const reset = useCallback(() => {
     if (busy) return;
     if (!send({ t: "reset" })) setMessages([]);
@@ -798,6 +819,13 @@ export function useKravein() {
     panelConfirms,
     ask,
     run,
+    cancel,
+    // Derived, not reconciled. "Cancelling" is only meaningful while a turn is
+    // running, so anding it with `busy` makes that an invariant of the value
+    // itself rather than something an effect has to keep true. The voice
+    // toggle needed a reconciling effect for exactly this and wedged twice
+    // before it was right; there is nothing here left to wedge.
+    cancelling: cancelling && busy,
     respondToConfirm,
     dismissPanelConfirm,
     reset,

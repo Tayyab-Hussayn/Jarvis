@@ -131,3 +131,49 @@ Also: `media`, `apps` and `wifi_state` are advertised but have no handler at
 all, so they answer `UNKNOWN_COMMAND`.
 
 Pick one vocabulary across both halves before building on this.
+
+---
+
+## Cap the Cline direct-HTTP timeout
+
+**Found 2026-08-24 while testing the stop button. Not yet acted on.**
+
+The cancel mechanism works — 0.0s from cancel to `turn_end` once the loop is
+between rounds. But it can only bite between things, and a measured turn on
+this machine spent **52 seconds inside the first model call** before the loop
+reached any check point. For those 52s Stop does nothing but say "Stopping…".
+
+The cause is a timeout inconsistency. `llm.py` caps Gemini at 20s with the
+comment "a slow Gemini is as unusable as a down one" — but the *primary*
+provider has no such cap:
+
+| Provider | Timeout |
+|---|---|
+| Gemini | 20s (configurable), then failover |
+| Cline direct HTTP | **180s** |
+| Cline CLI | **240s** |
+| OpenRouter | 90s |
+
+So a degraded Cline can hold a turn for three minutes with nothing able to
+interrupt it. Now that NovaRouter is in `provider_order` there is somewhere to
+fail over *to*, which is what makes capping it viable at all.
+
+Proposed: `llm.cline_timeout_seconds`, defaulting to something like 45s, so a
+slow primary hands over instead of hanging. Not done unprompted because it
+changes primary-path behaviour — a legitimately slow long request would start
+failing over, and that tradeoff is the user's call.
+
+---
+
+## Verify NovaRouter tool calling
+
+`NovaRouterProvider` is built to the OpenAI standard (`tools` in, `tool_calls`
+out) and unit-tested against that shape, but **no real turn has run** — there
+is no API key yet. The gateway is confirmed OpenAI-compatible (`/v1/models`
+returns an OpenAI list, `/v1/chat/completions` answers 401) and `kimi-k3` is
+listed as available, 262k context, from nvidia-nim.
+
+This workload lives or dies on native tool calling, so before relying on the
+failover: drop the key in and run `tools/eval_models.py` against the **real
+tool schema**, not a "say OK" prompt. `doctor` already says the slot is empty
+and flags tool calling as unverified.

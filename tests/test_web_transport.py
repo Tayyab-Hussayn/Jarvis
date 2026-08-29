@@ -1304,3 +1304,153 @@ def test_voice_start_resolves_the_pipeline_server_side(client, monkeypatch):
     # than only hearing about the one that happened to be checked first.
     assert "No speech recognition" in frame["text"]
     assert "No Gemini key" in frame["text"]
+
+
+def test_cancel_stops_the_agent_loop_between_tool_rounds():
+    """Cancelling has to reach the loop, not just the task that wraps it.
+
+    The agent runs on a worker thread, so `turn_task.cancel()` never touched
+    it — the thread carried on through every remaining tool round. This drives
+    the real Agent with a stubbed provider that would loop for ever.
+    """
+    import threading
+
+    from kravein import agent as agent_mod
+
+    calls: list[str] = []
+
+    class _Reply:
+        def __init__(self):
+            self.text = ""
+            self.tool_calls = [agent_mod.ToolCall(name="noop", arguments={}, id="c1")]
+
+        @property
+        def wants_tools(self):
+            return True
+
+    stop = threading.Event()
+
+    class _LLM:
+        def complete(self, *a, **k):
+            return _Reply()
+
+    agent = agent_mod.Agent(source="test")
+    agent._llm = _LLM()
+
+    def fake_tool(call):
+        calls.append(call.name)
+        # Ask to stop while a tool is running — the realistic case.
+        if len(calls) == 2:
+            stop.set()
+        return "ok"
+
+    agent._run_tool = fake_tool
+
+    turn = agent.ask("do something", stop)
+
+    assert turn.cancelled is True
+    assert turn.error == "Stopped at your request."
+    # It stopped early rather than burning the whole 8-round budget.
+    assert len(calls) == 2, f"kept running after cancel: {calls}"
+    assert turn.iterations < 8
+
+
+def test_cancel_answers_even_when_nothing_is_running(client):
+    """A client that clears 'Stopping…' on the reply must always get one."""
+    with client.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        json.loads(ws.receive_text())          # hello
+        ws.send_text(json.dumps({"t": "cancel"}))
+        frame = json.loads(ws.receive_text())
+    assert frame["t"] == "cancelled"
+
+
+def test_cancel_releases_a_blocked_confirmation():
+    """A turn parked on a confirmation is blocked, not looping.
+
+    Without answering the card the worker sits until the 120s timeout, so the
+    stop button would appear to do nothing for two minutes.
+    """
+    import asyncio
+    import threading
+
+    from kravein import events
+
+    async def scenario():
+        session = events.Session(asyncio.get_running_loop())
+        answered: list[bool] = []
+
+        def worker():
+            answered.append(session.confirm("delete everything", "detail", Danger.DESTRUCTIVE))
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        await asyncio.sleep(0.2)                # let it park
+
+        released = await asyncio.to_thread(session.deny_pending)
+        thread.join(timeout=3)
+
+        assert released == 1
+        assert answered == [False], "a cancelled turn must not be allowed to proceed"
+        assert not session.closed, "the socket is fine; only the turn was abandoned"
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# LAN exposure
+# ---------------------------------------------------------------------------
+
+def test_only_private_addresses_may_be_bound():
+    """A public bind would put a shell and 144 skills on the open internet."""
+    from kravein import webauth
+
+    assert webauth.is_private_address("192.168.1.10")
+    assert webauth.is_private_address("10.0.0.4")
+    assert webauth.is_private_address("172.17.0.1")
+    assert webauth.is_private_address("127.0.0.1")
+
+    assert not webauth.is_private_address("8.8.8.8")
+    assert not webauth.is_private_address("0.0.0.0")
+    assert not webauth.is_private_address("example.com")
+
+    with pytest.raises(ValueError):
+        webauth.allow_lan_host("8.8.8.8")
+
+
+def test_lan_allowlist_takes_ip_literals_only(monkeypatch):
+    """The rebinding defence survives only if no hostname is ever accepted.
+
+    A valid token is not enough: an attacker who rebinds a name onto this
+    address still arrives carrying *their* hostname in Host, and that is what
+    gets rejected.
+    """
+    from kravein import webauth
+
+    monkeypatch.setattr(webauth, "_lan_hostnames", set())
+
+    assert not webauth.host_allowed("192.168.1.10:8787")
+    webauth.allow_lan_host("192.168.1.10")
+    assert webauth.host_allowed("192.168.1.10:8787")
+
+    # Everything else still refused, including a name that resolves here.
+    assert not webauth.host_allowed("evil.example.com")
+    assert not webauth.host_allowed("kravein.local")
+    # And another private address this machine may hold but is not serving.
+    assert not webauth.host_allowed("10.1.2.3:8787")
+
+    assert webauth.origin_allowed("http://192.168.1.10:8787")
+    assert not webauth.origin_allowed("https://evil.example.com")
+
+    # Loopback keeps working alongside it.
+    assert webauth.host_allowed("127.0.0.1:8787")
+
+
+def test_lan_exposure_does_not_widen_by_accident(monkeypatch):
+    """Allowing one address must not allow the whole subnet."""
+    from kravein import webauth
+
+    monkeypatch.setattr(webauth, "_lan_hostnames", set())
+    webauth.allow_lan_host("192.168.1.10")
+
+    for neighbour in ("192.168.1.11:8787", "192.168.1.1:8787", "192.168.2.10"):
+        assert not webauth.host_allowed(neighbour), neighbour

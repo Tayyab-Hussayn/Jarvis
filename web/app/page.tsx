@@ -77,6 +77,8 @@ export default function Page() {
     panelConfirms,
     ask,
     run,
+    cancel,
+    cancelling,
     respondToConfirm,
     dismissPanelConfirm,
     reset,
@@ -220,6 +222,8 @@ export default function Page() {
                 onAsk={ask}
                 onRespond={respondToConfirm}
                 onReset={reset}
+                onCancel={cancel}
+                cancelling={cancelling}
                 voicePhase={voicePhase}
                 voiceStopping={voiceStopping}
                 voiceMode={voiceMode}

@@ -30,7 +30,7 @@ import { DangerBadge } from "./ui";
 const COLLAPSE_AFTER = 12;
 const NARROW_PX = 900;
 
-type NodeKind = "request" | "tool" | "confirm" | "answer" | "error";
+type NodeKind = "request" | "tool" | "confirm" | "answer" | "error" | "stopped";
 
 interface GraphNode {
   key: string;
@@ -52,6 +52,11 @@ function buildNodes(message: Message, request: string): GraphNode[] {
   }
   if (message.text) nodes.push({ key: "ans", kind: "answer", text: message.text });
   if (message.error) nodes.push({ key: "err", kind: "error", text: message.error });
+  // A stop is not a failure — it did what was asked — so it gets its own
+  // neutral node rather than the red error treatment.
+  if (message.cancelled) {
+    nodes.push({ key: "stop", kind: "stopped", text: "Stopped at your request." });
+  }
   return nodes;
 }
 
@@ -170,6 +175,20 @@ function Node({
           style={{ animation: "node-in var(--motion-base) var(--ease)" }}
         >
           <Markdown>{node.text ?? ""}</Markdown>
+        </div>
+      );
+
+    case "stopped":
+      return (
+        <div
+          className="w-[min(38rem,100%)] rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"
+          style={{
+            borderLeftColor: "var(--moderate)",
+            color: "var(--text-muted)",
+          }}
+        >
+          {node.text} Anything already running finished; nothing further was
+          started.
         </div>
       );
 

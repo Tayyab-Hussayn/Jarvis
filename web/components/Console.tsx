@@ -94,6 +94,8 @@ export function Console({
   onAsk,
   onRespond,
   onReset,
+  onCancel,
+  cancelling,
   voicePhase,
   voiceStopping,
   voiceMode,
@@ -114,6 +116,8 @@ export function Console({
   onAsk: (text: string) => void;
   onRespond: (confirmId: string, approve: boolean) => void;
   onReset: () => void;
+  onCancel: () => void;
+  cancelling: boolean;
   voicePhase: VoicePhase;
   voiceStopping: boolean;
   voiceMode: "local" | "live";
@@ -338,13 +342,22 @@ export function Console({
             className="max-h-40 min-h-[2.75rem] flex-1 resize-none rounded-[var(--radius-lg)] border border-[var(--border-strong)] bg-[var(--surface)] px-4 py-2.5 text-[length:var(--text-base)] outline-none placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] disabled:opacity-50"
             style={{ transition: "border-color var(--motion-fast) var(--ease)" }}
           />
-          <Button
-            variant="primary"
-            onClick={submit}
-            disabled={busy || offline || !draft.trim()}
-          >
-            {busy ? "Working…" : "Send"}
-          </Button>
+          {/* One control, two jobs. While a turn is running the only useful
+              action is stopping it, and a disabled "Working…" button was
+              occupying exactly the spot a stop belongs in. */}
+          {busy ? (
+            <Button variant="danger" onClick={onCancel} disabled={cancelling}>
+              {cancelling ? "Stopping…" : "Stop"}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              onClick={submit}
+              disabled={offline || !draft.trim()}
+            >
+              Send
+            </Button>
+          )}
           <Button
             variant="ghost"
             onClick={onReset}
