@@ -167,6 +167,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "cline_fallback_model": "minimax/minimax-m2.5",
         # Set true to force every Cline call through the CLI.
         "cline_force_cli": False,
+        # Cap the primary the same way Gemini is capped: a slow provider is as
+        # unusable as a down one, and cancellation cannot interrupt a request
+        # already in flight. Was effectively 180s, during which Stop could do
+        # nothing. Only safe to cap because NovaRouter is now behind it.
+        "cline_timeout_seconds": 45,
         # NovaRouter (https://novarouter.site) — an OpenAI-compatible gateway.
         # Verified against the live API on 2026-08-24: `/v1/models` returns an
         # OpenAI model list and `/v1/chat/completions` answers 401

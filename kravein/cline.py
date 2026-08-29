@@ -483,7 +483,7 @@ def direct_complete(
     tools: list[dict] | None = None,
     temperature: float = 0.4,
     model: str = "",
-    timeout: float = 180,
+    timeout: float = 0.0,
 ) -> dict[str, Any]:
     """Call Cline's OpenAI-compatible endpoint directly.
 
@@ -495,6 +495,19 @@ def direct_complete(
     Cline surfaces, so the caller can fall back to the CLI.
     """
     import requests
+
+    # A slow primary is as unusable as a down one — the same reasoning that
+    # caps Gemini at 20s, applied to the provider that actually leads. It sat
+    # at 180s, which meant a degraded Cline could hold a turn for three minutes
+    # with nothing able to interrupt it: cancellation only bites between tool
+    # rounds, so Stop can do nothing at all while the request is in flight.
+    # Measured on 2026-08-24, one turn spent 52s inside this call.
+    #
+    # Capping is only viable because there is now somewhere to fail over to.
+    # Raise `llm.cline_timeout_seconds` if you routinely ask for work that
+    # legitimately takes longer than this to produce a first token.
+    if timeout <= 0:
+        timeout = float(config.get("llm.cline_timeout_seconds", 45) or 45)
 
     model = model or configured_model()
     payload: dict[str, Any] = {

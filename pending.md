@@ -134,9 +134,13 @@ Pick one vocabulary across both halves before building on this.
 
 ---
 
-## Cap the Cline direct-HTTP timeout
+## ~~Cap the Cline direct-HTTP timeout~~ — DONE 2026-08-30
 
-**Found 2026-08-24 while testing the stop button. Not yet acted on.**
+`llm.cline_timeout_seconds`, default 45s. Raise it if you routinely ask for
+work that legitimately takes longer to produce a first token. Original notes
+kept below for the reasoning.
+
+**Found 2026-08-24 while testing the stop button.**
 
 The cancel mechanism works — 0.0s from cancel to `turn_end` once the loop is
 between rounds. But it can only bite between things, and a measured turn on
@@ -165,15 +169,50 @@ failing over, and that tradeoff is the user's call.
 
 ---
 
-## Verify NovaRouter tool calling
+## NovaRouter cannot be the primary at 144 skills
 
-`NovaRouterProvider` is built to the OpenAI standard (`tools` in, `tool_calls`
-out) and unit-tested against that shape, but **no real turn has run** — there
-is no API key yet. The gateway is confirmed OpenAI-compatible (`/v1/models`
-returns an OpenAI list, `/v1/chat/completions` answers 401) and `kimi-k3` is
-listed as available, 262k context, from nvidia-nim.
+**Tested against the live API with a real key, 2026-08-30.**
 
-This workload lives or dies on native tool calling, so before relying on the
-failover: drop the key in and run `tools/eval_models.py` against the **real
-tool schema**, not a "say OK" prompt. `doctor` already says the slot is empty
-and flags tool calling as unverified.
+Tool calling **works**: `list_windows`, `battery_status` and `run_command` all
+came back as proper `tool_calls`. The provider is sound as a failover and is
+keyed and in `provider_order`.
+
+What blocks it from leading:
+
+**1. `tools` is capped at 128. There are 144 skills.**
+
+```
+400 validation_failed: "Array must contain at most 128 element(s)", param: "tools"
+```
+
+Making it primary as-is would 400 on *every* turn and fall through to Cline —
+a guaranteed wasted round-trip per request, strictly worse than today.
+
+The truncation is not cosmetic. Sending a 128-slice that happened to omit
+`system_status` produced *"I don't have a `system_status` tool"* and a
+substituted `run_command`. The model cannot call what it cannot see.
+
+**2. Intermittent 503s from server-side web grounding.**
+
+`"What windows do I have open right now?"` failed 3/3 with
+`web_search_unavailable — Live web search did not return grounded sources`,
+while `"List my open windows."` succeeded. NovaRouter routes some prompts to a
+live web search that is flaky, and that failure surfaces as a provider error.
+
+**3. Latency 8–12s per call** with 128 tools attached, against Cline's ~2.7s
+baseline.
+
+### If it ever needs to lead
+
+Two routes, both real work, neither taken:
+
+* **Per-provider tool budget** — trim to 128 for NovaRouter only, dropping 16
+  from the settings/games/documents tail. Those become uncallable on that
+  provider. Category counts: settings 17, files 16, interact 16, browser 11,
+  system 11, apps 10, windows 10, notify 9, media 7, power 7, web 6,
+  documents 5, llm 5, games 4, shell 4, memory 3, terminal 3.
+* **Relevance-selected tools per turn** — nothing permanently lost, but it is
+  tool retrieval, it affects every provider, and it can misfire by omitting
+  something the model needed.
+
+Decision on 2026-08-30: keep Cline primary, NovaRouter as failover.

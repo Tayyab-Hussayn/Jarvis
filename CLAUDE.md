@@ -265,6 +265,16 @@ sends a preference and the server answers with the pipeline it actually started.
 `live` or `local` that cannot run is refused rather than downgraded — silently switching to the
 metered pipeline, or away from it, is not a decision to make on someone's behalf.
 
+**A timeout cap is only as good as the failover behind it.** Capping Cline at 45s looked like a
+straight win — a slow primary hands over instead of holding a turn for 180s while Stop can do
+nothing. It was a regression: Cline timed out, the facade failed over, and NovaRouter rejected all
+144 tools with `400 Array must contain at most 128 element(s)`, so the request failed outright
+where before it merely hung. Verified end to end before and after. Two rules fell out of it:
+**measure the failover path, not just the primary**, and a provider with a tool cap needs a
+budget (`NovaRouterProvider._fit_tools`) or it cannot serve an agent turn at all. The budget drops
+by category, least load-bearing last — you are already degraded, and "cannot change the volume
+right now" beats "the request failed".
+
 **Cancelling has to be cooperative, and it can only bite between things.** The agent loop runs on
 a worker thread, so `turn_task.cancel()` on the asyncio wrapper never reached it — the thread ran
 all eight tool rounds regardless. `Agent.ask(text, stop)` now checks a `threading.Event` before

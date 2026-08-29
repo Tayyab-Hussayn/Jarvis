@@ -502,8 +502,62 @@ class NovaRouterProvider:
 
     name = "novarouter"
 
+    # The gateway rejects more than this outright:
+    #   400 validation_failed "Array must contain at most 128 element(s)"
+    # There are 144 skills, so the full set never fits.
+    MAX_TOOLS = 128
+
+    # Least load-bearing last. When something has to be dropped, drop the
+    # things a failing-over turn is least likely to need: you are already in a
+    # degraded path, and "the assistant cannot change a setting right now" is
+    # a far better outcome than "the request failed".
+    _CATEGORY_PRIORITY = (
+        "system", "windows", "shell", "terminal", "files", "browser",
+        "apps", "interact", "media", "power", "notify", "web", "memory",
+        "llm", "documents", "games", "settings",
+    )
+
     def available(self) -> bool:
         return bool(config.novarouter_api_key())
+
+    def _fit_tools(self, tools: list[dict] | None) -> list[dict] | None:
+        """Trim to what the gateway will accept, worst-case last.
+
+        This exists because capping Cline's timeout turned a slow primary into
+        a *failed request*: Cline would time out, the facade would fail over,
+        and NovaRouter would 400 on all 144 tools — so the failover could not
+        actually serve an agent turn. Measured directly; see pending.md.
+
+        The order is deterministic so the same 128 go every time, which keeps
+        behaviour reproducible and stays friendly to prompt caching. Nothing
+        here is clever: it is a budget, and the model genuinely cannot call
+        what it is not shown.
+        """
+        if not tools or len(tools) <= self.MAX_TOOLS:
+            return tools
+
+        rank = {name: i for i, name in enumerate(self._CATEGORY_PRIORITY)}
+        registry_categories: dict[str, str] = {}
+        try:
+            from .registry import all_skills
+
+            registry_categories = {
+                name: skill.category for name, skill in all_skills().items()
+            }
+        except Exception:
+            pass
+
+        def sort_key(tool: dict) -> tuple[int, str]:
+            category = registry_categories.get(tool.get("name", ""), "")
+            return (rank.get(category, len(rank)), tool.get("name", ""))
+
+        ordered = sorted(tools, key=sort_key)
+        kept, dropped = ordered[: self.MAX_TOOLS], ordered[self.MAX_TOOLS :]
+        audit.record(
+            "llm.novarouter.tools_trimmed",
+            sent=len(kept), dropped=[t.get("name", "") for t in dropped],
+        )
+        return kept
 
     def _base(self) -> str:
         return str(
@@ -540,8 +594,9 @@ class NovaRouterProvider:
             "messages": _to_openai_messages(messages, system),
             "temperature": temperature,
         }
-        if tools:
-            payload["tools"] = [{"type": "function", "function": t} for t in tools]
+        fitted = self._fit_tools(tools)
+        if fitted:
+            payload["tools"] = [{"type": "function", "function": t} for t in fitted]
             payload["tool_choice"] = "auto"
 
         try:
