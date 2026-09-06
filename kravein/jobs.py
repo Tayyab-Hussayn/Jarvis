@@ -64,6 +64,12 @@ STALE_RUN_SECONDS = 30 * 60
 
 VALID_KINDS = ("notify", "agent")
 
+# A paused job keeps its schedule and its history but is never claimed by a
+# tick. Deliberately distinct from cancelling: "not now" and "never again" are
+# different intentions, and conflating them means the only way to silence a
+# recurring job for a week is to delete it and rebuild it from memory.
+PAUSABLE = ("pending", "paused")
+
 
 # ---------------------------------------------------------------------------
 # Time helpers
@@ -341,7 +347,7 @@ def all_jobs() -> list[dict[str, Any]]:
 
 
 def pending() -> list[dict[str, Any]]:
-    return [j for j in all_jobs() if j.get("state") in ("pending", "running")]
+    return [j for j in all_jobs() if j.get("state") in ("pending", "running", "paused")]
 
 
 def cancel(job_id: str = "") -> int:
@@ -354,7 +360,7 @@ def cancel(job_id: str = "") -> int:
         keep = []
         for job in data.get("jobs", []):
             target = not job_id or job.get("id") == job_id
-            if target and job.get("state") in ("pending", "running"):
+            if target and job.get("state") in ("pending", "running", "paused"):
                 removed += 1
                 record_run(event="cancelled", id=job.get("id"))
                 continue
@@ -362,6 +368,90 @@ def cancel(job_id: str = "") -> int:
         data["jobs"] = keep
         save(data)
     return removed
+
+
+def set_paused(job_id: str, paused: bool) -> str:
+    """Pause or resume one job. Returns the new state, or "" if not found.
+
+    A paused job is skipped by `_claim` but keeps its `next_run`, so resuming
+    is not a reschedule — it picks up the schedule it always had. If that
+    moment has since passed, the normal grace window decides what happens,
+    exactly as it would after a suspend.
+    """
+    with locked() as got:
+        if not got:
+            raise RuntimeError("job store is busy")
+        data = load()
+        for job in data.get("jobs", []):
+            if job.get("id") != job_id:
+                continue
+            if job.get("state") not in PAUSABLE:
+                return ""
+            job["state"] = "paused" if paused else "pending"
+            save(data)
+            record_run(event="paused" if paused else "resumed", id=job_id)
+            return job["state"]
+    return ""
+
+
+def edit(
+    job_id: str,
+    *,
+    prompt: str | None = None,
+    when: datetime | None = None,
+    cron: str | None = None,
+    title: str | None = None,
+    kind: str | None = None,
+    speak: bool | None = None,
+) -> dict[str, Any] | None:
+    """Change a job in place. Returns the updated record, or None if missing.
+
+    Only fields that are passed are touched, so a caller editing the message
+    does not have to restate the schedule. Changing the schedule clears the
+    retry counter — the old backoff belonged to the old plan.
+    """
+    with locked() as got:
+        if not got:
+            raise RuntimeError("job store is busy")
+        data = load()
+        for job in data.get("jobs", []):
+            if job.get("id") != job_id:
+                continue
+
+            if kind is not None:
+                if kind not in VALID_KINDS:
+                    raise ValueError(f"kind must be one of {VALID_KINDS}")
+                job["kind"] = kind
+            if prompt is not None:
+                job["prompt"] = prompt
+            if title is not None:
+                job["title"] = title
+            if speak is not None:
+                job["speak"] = bool(speak)
+
+            if cron is not None:
+                if cron and not valid_cron(cron):
+                    raise ValueError(f"not a valid cron expression: {cron!r}")
+                job["cron"] = cron
+                if cron:
+                    nxt = next_cron(cron, job.get("timezone", ""))
+                    if nxt is None:
+                        raise ValueError(f"could not schedule cron {cron!r}")
+                    job["next_run"] = iso(nxt)
+                    job["attempts"] = 0
+            if when is not None:
+                job["cron"] = "" if cron is None else job["cron"]
+                job["next_run"] = iso(when.astimezone(timezone.utc))
+                job["attempts"] = 0
+
+            # Editing a finished job is how you reuse it; put it back in play.
+            if job.get("state") in ("done", "failed", "missed"):
+                job["state"] = "pending"
+
+            save(data)
+            record_run(event="edited", id=job_id, next_run=job.get("next_run", ""))
+            return dict(job)
+    return None
 
 
 def _update(job_id: str, **fields: Any) -> None:

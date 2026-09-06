@@ -3093,3 +3093,69 @@ def test_waking_from_suspend_does_not_fire_a_thundering_herd(store):
     assert store.parse_iso(
         [j for j in store.all_jobs() if j["id"] == daily["id"]][0]["next_run"]
     ) > store.now_utc()
+
+
+def test_a_paused_job_keeps_its_schedule_but_never_fires(store):
+    """Pause is not cancel. "Not now" and "never again" are different, and
+    conflating them means silencing a recurring job for a week requires
+    deleting it and rebuilding it from memory.
+    """
+    fired = []
+    store.run_job = lambda job: (fired.append(job["id"]), (True, "ok", ""))[1]
+
+    job = store.add(prompt="daily", cron="*/1 * * * *", kind="notify")
+    store._update(job["id"], next_run=store.iso(store.now_utc()))
+    due_before = store.all_jobs()[0]["next_run"]
+
+    assert store.set_paused(job["id"], True) == "paused"
+    store.tick()
+    assert fired == [], "a paused job fired"
+    # The schedule is untouched, so resuming is not a reschedule.
+    assert store.all_jobs()[0]["next_run"] == due_before
+
+    assert store.set_paused(job["id"], False) == "pending"
+    store.tick()
+    assert fired == [job["id"]]
+
+    assert store.set_paused("nope", True) == "", "invented a job that does not exist"
+
+
+def test_editing_changes_only_what_is_passed(store):
+    """Editing the message must not require restating the schedule."""
+    job = store.add(prompt="old text", cron="0 9 * * *", kind="notify", title="Old")
+    before = store.all_jobs()[0]["next_run"]
+
+    updated = store.edit(job["id"], prompt="new text")
+    assert updated["prompt"] == "new text"
+    assert updated["cron"] == "0 9 * * *", "clearing the schedule was not asked for"
+    assert updated["title"] == "Old"
+    assert updated["next_run"] == before
+
+    # A new cron recomputes the next run and clears any retry backoff.
+    store._update(job["id"], attempts=2)
+    updated = store.edit(job["id"], cron="0 17 * * 5")
+    assert updated["cron"] == "0 17 * * 5"
+    assert updated["attempts"] == 0
+
+    # Giving an absolute time turns a repeating job into a one-shot.
+    from datetime import timedelta
+
+    updated = store.edit(job["id"], when=store.now_utc() + timedelta(days=1))
+    assert updated["cron"] == ""
+
+    with pytest.raises(ValueError):
+        store.edit(job["id"], cron="not a cron")
+    assert store.edit("nope", prompt="x") is None
+
+
+def test_editing_a_finished_job_puts_it_back_in_play(store):
+    """Reusing a job you already ran should not mean retyping it."""
+    store.run_job = lambda job: (True, "ok", "")
+    job = store.add(prompt="one shot", when=store.now_utc(), kind="notify")
+    store.tick()
+    assert store.all_jobs()[0]["state"] == "done"
+
+    from datetime import timedelta
+
+    updated = store.edit(job["id"], when=store.now_utc() + timedelta(hours=2))
+    assert updated["state"] == "pending"

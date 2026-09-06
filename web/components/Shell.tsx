@@ -52,15 +52,13 @@ export interface NavItem {
 export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Agent",
-    items: [
-      { id: "console", label: "Console", icon: "console" },
-      { id: "schedule", label: "Schedule", icon: "schedule" },
-    ],
+    items: [{ id: "console", label: "Console", icon: "console" }],
   },
   {
     label: "Machine",
     items: [
       { id: "system", label: "System", icon: "system" },
+      { id: "schedule", label: "Schedule", icon: "schedule" },
       { id: "windows", label: "Windows", icon: "windows" },
       { id: "files", label: "Files", icon: "files" },
       { id: "apps", label: "Apps", icon: "apps" },

@@ -263,3 +263,87 @@ def _timer_active() -> bool:
         ["systemctl", "--user", "is-active", "kravein-jobs.timer"], timeout=8
     )
     return result.stdout.strip() == "active"
+
+
+@skill(category="schedule", danger=Danger.MODERATE)
+def pause_job(job_id: str, resume: bool = False) -> str:
+    """Pause a scheduled job, or resume a paused one.
+
+    A paused job keeps its schedule and history but never fires. This is
+    deliberately not the same as cancelling: "not now" and "never again" are
+    different, and the only way to quieten a recurring job otherwise would be
+    to delete it and rebuild it from memory.
+
+    Args:
+        job_id: Which job, e.g. "j3".
+        resume: True to resume a paused job instead of pausing it.
+    """
+    job_id = (job_id or "").strip()
+    if not job_id:
+        return "Say which job to pause, e.g. j3."
+    try:
+        state = jobs.set_paused(job_id, not resume)
+    except RuntimeError as exc:
+        return f"Could not change {job_id}: {exc}"
+    if not state:
+        return f"No job {job_id!r} that can be paused or resumed."
+    audit.record("schedule.paused", id=job_id, state=state)
+    return f"{job_id} is now {state}."
+
+
+@skill(category="schedule", danger=Danger.MODERATE)
+def edit_job(
+    job_id: str,
+    prompt: str = "",
+    when: str = "",
+    repeat: str = "",
+    title: str = "",
+) -> str:
+    """Change an existing scheduled job.
+
+    Only the fields you pass are changed, so editing the message does not
+    require restating the schedule. Editing a finished job puts it back in
+    play.
+
+    Args:
+        job_id: Which job, e.g. "j3".
+        prompt: New message or request.
+        when: New absolute ISO 8601 time, e.g. "2026-09-07T17:00". Resolve any
+            relative phrasing yourself from the current time in the context.
+        repeat: New 5-field cron expression. Leave empty to keep the current
+            one — to turn a repeating job into a one-shot, pass `when`
+            instead, which clears the repeat.
+        title: New notification heading.
+    """
+    job_id = (job_id or "").strip()
+    if not job_id:
+        return "Say which job to edit, e.g. j3."
+
+    existing = next((j for j in jobs.all_jobs() if j.get("id") == job_id), None)
+    if existing is None:
+        return f"No job {job_id!r}."
+
+    moment = None
+    if when.strip():
+        moment = jobs.parse_when(when, existing.get("timezone", ""))
+        if moment is None:
+            return (
+                f"{when!r} is not a time I can read. Pass an absolute ISO 8601 "
+                "timestamp such as '2026-09-07T17:00'."
+            )
+
+    try:
+        updated = jobs.edit(
+            job_id,
+            prompt=prompt.strip() or None,
+            when=moment,
+            cron=repeat.strip() or None,
+            title=title.strip() or None,
+        )
+    except (ValueError, RuntimeError) as exc:
+        return f"Could not edit {job_id}: {exc}"
+
+    if updated is None:
+        return f"No job {job_id!r}."
+    audit.record("schedule.edited", id=job_id)
+    return f"Updated {job_id}. Next run: {updated.get('next_run', '?')}."
