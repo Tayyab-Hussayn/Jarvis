@@ -41,6 +41,11 @@ from pathlib import Path
 from typing import Any
 
 from . import config
+# Clock helpers live in `timeutil` so `routines.py` can share them without
+# importing this module. Re-exported under their old names because the skills,
+# the server and the tests all reach for `jobs.parse_iso` and friends.
+from .timeutil import iso, local_timezone, now_utc, parse_iso  # noqa: F401
+from .timeutil import zone as _zone
 
 STORE = config.STATE_DIR / "jobs.json"
 LOCK = config.STATE_DIR / "jobs.lock"
@@ -72,50 +77,8 @@ PAUSABLE = ("pending", "paused")
 
 
 # ---------------------------------------------------------------------------
-# Time helpers
+# Time helpers — see `timeutil`, imported above
 # ---------------------------------------------------------------------------
-
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def iso(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat()
-
-
-def parse_iso(text: str) -> datetime | None:
-    """Parse a stored timestamp. Naive input is read as UTC, never local."""
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(text))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def local_timezone() -> str:
-    """The machine's IANA zone name, or UTC if it cannot be determined."""
-    try:
-        link = Path("/etc/localtime").resolve()
-        parts = link.parts
-        if "zoneinfo" in parts:
-            return "/".join(parts[parts.index("zoneinfo") + 1:])
-    except OSError:
-        pass
-    return os.environ.get("TZ", "") or "UTC"
-
-
-def _zone(name: str):
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-    try:
-        return ZoneInfo(name or local_timezone())
-    except (ZoneInfoNotFoundError, ValueError):
-        return timezone.utc
-
 
 _RELATIVE = __import__("re").compile(
     r"^(?:in\s+)?(?:(?P<days>\d+)\s*d)?\s*(?:(?P<hours>\d+)\s*h)?\s*"
@@ -651,70 +614,34 @@ def run_job(job: dict[str, Any]) -> tuple[bool, str, str]:
 
 
 def deliver(job: dict[str, Any], text: str, *, failed: bool = False) -> None:
-    """Tell the user. Desktop notification always; web UI as well if it is up."""
-    title = job.get("title") or "Kravein"
-    if failed:
-        title = f"{title} — failed"
+    """Tell the user. Desktop notification always; web UI as well if it is up.
 
-    try:
-        from .platform import notify
-
-        notify.send(
-            text or "(nothing to say)", title,
-            urgency="critical" if failed else "normal",
-            timeout_ms=0,
-        )
-    except Exception as exc:
-        record_run(event="notify_failed", id=job.get("id"), error=str(exc)[:200])
-
-    if job.get("speak") and not failed:
-        try:
-            from .platform import tts
-
-            tts.speak(text, blocking=False)
-        except Exception:
-            pass
-
-    _push_to_web(job, text, failed=failed)
-
-
-def _push_to_web(job: dict[str, Any], text: str, *, failed: bool) -> None:
-    """Best-effort push to a running `kravein serve`.
-
-    The tick is its own short-lived process, so it cannot reach a browser
-    directly — it posts to the local server, which fans the event out to
-    whatever sockets are connected. A refused connection means the UI simply
-    is not running, which is the normal case and not worth reporting.
+    The mechanics moved to `delivery.py` when the routine engine needed the
+    same escalation. This keeps the job-shaped signature, because the tick and
+    the tests both call it with a job record.
     """
-    try:
-        import urllib.error
-        import urllib.request
+    from . import delivery
 
-        from . import webauth
+    channels = [delivery.NOTIFY]
+    if job.get("speak"):
+        channels.append(delivery.SPEAK)
 
-        token = webauth.read_token()
-        if not token:
-            return
-        port = int(config.get("web.port", 8787) or 8787)
-        payload = json.dumps({
+    problems = delivery.deliver(
+        text,
+        title=job.get("title") or "Kravein",
+        failed=failed,
+        channels=tuple(channels),
+        push_path="/api/job-event",
+        push_payload={
             "id": job.get("id", ""),
             "title": job.get("title", ""),
             "text": text,
             "failed": bool(failed),
-        }).encode("utf-8")
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/job-event",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {token}",
-                "Host": f"127.0.0.1:{port}",
-            },
-            method="POST",
-        )
-        urllib.request.urlopen(request, timeout=3).close()
-    except Exception:
-        pass
+        },
+    )
+    if delivery.NOTIFY in problems:
+        record_run(event="notify_failed", id=job.get("id"),
+                   error=problems[delivery.NOTIFY][:200])
 
 
 def tick(grace: int = 0) -> int:
@@ -773,9 +700,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "tick":
         try:
-            ran = tick()
+            tick()
         except Exception as exc:
             record_run(event="tick_error", error=f"{type(exc).__name__}: {exc}")
+            return 1
+
+        # Routines ride the same timer and share nothing else — separate store,
+        # separate lock, separate pass. Imported here rather than at module
+        # level so importing `jobs` as a library does not drag it in, and so a
+        # failure in one subsystem cannot stop the other from running.
+        try:
+            from . import routines
+
+            routines.tick()
+        except Exception as exc:
+            record_run(event="routine_tick_error", error=f"{type(exc).__name__}: {exc}")
             return 1
         return 0
 
