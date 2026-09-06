@@ -19,7 +19,7 @@ export function FilesView({ run }: { run: RunSkill }) {
     <Screen
       subtitle="Browse, search and measure. Deletions and moves always ask first."
     >
-      <div className="space-y-4 overflow-y-auto pb-6">
+      <div className="space-y-4">
         <Panel title="Browse">
           <div className="flex flex-wrap items-center gap-2">
             <Input

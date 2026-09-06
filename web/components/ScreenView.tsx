@@ -27,7 +27,7 @@ export function ScreenView({ run }: { run: RunSkill }) {
     <Screen
       subtitle="Look at the display, drive input, search the web."
     >
-      <div className="space-y-4 overflow-y-auto pb-6">
+      <div className="space-y-4">
         <Panel title="Ask about what's on screen">
           <div className="flex flex-wrap items-center gap-2">
             <Input

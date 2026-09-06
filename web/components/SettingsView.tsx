@@ -377,7 +377,7 @@ export function SettingsView() {
         </>
       }
     >
-      <div className="min-h-0 overflow-y-auto pb-6">
+      <div className="">
         {error && (
           <div
             className="mb-4 rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"

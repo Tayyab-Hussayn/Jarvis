@@ -284,6 +284,20 @@ agent answers normally, explaining it could not act — which reads as success t
 point is finding out it did not happen. `jobs.run_job()` watches tool results for a refusal and
 reports the run as failed.
 
+**`overflow-y-auto` does nothing on a flex child without `min-h-0`.** A flex item will not shrink
+below its content, so the element grows to fit and never scrolls; the overflow then escapes into
+whatever ancestor is `overflow-hidden` and the content is simply unreachable. Every panel had
+added its own `overflow-y-auto` to a div with no height constraint, so **five screens clipped** —
+over 1,000px of the Apps list could not be reached at all. The scroll container is now `Screen`'s
+content wrapper (`min-h-0 flex-1 overflow-y-auto`), once, so every current and future panel
+inherits it. `tools/check_layout.py` walks every view and fails if anything overflows with nothing
+able to scroll it — there is no JS test runner here, so that script is the only thing watching.
+
+**A stale bundle will make a correct fix look broken.** Kravein's Playwright profile is
+persistent and caches `index.html`, so re-measuring after a rebuild reported the identical numbers
+and the layout fix looked like a no-op. Always cache-bust (`?r=<time>`) when verifying a frontend
+change in that browser.
+
 **The clock belongs in the messages, not the system prompt.** A model asked to schedule
 "next Tuesday" resolves it against whatever date it believes today to be — its training cutoff.
 The obvious fix is a timestamp in the system prompt, and that is the wrong place: the system

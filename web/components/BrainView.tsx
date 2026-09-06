@@ -84,7 +84,7 @@ export function BrainView({ run }: { run: RunSkill }) {
         </div>
       }
     >
-      <div className="space-y-4 overflow-y-auto pb-6">
+      <div className="space-y-4">
         <SkillOutput state={skill} />
 
         {tab === "model" && (

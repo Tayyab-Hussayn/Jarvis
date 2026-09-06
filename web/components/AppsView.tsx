@@ -65,7 +65,7 @@ export function AppsView({ run }: { run: RunSkill }) {
         </>
       }
     >
-      <div className="space-y-4 overflow-y-auto pb-6">
+      <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
           <Input
             value={search}

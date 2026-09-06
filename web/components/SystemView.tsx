@@ -82,7 +82,7 @@ export function SystemView({
         </>
       }
     >
-      <div className="space-y-4 overflow-y-auto pb-6">
+      <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Stat
             label="CPU"

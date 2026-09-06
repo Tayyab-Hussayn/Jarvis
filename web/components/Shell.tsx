@@ -495,7 +495,23 @@ export function Screen({
           {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
         </div>
       )}
-      <div className="min-h-0 flex-1">{children}</div>
+      {/* The one scroll container every panel inherits.
+
+          `flex-1` plus `min-h-0` is what makes `overflow-y-auto` actually
+          engage: without `min-h-0` a flex child refuses to shrink below its
+          content, so the element grows instead of scrolling and the overflow
+          escapes into `<main>`, which is `overflow-hidden` — content simply
+          disappears off the bottom with no way to reach it.
+
+          Panels used to each add their own `overflow-y-auto`, but on a div
+          with no height constraint, which is why five screens (Apps, Settings,
+          Control, Screen, Schedule) silently clipped — over 1,000px of Apps
+          was unreachable. One scroller here, and every current and future
+          panel gets it for free.
+
+          Scrollbar styling is global (`*` and `::-webkit-scrollbar` in
+          globals.css), so this matches the rail's without any extra rules. */}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-6">{children}</div>
     </div>
   );
 }

@@ -101,7 +101,7 @@ export function ControlView({
     <Screen
       subtitle="Audio, display, network and power. Shutdown and logout always confirm."
     >
-      <div className="space-y-4 overflow-y-auto pb-6">
+      <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
             label="Battery"

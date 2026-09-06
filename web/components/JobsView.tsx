@@ -529,7 +529,7 @@ export function JobsView({ run, jobEvents }: { run: RunSkill; jobEvents: JobEven
       }
       actions={<Button onClick={reload}>Refresh</Button>}
     >
-      <div className="min-h-0 space-y-4 overflow-y-auto pb-6">
+      <div className="space-y-4">
         <TimerBanner active={data.timer_active} />
 
         {/* Upcoming work is the question this screen answers, so it gets the

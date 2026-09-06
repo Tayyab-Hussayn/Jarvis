@@ -63,7 +63,7 @@ export function WindowsView({ run }: { run: RunSkill }) {
         </>
       }
     >
-      <div className="space-y-4 overflow-y-auto pb-6">
+      <div className="space-y-4">
         <div className="no-scrollbar flex gap-2 overflow-x-auto">
           <Chip active={workspace === ""} onClick={() => setWorkspace("")}>
             All
