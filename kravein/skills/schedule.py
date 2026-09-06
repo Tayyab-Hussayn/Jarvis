@@ -53,10 +53,12 @@ def schedule_job(
     Args:
         prompt: For kind=notify, the message to show. For kind=agent, the
             request to run — write it exactly as the user would say it.
-        when: When to fire, as an absolute time or an offset. Accepts
-            "2026-09-07T17:00", "20m", "1h30m", "2d", "17:00", "5pm",
-            "tomorrow 17:00". Prefer an absolute ISO time when the user named
-            a specific date. Leave empty when using repeat.
+        when: An absolute ISO 8601 timestamp, e.g. "2026-09-07T17:00".
+            Resolve any relative phrasing yourself — "tomorrow", "next
+            Tuesday", "in two weeks" — using the current date and time given
+            in the context, and pass the resulting absolute timestamp. A plain
+            duration ("20m", "1h30m", "2d") is also accepted. Leave empty when
+            using repeat.
         repeat: A 5-field cron expression for a recurring job, e.g.
             "0 9 * * *" for every day at 9am, "0 9 * * 1" for Mondays.
         kind: "notify" to just show a message — use this for reminders. "agent"
@@ -86,9 +88,10 @@ def schedule_job(
         moment = jobs.parse_when(when, tz_name)
         if moment is None:
             return (
-                f"Could not understand when to run this from {when!r}. Try an "
-                "absolute time like '2026-09-07T17:00', an offset like '20m' "
-                "or '1h30m', or a clock time like '5pm' or 'tomorrow 17:00'."
+                f"{when!r} is not a time I can read. Work out the absolute "
+                "date and time yourself from the current time in the context, "
+                "then pass it as ISO 8601 — e.g. '2026-09-07T17:00'. A plain "
+                "duration like '20m' or '1h30m' also works."
             )
         if moment <= jobs.now_utc():
             return "That time has already passed."

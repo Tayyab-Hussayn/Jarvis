@@ -284,6 +284,23 @@ agent answers normally, explaining it could not act — which reads as success t
 point is finding out it did not happen. `jobs.run_job()` watches tool results for a refusal and
 reports the run as failed.
 
+**The clock belongs in the messages, not the system prompt.** A model asked to schedule
+"next Tuesday" resolves it against whatever date it believes today to be — its training cutoff.
+The obvious fix is a timestamp in the system prompt, and that is the wrong place: the system
+prompt is the cached prefix, and a value that changes every second invalidates it on every
+request. `Agent._with_context()` appends the current ISO time and zone as a trailing `[context]`
+message instead, so the whole prefix still matches and only the tail differs — which it does every
+turn anyway. It is never stored in `self.messages`, because replayed history carrying an old
+timestamp is worse than none. `jobs.parse_when()` then validates ISO and plain durations only: an
+earlier version understood "5pm" and "tomorrow 17:00", which was a second NL parser competing with
+the model's and would have failed on "next Tuesday" regardless. Verified with both.
+
+**Check pid identity, not just liveness, before trusting a recorded pid.** Linux recycles pids, so
+`os.kill(pid, 0)` on a number recorded an hour ago can succeed against something entirely
+unrelated. `jobs._pid_alive()` reads `/proc/<pid>/cmdline` and requires "kravein" in it; otherwise
+a crashed runner leaves its job pinned in `running` for ever — never reaped, never retried, and
+invisible unless somebody reads the store by hand.
+
 **The tick must not import the agent.** A systemd timer runs `python -m kravein.jobs tick` every
 minute. Routing that through `cli.py` costs ~250ms because that module imports the Agent, the LLM
 facade and the registry at import time; the dedicated entry point costs ~50ms and pulls the heavy

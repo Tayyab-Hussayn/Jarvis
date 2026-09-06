@@ -2942,23 +2942,6 @@ def test_transient_failures_back_off_and_persist(store):
     assert store.all_jobs()[0]["state"] == "failed"
 
 
-def test_when_grammar_resolves_against_the_real_clock(store):
-    """The model does not know what time it is; this does."""
-    tz = "UTC"
-    now = store.now_utc()
-
-    assert store.parse_when("20m", tz) > now
-    assert (store.parse_when("20m", tz) - now).total_seconds() == pytest.approx(1200, abs=5)
-    assert store.parse_when("2d", tz).date() == (now.date() + __import__("datetime").timedelta(days=2))
-    assert store.parse_when("2026-09-07T17:00", tz).hour == 17
-    assert store.parse_when("nonsense", tz) is None
-    assert store.parse_when("", tz) is None
-
-    # A bare clock time always lands in the future.
-    assert store.parse_when("5pm", tz) > now
-    assert store.parse_when("17:00", tz) > now
-
-
 def test_the_model_cannot_confirm_its_own_destructive_action(monkeypatch, tmp_path):
     """A scheduled job refused on `delete_path` retried as `run_command
     "rm -f …"` with confirm=true, and the file was gone — from a session with
@@ -3001,3 +2984,112 @@ def test_an_unattended_refusal_is_remembered_for_the_turn(monkeypatch):
                 "run `rm -f /tmp/x`", skill="run_command", targets=targets,
             )
         assert "already declined" in str(caught.value)
+
+
+def test_parse_when_does_not_try_to_be_an_nl_parser(store):
+    """Prose is the model's job; this only validates machine formats.
+
+    An earlier version understood "5pm" and "tomorrow 17:00" — a second NL
+    parser competing with the model's, and one that would have failed on "next
+    Tuesday" or "in two weeks" anyway. Better no fuzzy branch than a third of
+    one.
+    """
+    assert store.parse_when("2026-09-07T17:00", "UTC").hour == 17
+    assert store.parse_when("2026-09-07T12:00:00Z", "UTC").hour == 12
+    assert store.parse_when("20m", "UTC") > store.now_utc()
+
+    for prose in ("5pm", "tomorrow 17:00", "next Tuesday", "in two weeks",
+                  "day after tomorrow", "today 23:30"):
+        assert store.parse_when(prose, "UTC") is None, (
+            f"{prose!r} was parsed here; it must reach the model instead"
+        )
+
+
+def test_the_clock_reaches_the_model_without_touching_the_system_prompt():
+    """The model cannot resolve "next Tuesday" without knowing today's date.
+
+    The obvious home for a clock is the system prompt, and that is exactly
+    wrong: the system prompt is the cached prefix, and a value that changes
+    every second would invalidate it on every request. It goes at the end of
+    the messages instead, where the tail already differs each turn.
+    """
+    from kravein.agent import Agent
+
+    agent = Agent(source="test")
+    agent.messages = [{"role": "user", "content": "remind me next Tuesday"}]
+
+    outgoing = agent._with_context()
+
+    assert len(outgoing) == len(agent.messages) + 1
+    assert outgoing[:-1] == agent.messages, "the cached prefix was modified"
+
+    note = outgoing[-1]["content"]
+    assert "[context]" in note
+    assert "Current date and time" in note
+    assert str(__import__("datetime").datetime.now().year) in note
+
+    # Never stored: replayed history must not carry a stale timestamp.
+    assert len(agent.messages) == 1
+
+    # And the static prompt stays static.
+    first, second = agent.system_prompt(), agent.system_prompt()
+    assert first == second
+    assert "Current date and time" not in first
+
+
+def test_a_recycled_pid_does_not_look_like_a_live_runner(store, monkeypatch):
+    """Linux reuses pids. A crashed run whose number now belongs to a browser
+    tab would otherwise stay "running" for ever — never reaped, never retried.
+    """
+    import subprocess
+
+    store.run_job = lambda job: (True, "ok", "")
+    job = store.add(prompt="x", when=store.now_utc(), kind="notify")
+
+    # A real, live process that is emphatically not a Kravein runner.
+    other = subprocess.Popen(["sleep", "30"])
+    try:
+        store._update(
+            job["id"], state="running", running_pid=other.pid,
+            running_since=store.iso(store.now_utc()),
+        )
+        assert store._pid_alive(other.pid) is False, "identity was not checked"
+
+        store.tick()
+        after = store.all_jobs()[0]
+        assert after["state"] != "running", "a recycled pid kept the job wedged"
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_waking_from_suspend_does_not_fire_a_thundering_herd(store):
+    """A laptop shut overnight must not deliver every missed job at once."""
+    from datetime import timedelta
+
+    fired = []
+    store.run_job = lambda job: (fired.append(job["id"]), (True, "ok", ""))[1]
+
+    # Eight hours asleep: a batch of one-shots and a daily job all overdue.
+    for hours in (8, 6, 4, 2, 1):
+        store.add(
+            prompt=f"reminder {hours}h ago",
+            when=store.now_utc() - timedelta(hours=hours), kind="notify",
+        )
+    daily = store.add(prompt="daily", cron="0 9 * * *", kind="notify")
+    store._update(daily["id"], next_run=store.iso(store.now_utc() - timedelta(hours=7)))
+
+    # One inside the grace window, which *should* still fire.
+    store.add(
+        prompt="just missed", when=store.now_utc() - timedelta(minutes=3), kind="notify",
+    )
+
+    store.tick()
+
+    assert len(fired) == 1, f"woke up and fired a herd: {fired}"
+    states = {j["id"]: j["state"] for j in store.all_jobs()}
+    assert sorted(v for v in states.values() if v == "missed") == ["missed"] * 5
+    assert states[daily["id"]] == "pending"
+    assert store.parse_iso(
+        [j for j in store.all_jobs() if j["id"] == daily["id"]][0]["next_run"]
+    ) > store.now_utc()

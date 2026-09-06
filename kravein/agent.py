@@ -167,6 +167,39 @@ class Agent:
             prompt += "\n\n" + memory
         return prompt
 
+    def _with_context(self) -> list[dict[str, Any]]:
+        """The outgoing messages plus volatile context, appended last.
+
+        The model needs to know what time it is — otherwise "5 PM tomorrow"
+        gets resolved against whatever date it believes today to be, which is
+        its training cutoff. The obvious place to put a clock is the system
+        prompt, and that is the wrong place: the system prompt is the stable
+        cached prefix, and a value that changes every second would invalidate
+        it on every single request.
+
+        So it goes at the *end* instead. Everything before it is untouched, so
+        the cached prefix still matches; only the tail differs, which it does
+        every turn regardless.
+
+        It is deliberately not stored in `self.messages`. History replays on
+        later turns, and a timestamp baked into it would age into a lie.
+        """
+        from datetime import datetime
+
+        try:
+            stamp = datetime.now().astimezone()
+            zone = stamp.tzname() or "local"
+            note = (
+                f"[context] Current date and time: {stamp.isoformat(timespec='seconds')} "
+                f"({zone}). Use this to resolve any relative date or time — "
+                "'tomorrow', 'next Tuesday', 'in two weeks' — into an absolute "
+                "ISO 8601 timestamp before passing it to a tool."
+            )
+        except Exception:
+            return list(self.messages)
+
+        return [*self.messages, {"role": "user", "content": note}]
+
     def reset(self) -> None:
         """Clear the conversation history."""
         with self._lock:
@@ -243,7 +276,7 @@ class Agent:
 
                     try:
                         reply = self._llm.complete(
-                            self.messages, system=system, tools=tools
+                            self._with_context(), system=system, tools=tools
                         )
                     except LLMError as exc:
                         turn.error = str(exc)

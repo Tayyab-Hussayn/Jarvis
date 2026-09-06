@@ -115,42 +115,40 @@ _RELATIVE = __import__("re").compile(
     r"^(?:in\s+)?(?:(?P<days>\d+)\s*d)?\s*(?:(?P<hours>\d+)\s*h)?\s*"
     r"(?:(?P<minutes>\d+)\s*m(?:in)?)?\s*(?:(?P<seconds>\d+)\s*s)?$"
 )
-_CLOCK = __import__("re").compile(
-    r"^(?P<day>today|tomorrow)?\s*(?:at\s+)?(?P<hour>\d{1,2})"
-    r"(?::(?P<minute>\d{2}))?\s*(?P<meridiem>am|pm)?$"
-)
-
-
 def parse_when(text: str, tz_name: str = "") -> datetime | None:
-    """Resolve a scheduling expression to an absolute UTC instant.
+    """Validate a scheduling time. **Parsing prose is not this function's job.**
 
-    The clock lives here rather than in the model. The system prompt carries no
-    timestamp — adding one would change the prompt on every request and defeat
-    prompt caching — and a model asked what time it is will answer from its
-    training data, which is how "5 PM tomorrow" quietly becomes a date last
-    year. So the model normalises prose into one of these forms and the
-    machine's own clock does the arithmetic:
+    There is exactly one natural-language parser in this system and it is the
+    model. It is told the current time in the per-turn context (see
+    `Agent._with_context`) and is expected to resolve "next Tuesday", "in two
+    weeks" or "the day after tomorrow" itself, then hand over an absolute
+    timestamp. This only accepts what a machine can read unambiguously:
 
-        2026-09-07T17:00      ISO 8601, naive means the job's timezone
-        20m  1h30m  2d  45s   relative to now
-        17:00  5pm            next occurrence, today or tomorrow
-        tomorrow 17:00        explicit day
+        2026-09-07T17:00      ISO 8601; naive is read in the job's timezone
+        2026-09-07T12:00:00Z  explicit offsets honoured
+        20m  1h30m  2d  45s   plain durations, kept because `set_reminder`
+                              has taken a `delay` in this form since before
+                              the job store existed
+
+    An earlier version also understood "5pm" and "tomorrow 17:00". That was a
+    second NL parser competing with the model's, and it would have failed the
+    moment anyone said "next Tuesday" — better to have no fuzzy branch at all
+    than one that covers three phrasings out of thirty.
     """
-    raw = (text or "").strip().lower()
+    raw = (text or "").strip()
     if not raw:
         return None
     zone = _zone(tz_name)
 
-    # Absolute first: unambiguous, and what the model should prefer.
     try:
-        parsed = datetime.fromisoformat(raw.replace("z", "+00:00"))
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00").replace("z", "+00:00"))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=zone)
         return parsed.astimezone(timezone.utc)
     except ValueError:
         pass
 
-    match = _RELATIVE.fullmatch(raw)
+    match = _RELATIVE.fullmatch(raw.lower())
     if match and any(match.groupdict().values()):
         parts = {k: int(v or 0) for k, v in match.groupdict().items()}
         delta = timedelta(
@@ -159,27 +157,6 @@ def parse_when(text: str, tz_name: str = "") -> datetime | None:
         )
         if delta.total_seconds() > 0:
             return now_utc() + delta
-
-    match = _CLOCK.fullmatch(raw)
-    if match:
-        hour = int(match.group("hour"))
-        minute = int(match.group("minute") or 0)
-        meridiem = match.group("meridiem")
-        if meridiem == "pm" and hour < 12:
-            hour += 12
-        elif meridiem == "am" and hour == 12:
-            hour = 0
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            return None
-
-        local = now_utc().astimezone(zone)
-        target = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if match.group("day") == "tomorrow":
-            target += timedelta(days=1)
-        elif match.group("day") != "today" and target <= local:
-            # A bare time that has already passed means the next one.
-            target += timedelta(days=1)
-        return target.astimezone(timezone.utc)
 
     return None
 
@@ -274,13 +251,30 @@ def record_run(**fields: Any) -> None:
 
 
 def _pid_alive(pid: int | None) -> bool:
+    """Is this pid still *our* runner?
+
+    `os.kill(pid, 0)` alone is not enough. Linux recycles pids, and on a busy
+    machine the number that belonged to a crashed tick an hour ago is now
+    something else entirely — a browser tab, a compiler. Believing that is
+    still the runner leaves the job pinned in "running" for ever: never
+    reaped, never retried, and invisible unless someone reads the store by
+    hand.
+
+    So the identity is checked, not just the liveness. `/proc/<pid>/cmdline`
+    is NUL-separated; a real runner has "kravein" somewhere in it because it
+    was started as `python -m kravein.jobs`. Anything else — missing proc
+    entry, different process — means the runner is gone.
+    """
     if not pid:
         return False
     try:
-        os.kill(int(pid), 0)
+        raw = Path(f"/proc/{int(pid)}/cmdline").read_bytes()
     except (OSError, ValueError):
+        # No /proc entry: the process is gone. On a system without procfs this
+        # also reads as dead, which is the safe direction — a job gets retried
+        # rather than stuck.
         return False
-    return True
+    return b"kravein" in raw.replace(b"\x00", b" ").lower()
 
 
 # ---------------------------------------------------------------------------
