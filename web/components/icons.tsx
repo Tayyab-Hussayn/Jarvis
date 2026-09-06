@@ -30,9 +30,17 @@ export type IconName =
   | "refresh"
   | "trash"
   | "chevron"
-  | "mic";
+  | "mic"
+  | "schedule";
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  // Clock with a hand — scheduled work.
+  schedule: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v4l3 2" />
+    </>
+  ),
   // Chat bubble with a cursor — the agent conversation.
   console: (
     <>

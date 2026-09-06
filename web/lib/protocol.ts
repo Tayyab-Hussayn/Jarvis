@@ -20,6 +20,9 @@ export type ServerFrame =
   | { t: "answer"; id: string; text: string }
   | { t: "turn_end"; id: string; iterations: number; tool_calls?: string[]; error?: string; cancelled?: boolean }
   | { t: "cancelled"; id?: string; pending_confirms?: number }
+  // Pushed by the scheduled-jobs tick, which runs in its own process. Arrives
+  // unsolicited, with no turn behind it.
+  | { t: "job_event"; id: string; title: string; text: string; failed: boolean }
   | { t: "error"; id?: string; message: string }
   | { t: "reset_ok" }
   | { t: "voice_state"; phase: string; text: string }
@@ -146,6 +149,14 @@ export type VoicePhase =
   | "thinking"
   | "speaking"
   | "error";
+
+export interface JobEvent {
+  id: string;
+  title: string;
+  text: string;
+  failed: boolean;
+  at: number;
+}
 
 export interface Message {
   id: string;

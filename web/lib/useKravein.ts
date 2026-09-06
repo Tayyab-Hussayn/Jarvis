@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   ClientFrame,
+  JobEvent,
   ConfirmView,
   Message,
   ServerFrame,
@@ -89,6 +90,10 @@ export function useKravein() {
   // conversation, so it stays out of the transcript and shows as a status
   // line instead of masquerading as something Kravein said.
   const [voiceNotes, setVoiceNotes] = useState<string[]>([]);
+  // Scheduled jobs fire from a separate process and push through the server.
+  // They belong to no turn, so they are kept apart from `messages` rather than
+  // being rendered as something the assistant said.
+  const [jobEvents, setJobEvents] = useState<JobEvent[]>([]);
   // The spoken turn currently being built, if any. Ids are `s…` so they cannot
   // collide with typed turns (`t…`), panel runs (`p…`) or the server's own
   // voice turn ids (`v…`, used for confirmation routing).
@@ -297,6 +302,16 @@ export function useKravein() {
             cancelled: frame.cancelled || undefined,
             iterations: frame.iterations,
           }));
+          break;
+
+        case "job_event":
+          setJobEvents((current) => [
+            {
+              id: frame.id, title: frame.title, text: frame.text,
+              failed: frame.failed, at: Date.now(),
+            },
+            ...current,
+          ].slice(0, 20));
           break;
 
         case "cancelled":
@@ -826,6 +841,7 @@ export function useKravein() {
     // toggle needed a reconciling effect for exactly this and wedged twice
     // before it was right; there is nothing here left to wedge.
     cancelling: cancelling && busy,
+    jobEvents,
     respondToConfirm,
     dismissPanelConfirm,
     reset,

@@ -32,6 +32,7 @@ import { classNames } from "@/lib/format";
  */
 export type ViewId =
   | "console"
+  | "schedule"
   | "system"
   | "windows"
   | "files"
@@ -51,7 +52,10 @@ export interface NavItem {
 export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Agent",
-    items: [{ id: "console", label: "Console", icon: "console" }],
+    items: [
+      { id: "console", label: "Console", icon: "console" },
+      { id: "schedule", label: "Schedule", icon: "schedule" },
+    ],
   },
   {
     label: "Machine",

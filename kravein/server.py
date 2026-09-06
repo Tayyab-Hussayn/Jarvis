@@ -146,6 +146,10 @@ def create_app(token: str | None = None) -> Any:
         # something a page refresh triggers.
         return _voice_snapshot(probe=probe)
 
+    @app.get("/api/jobs", dependencies=auth)
+    def api_jobs(history: int = 30) -> dict[str, Any]:
+        return _jobs_snapshot(history=max(0, min(int(history), 200)))
+
     # Posted by the scheduled-jobs tick, which runs in its own process and has
     # no other way to reach a browser. Token-gated like everything else; the
     # Host/Origin middleware applies too, and the tick sends a loopback Host.
@@ -783,6 +787,54 @@ def _processes_snapshot(*, sort: str = "cpu", limit: int = 40) -> dict[str, Any]
     key = "memory" if sort == "memory" else "cpu"
     rows.sort(key=lambda r: (r[key], r["cpu"]), reverse=True)
     return {"available": True, "total": len(rows), "processes": rows[:limit]}
+
+
+def _jobs_snapshot(*, history: int = 30) -> dict[str, Any]:
+    """Scheduled jobs as records, not prose.
+
+    Same rule as the windows and process panels: a UI that needs real data
+    reads the store directly rather than regex-parsing a skill's output. The
+    skill's wording exists to be read by a model and is free to change.
+    """
+    import json as _json
+
+    from . import jobs as jobs_mod
+
+    snapshot: dict[str, Any] = {
+        "timer_active": False,
+        "timezone": jobs_mod.local_timezone(),
+        "grace_seconds": int(
+            config.get("jobs.grace_seconds", jobs_mod.DEFAULT_GRACE_SECONDS)
+            or jobs_mod.DEFAULT_GRACE_SECONDS
+        ),
+        "now": jobs_mod.iso(jobs_mod.now_utc()),
+        "jobs": [],
+        "history": [],
+    }
+
+    # Whether the timer is running is the single most important fact here: a
+    # job list that cannot fire looks identical to one that can.
+    with contextlib.suppress(Exception):
+        from .platform import shell
+
+        if shell.have("systemctl"):
+            result = shell.run(
+                ["systemctl", "--user", "is-active", "kravein-jobs.timer"], timeout=8
+            )
+            snapshot["timer_active"] = result.stdout.strip() == "active"
+
+    with contextlib.suppress(Exception):
+        snapshot["jobs"] = jobs_mod.all_jobs()
+
+    if history:
+        with contextlib.suppress(Exception):
+            lines = jobs_mod.HISTORY.read_text(encoding="utf-8").splitlines()
+            for raw in lines[-history:]:
+                with contextlib.suppress(ValueError):
+                    snapshot["history"].append(_json.loads(raw))
+            snapshot["history"].reverse()
+
+    return snapshot
 
 
 def _voice_snapshot(*, probe: bool = False) -> dict[str, Any]:
