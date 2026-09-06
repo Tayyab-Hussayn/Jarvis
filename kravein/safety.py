@@ -547,10 +547,21 @@ def enforce(
     )
 
     if confirmer is _deny:
+        # Record it in the denial memory before refusing. Without this the
+        # unattended path had no memory at all: a scheduled job refused on
+        # `delete_path` came straight back with `run_command "rm -f …"` for the
+        # same file, and the mechanism built precisely to catch a retry under a
+        # different verb never saw the first refusal.
+        _denied_targets().update(keys)
+        audit.record(
+            "safety.unattended_refused",
+            skill=skill, source=source, action=action_desc,
+            danger=DANGER_LABELS[verdict.danger],
+        )
         raise ConfirmationRequired(
-            f"'{action_desc}' needs confirmation and this session cannot ask "
-            "for one. Re-run it from the interactive terminal, or pass "
-            "confirm=true if you are certain.",
+            f"'{action_desc}' needs confirmation and this session has no way "
+            "to ask for one, so it was refused. Tell the user it could not be "
+            "done unattended — do not retry it with another tool.",
             detail,
         )
 

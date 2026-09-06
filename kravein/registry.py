@@ -372,11 +372,28 @@ def dispatch(
     if not ok:
         return f"Skill '{entry.name}' is unavailable on this system — {why}."
 
-    # The model may pass a confirmation flag through explicitly.
+    # A confirmation flag inside `params` came from the *model*, and the model
+    # does not get to approve its own destructive actions.
+    #
+    # This used to read `confirm = confirm or <model's flag>`. Caught on
+    # 2026-09-06 by a scheduled job: refused on `delete_path`, the model
+    # retried the same delete as `run_command "rm -f …"` with confirm=true and
+    # the file was gone — from an unattended session with no confirmer at all.
+    # The system prompt says never to do that; as the rest of this codebase
+    # already learned about the verb list, a sentence in a prompt is not
+    # enforcement.
+    #
+    # `confirm=` as a *keyword argument* still works, because that comes from a
+    # trusted caller — the daemon relaying an explicit client request, or the
+    # CLI's `--confirm`. Only the model's own arguments are ignored.
     for flag in ("confirm", "confirmed", "_confirm"):
         if flag in params:
             raw = params.pop(flag)
-            confirm = confirm or _coerce(raw, {"type": "boolean"})
+            if _coerce(raw, {"type": "boolean"}) and not confirm:
+                audit.record(
+                    "skill.self_confirm_refused",
+                    skill=entry.name, source=source, flag=flag,
+                )
 
     props = entry.parameters.get("properties", {})
     cleaned: dict[str, Any] = {}

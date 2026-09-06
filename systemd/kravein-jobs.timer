@@ -1,0 +1,18 @@
+[Unit]
+Description=Kravein scheduled jobs — minutely tick
+Documentation=file:%h/code/Kravein/SCHEDULING_AUDIT.md
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=10s
+
+# Catch up after downtime: if the machine was asleep the tick runs once on
+# wake rather than being skipped entirely. It is the *store* that then decides
+# whether each job is still worth firing — jobs.py applies a grace window and
+# reschedules anything staler than that, so this cannot produce a flood.
+Persistent=true
+
+Unit=kravein-jobs.service
+
+[Install]
+WantedBy=timers.target

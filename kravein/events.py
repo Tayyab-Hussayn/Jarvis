@@ -218,6 +218,42 @@ class Session:
 
 
 # ---------------------------------------------------------------------------
+# Live session registry
+# ---------------------------------------------------------------------------
+#
+# The scheduled-jobs tick is a separate short-lived process, so it cannot reach
+# a browser on its own. It posts to the running server, which fans the event out
+# to whatever sockets are connected — this is the set they are held in. A
+# desktop notification goes out regardless; this is the extra, not the
+# guarantee.
+
+_live: "set[Session]" = set()
+_live_lock = threading.Lock()
+
+
+def register(session: "Session") -> None:
+    with _live_lock:
+        _live.add(session)
+
+
+def unregister(session: "Session") -> None:
+    with _live_lock:
+        _live.discard(session)
+
+
+def broadcast(t: str, **fields: Any) -> int:
+    """Emit a frame to every connected client. Returns how many got it."""
+    with _live_lock:
+        targets = [s for s in _live if not s.closed]
+    for session in targets:
+        try:
+            session.emit(t, **fields)
+        except Exception:
+            pass
+    return len(targets)
+
+
+# ---------------------------------------------------------------------------
 # Agent observer -> frames
 # ---------------------------------------------------------------------------
 

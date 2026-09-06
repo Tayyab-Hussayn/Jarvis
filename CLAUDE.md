@@ -265,6 +265,38 @@ sends a preference and the server answers with the pipeline it actually started.
 `live` or `local` that cannot run is refused rather than downgraded — silently switching to the
 metered pipeline, or away from it, is not a decision to make on someone's behalf.
 
+**The model could confirm its own destructive actions.** `registry.dispatch()` harvested a
+`confirm` flag out of the model's own arguments and ORed it into `pre_confirmed`, which
+short-circuits `safety.enforce()` before the no-confirmer check. Caught by a scheduled job:
+refused on `delete_path`, it retried the same delete as `run_command "rm -f …"` with
+`confirm=true` and the file was gone — from an unattended session with no confirmer at all. A
+`confirm` **keyword argument** still works, because that comes from a trusted caller; a `confirm`
+key inside `params` is now ignored and audited. This is the third time a prompt instruction has
+turned out not to be enforcement.
+
+**An unattended refusal has to be remembered too.** `enforce()` raised `ConfirmationRequired` at
+the `confirmer is _deny` branch *before* recording anything in the per-turn denial memory, so the
+mechanism built exactly to catch a retry under a different verb never saw the first refusal.
+
+**A refused confirmation is not a failed turn, and a scheduled job must treat it as one.** The
+agent answers normally, explaining it could not act — which reads as success to anything watching
+`turn.error`. For a job the user is not sitting in front of, that is the wrong signal: the whole
+point is finding out it did not happen. `jobs.run_job()` watches tool results for a refusal and
+reports the run as failed.
+
+**The tick must not import the agent.** A systemd timer runs `python -m kravein.jobs tick` every
+minute. Routing that through `cli.py` costs ~250ms because that module imports the Agent, the LLM
+facade and the registry at import time; the dedicated entry point costs ~50ms and pulls the heavy
+machinery in only once a job is due. Measured, and asserted by a test that fails if anything heavy
+appears in `sys.modules` after an empty tick. An import added at the top of `jobs.py` is paid 1,440
+times a day.
+
+**Lock a file you do not replace.** `jobs.json` is written with the usual atomic tmp+rename, which
+swaps the inode — a `flock` held on it guards a path that no longer exists, and two ticks can both
+think they hold it. `jobs.lock` is never replaced, so it is a stable thing to lock. A job is also
+marked `running` *before* the Agent is built, so the next minute's tick skips it; and `running`
+records a pid, so a crashed run is reaped instead of wedging the job for ever.
+
 **A timeout cap is only as good as the failover behind it.** Capping Cline at 45s looked like a
 straight win — a slow primary hands over instead of holding a turn for 180s while Stop can do
 nothing. It was a regression: Cline timed out, the facade failed over, and NovaRouter rejected all

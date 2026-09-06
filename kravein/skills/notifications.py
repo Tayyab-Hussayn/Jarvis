@@ -65,104 +65,43 @@ def send_notification(
 
 @skill(category="notify", danger=Danger.MODERATE)
 def set_reminder(message: str, delay: str = "10m", title: str = "Reminder") -> str:
-    """Schedule a desktop notification for later.
+    """Remind you about something later with a desktop notification.
 
-    Uses a transient systemd user timer, so the reminder still fires if the
-    assistant is closed.
+    Fires even if Kravein is closed. For a specific clock time, a repeating
+    reminder, or anything that should actually *do* something rather than just
+    show a message, use `schedule_job`.
 
     Args:
         message: What to remind you about.
-        delay: How long to wait, e.g. '10m', '1h30m', '45s'.
+        delay: When, e.g. '10m', '1h30m', '45s', or a clock time like '5pm'.
         title: Notification heading.
     """
-    seconds = _parse_delay(delay)
-    if seconds is None or seconds <= 0:
-        return f"Could not understand the delay '{delay}'. Try '10m' or '1h30m'."
-    if seconds > 30 * 24 * 3600:
-        return "That reminder is more than 30 days out; use a calendar instead."
+    # Migrated off `systemd-run --on-active=` on 2026-09-06. That created a
+    # *transient* unit, and transient units do not survive a reboot — a
+    # reminder set for tomorrow morning vanished silently if the machine was
+    # restarted overnight. The job store plus the minutely tick has no such
+    # hole, and it is one mechanism instead of two.
+    from .schedule import schedule_job
 
-    fire_at = datetime.now() + timedelta(seconds=seconds)
-    notifier = shell.first_available("notify-send", "dunstify")
-    if not notifier:
-        return "No notification client is installed (need libnotify)."
-
-    if shell.have("systemd-run"):
-        result = shell.run([
-            "systemd-run", "--user", "--quiet",
-            f"--on-active={seconds}",
-            f"--unit=kravein-reminder-{int(time.time())}",
-            "--description=Kravein reminder",
-            notifier, "-u", "critical", "--", title, message,
-        ], timeout=15)
-
-        if result.ok:
-            audit.record("reminder.scheduled", message=message, fire_at=fire_at.isoformat())
-            return f"Reminder set for {fire_at:%H:%M:%S} ({delay}): {message}"
-
-    # No systemd-run: fall back to an in-process timer that dies with us.
-    import threading
-
-    def _fire() -> None:
-        notify.send(message, title, urgency="critical", timeout_ms=0)
-
-    timer = threading.Timer(seconds, _fire)
-    timer.daemon = True
-    timer.start()
-    audit.record("reminder.scheduled_local", message=message, fire_at=fire_at.isoformat())
-    return (
-        f"Reminder set for {fire_at:%H:%M:%S} ({delay}): {message}\n"
-        "Note: systemd-run was unavailable, so this only fires while the "
-        "assistant keeps running."
+    return schedule_job(
+        prompt=message, when=delay, kind="notify", title=title or "Reminder"
     )
 
 
 @skill(category="notify", danger=Danger.SAFE)
 def list_reminders() -> str:
     """List reminders that are still pending."""
-    if not shell.have("systemctl"):
-        return "systemd is unavailable, so scheduled reminders cannot be listed."
+    from .schedule import list_jobs
 
-    result = shell.run(
-        ["systemctl", "--user", "list-timers", "--all", "--no-pager", "--no-legend"],
-        timeout=12,
-    )
-    if not result.ok:
-        return "Could not list timers."
-
-    rows = [l for l in result.stdout.splitlines() if "kravein-reminder" in l]
-    if not rows:
-        return "No pending reminders."
-    return f"{len(rows)} pending reminder(s):\n" + "\n".join(f"  {r}" for r in rows)
+    return list_jobs()
 
 
 @skill(category="notify", danger=Danger.DESTRUCTIVE)
 def cancel_reminders(_source: str = "local", _confirm: bool = False) -> str:
     """Cancel every pending reminder."""
-    from ..safety import Verdict, enforce
+    from .schedule import cancel_job
 
-    result = shell.run(
-        ["systemctl", "--user", "list-units", "--all", "--no-pager", "--no-legend",
-         "kravein-reminder-*.timer"],
-        timeout=12,
-    )
-    units = [
-        line.split()[0].lstrip("*").strip()
-        for line in result.stdout.splitlines() if "kravein-reminder" in line
-    ]
-    if not units:
-        return "No pending reminders to cancel."
-
-    enforce(
-        Verdict(danger=Danger.DESTRUCTIVE, reasons=[f"cancels {len(units)} reminder(s)"]),
-        f"cancel {len(units)} pending reminder(s)",
-        skill="cancel_reminders", source=_source, pre_confirmed=_confirm,
-    )
-
-    cancelled = 0
-    for unit in units:
-        if shell.run(["systemctl", "--user", "stop", unit], timeout=10).ok:
-            cancelled += 1
-    return f"Cancelled {cancelled} reminder(s)."
+    return cancel_job(job_id="", _source=_source, _confirm=_confirm)
 
 
 # ---------------------------------------------------------------------------

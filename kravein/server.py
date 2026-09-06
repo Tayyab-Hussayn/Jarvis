@@ -146,6 +146,24 @@ def create_app(token: str | None = None) -> Any:
         # something a page refresh triggers.
         return _voice_snapshot(probe=probe)
 
+    # Posted by the scheduled-jobs tick, which runs in its own process and has
+    # no other way to reach a browser. Token-gated like everything else; the
+    # Host/Origin middleware applies too, and the tick sends a loopback Host.
+    @app.post("/api/job-event", dependencies=auth)
+    async def api_job_event(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise _unauthorized("Expected a JSON object")
+        reached = events.broadcast(
+            "job_event",
+            id=str(payload.get("id", "")),
+            title=str(payload.get("title", "")),
+            text=str(payload.get("text", "")),
+            failed=bool(payload.get("failed", False)),
+        )
+        audit.record("web.job_event", id=payload.get("id", ""), clients=reached)
+        return {"delivered": reached}
+
     @app.get("/api/settings", dependencies=auth)
     def api_settings() -> dict[str, Any]:
         return {"settings": _redacted_settings()}
@@ -184,6 +202,7 @@ def create_app(token: str | None = None) -> Any:
         await socket.accept()
         loop = asyncio.get_running_loop()
         session = events.Session(loop)
+        events.register(session)
         agent = Agent(
             source="web",
             observer=events.observer_for(session),
@@ -507,6 +526,7 @@ def create_app(token: str | None = None) -> Any:
             # leaving it running after the browser closes would keep recording
             # with nothing listening.
             stop_voice()
+            events.unregister(session)
             session.close()
             pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

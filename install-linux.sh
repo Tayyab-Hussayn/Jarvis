@@ -171,6 +171,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+bold "6b. scheduled jobs timer"
+
+# This one is not optional in the same way. Reminders and scheduled jobs are
+# only reliable because systemd wakes the tick — there is no always-on Kravein
+# process to do it. Without the timer, `schedule_job` and `set_reminder` write
+# a job that nothing ever fires.
+JOBS_UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+mkdir -p "$JOBS_UNITS"
+for unit in kravein-jobs.service kravein-jobs.timer; do
+  sed "s|%h/code/Kravein|$REPO_DIR|g" "$REPO_DIR/systemd/$unit" > "$JOBS_UNITS/$unit"
+done
+systemctl --user daemon-reload
+
+if systemctl --user enable --now kravein-jobs.timer >/dev/null 2>&1; then
+  ok "scheduled-jobs timer installed and running (ticks every minute)"
+  echo "    Next tick:  systemctl --user list-timers kravein-jobs.timer"
+  echo "    Run log:    ${XDG_STATE_HOME:-$HOME/.local/state}/kravein/job-runs.jsonl"
+else
+  echo "    Could not enable the timer. Reminders will not fire until you run:"
+  echo "      systemctl --user enable --now kravein-jobs.timer"
+fi
+
+# ---------------------------------------------------------------------------
 bold "7. web UI (optional)"
 
 # The UI is a static export, so Node is a build-time dependency only — nothing

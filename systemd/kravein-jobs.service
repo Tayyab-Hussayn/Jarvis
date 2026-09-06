@@ -1,0 +1,24 @@
+[Unit]
+Description=Kravein scheduled jobs — one tick
+Documentation=file:%h/code/Kravein/SCHEDULING_AUDIT.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/Kravein
+
+# Deliberately `-m kravein.jobs`, not `-m kravein job tick`. The CLI imports
+# the Agent, the LLM facade and the registry at module level (~250ms); this
+# entry point imports only `config` (~50ms) and pulls the heavy machinery in
+# only once a job is actually due. That difference is paid 1,440 times a day.
+ExecStart=%h/code/Kravein/.venv/bin/python -m kravein.jobs tick
+
+# Notifications, speech and the compositor all need the user's session bus.
+# Without this a tick fires and nothing appears on screen.
+Environment=DISPLAY=:0
+
+# A tick that fails must not disable the timer — the next minute should just
+# try again. Failures are recorded in job-runs.jsonl either way.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=default.target

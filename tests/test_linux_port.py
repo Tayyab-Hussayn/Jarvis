@@ -2800,3 +2800,204 @@ def test_novarouter_fits_the_tool_list_to_the_gateway_cap():
     # Under the cap it is left completely alone.
     assert provider._fit_tools(tools[:10]) == tools[:10]
     assert provider._fit_tools(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Scheduled jobs
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    """Point the job store at a temp dir, and never deliver for real."""
+    from kravein import jobs as jobs_mod
+
+    monkeypatch.setattr(jobs_mod, "STORE", tmp_path / "jobs.json")
+    monkeypatch.setattr(jobs_mod, "LOCK", tmp_path / "jobs.lock")
+    monkeypatch.setattr(jobs_mod, "HISTORY", tmp_path / "job-runs.jsonl")
+    monkeypatch.setattr(jobs_mod, "deliver", lambda *a, **k: None)
+    return jobs_mod
+
+
+def test_tick_imports_nothing_heavy(store):
+    """The tick runs 1,440 times a day; it must not load the agent to do it.
+
+    Routing it through `cli.py` would cost ~250ms a tick because that module
+    imports the Agent, the LLM facade and the registry at module level. This
+    asserts the cheap path stays cheap.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from kravein import jobs\n"
+        "jobs.main(['tick'])\n"
+        "heavy = sorted(m for m in sys.modules if m.startswith(("
+        "'kravein.agent','kravein.llm','kravein.registry','kravein.cline',"
+        "'google','requests','fastapi')))\n"
+        "print('HEAVY:' + ','.join(heavy))\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+    ).stdout
+    assert "HEAVY:" in out
+    loaded = out.split("HEAVY:")[1].strip()
+    assert loaded == "", f"tick pulled in heavy modules: {loaded}"
+
+
+def test_a_running_job_is_not_started_twice(store):
+    """Overlap prevention: an agent turn easily outlives its own tick."""
+    import threading
+    import time as _time
+
+    starts = []
+
+    def slow(job):
+        starts.append(job["id"])
+        _time.sleep(2)
+        return True, "done", ""
+
+    store.run_job = slow
+    store.add(prompt="slow", when=store.now_utc(), kind="agent")
+
+    first = threading.Thread(target=store.tick)
+    first.start()
+    _time.sleep(0.6)
+
+    # The state must already say running, before any Agent was built.
+    live = store.all_jobs()[0]
+    assert live["state"] == "running"
+    assert live["running_pid"]
+
+    assert store.tick() == 0, "a second tick started the same job again"
+    first.join()
+    assert starts == ["j1"]
+
+
+def test_a_dead_runner_is_reaped_and_retried(store):
+    """A crashed run must not leave the job wedged in 'running' for ever."""
+    store.run_job = lambda job: (True, "ok", "")
+    job = store.add(prompt="x", when=store.now_utc(), kind="notify")
+    store._update(
+        job["id"], state="running", running_pid=999999,
+        running_since=store.iso(store.now_utc()),
+    )
+
+    store.tick()
+    after = store.all_jobs()[0]
+    assert after["state"] == "pending", "dead runner left the job stuck"
+    assert after["attempts"] == 1
+
+
+def test_a_stale_job_is_skipped_rather_than_fired_late(store):
+    """A laptop shut for a week must not wake up and deliver a backlog."""
+    fired = []
+    store.run_job = lambda job: (fired.append(job["id"]), (True, "ok", ""))[1]
+
+    from datetime import timedelta
+
+    store.add(prompt="stale", when=store.now_utc() - timedelta(hours=2), kind="notify")
+    recurring = store.add(prompt="daily", cron="0 9 * * *", kind="notify")
+    store._update(recurring["id"], next_run=store.iso(store.now_utc() - timedelta(hours=2)))
+
+    store.tick()
+    assert fired == [], "fired a job that was hours late"
+
+    states = {j["id"]: j["state"] for j in store.all_jobs()}
+    assert states["j1"] == "missed"
+    # The recurring one lives on, pointed at its next occurrence.
+    assert states["j2"] == "pending"
+    assert store.parse_iso(
+        [j for j in store.all_jobs() if j["id"] == "j2"][0]["next_run"]
+    ) > store.now_utc()
+
+
+def test_a_recurring_job_reschedules_itself(store):
+    store.run_job = lambda job: (True, "ok", "")
+    job = store.add(prompt="daily", cron="*/5 * * * *", kind="notify")
+    store._update(job["id"], next_run=store.iso(store.now_utc()))
+
+    store.tick()
+    after = store.all_jobs()[0]
+    assert after["state"] == "pending"
+    assert after["runs"] == 1
+    assert store.parse_iso(after["next_run"]) > store.now_utc()
+
+
+def test_transient_failures_back_off_and_persist(store):
+    """Retry state lives in the store, so a reboot mid-backoff loses nothing."""
+    store.run_job = lambda job: (False, "", "503 service unavailable")
+    job = store.add(prompt="x", when=store.now_utc(), kind="agent")
+
+    store.tick()
+    after = store.all_jobs()[0]
+    assert after["state"] == "pending"
+    assert after["attempts"] == 1
+    assert store.parse_iso(after["next_run"]) > store.now_utc()
+
+    # A permanent failure does not get retried at all.
+    store.run_job = lambda job: (False, "", "no such skill")
+    store._update(job["id"], next_run=store.iso(store.now_utc()), attempts=0)
+    store.tick()
+    assert store.all_jobs()[0]["state"] == "failed"
+
+
+def test_when_grammar_resolves_against_the_real_clock(store):
+    """The model does not know what time it is; this does."""
+    tz = "UTC"
+    now = store.now_utc()
+
+    assert store.parse_when("20m", tz) > now
+    assert (store.parse_when("20m", tz) - now).total_seconds() == pytest.approx(1200, abs=5)
+    assert store.parse_when("2d", tz).date() == (now.date() + __import__("datetime").timedelta(days=2))
+    assert store.parse_when("2026-09-07T17:00", tz).hour == 17
+    assert store.parse_when("nonsense", tz) is None
+    assert store.parse_when("", tz) is None
+
+    # A bare clock time always lands in the future.
+    assert store.parse_when("5pm", tz) > now
+    assert store.parse_when("17:00", tz) > now
+
+
+def test_the_model_cannot_confirm_its_own_destructive_action(monkeypatch, tmp_path):
+    """A scheduled job refused on `delete_path` retried as `run_command
+    "rm -f …"` with confirm=true, and the file was gone — from a session with
+    no confirmer at all. `confirm` inside the model's params is now ignored;
+    only a trusted caller's keyword argument counts.
+    """
+    from kravein import registry, safety
+
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+
+    registry.load_skills()
+    with safety.confirmer_scope(None):
+        result = registry.dispatch(
+            "run_command",
+            {"command": f"rm -f {victim}", "confirm": True},
+            source="schedule:test",
+        )
+
+    assert victim.exists(), f"model self-approved a destructive action: {result}"
+
+
+def test_an_unattended_refusal_is_remembered_for_the_turn(monkeypatch):
+    """Refusing without recording left the retry-under-another-verb path open."""
+    from kravein.safety import (
+        ConfirmationRequired, Danger, Verdict, confirmer_scope, describe_targets, enforce,
+    )
+
+    verdict = Verdict(danger=Danger.DESTRUCTIVE, reasons=["deletes /tmp/x"])
+    targets = describe_targets("path:/tmp/x")
+
+    with confirmer_scope(None):
+        with pytest.raises(ConfirmationRequired):
+            enforce(verdict, "delete /tmp/x", skill="delete_path", targets=targets)
+
+        # The same target under a different verb must now be refused outright.
+        with pytest.raises(Exception) as caught:
+            enforce(
+                Verdict(danger=Danger.DESTRUCTIVE, reasons=["rm -f /tmp/x"]),
+                "run `rm -f /tmp/x`", skill="run_command", targets=targets,
+            )
+        assert "already declined" in str(caught.value)
