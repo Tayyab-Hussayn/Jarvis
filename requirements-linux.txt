@@ -53,6 +53,17 @@ pillow>=10.0
 # it is absent.
 croniter>=2.0
 
+# --- WhatsApp reminders (optional) --------------------------------------
+# Pure-Python wrapper around whatsmeow, so the whole channel stays inside this
+# codebase: no Node, no Baileys, no webhook relay, no n8n. The wheel bundles a
+# Go shared library (~8 MB) and is tagged py310-none-manylinux, not a CPython
+# ABI tag, so it installs on 3.14 despite the Go runtime inside it.
+#
+# Only `kravein.whatsapp_service` imports it, and that process is the only one
+# that may: connect() blocks its thread for the whole session, so nothing on
+# the minutely tick path can be allowed to touch it.
+neonize>=0.4.3
+
 # --- Files --------------------------------------------------------------
 # Implements the freedesktop trash spec, so deletes are recoverable.
 send2trash>=1.8

@@ -194,6 +194,45 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+bold "6c. WhatsApp reminder channel (optional)"
+
+# Installed and started, not merely written to disk. An earlier version copied
+# the unit and told the reader to enable it themselves, which is the same as
+# not shipping it: `systemctl --user enable` on a unit nobody deployed fails
+# with "Unit does not exist" and the whole channel looks broken.
+#
+# Starting it is safe with no phone linked. The service binds its socket and
+# sits in `unlinked` until someone runs `kravein whatsapp link` — it opens no
+# connection to WhatsApp until there is a session to resume or a pairing to do.
+#
+# Never `sudo systemctl --user`: that runs against root's (absent) session bus
+# rather than this user's, so it either fails outright or manages the wrong
+# manager. Every command here is deliberately unprivileged.
+if "$VENV_DIR/bin/python" -c "import neonize" >/dev/null 2>&1; then
+  mkdir -p "$JOBS_UNITS"
+  # Copied, not symlinked: the unit is a template carrying %h/code/Kravein,
+  # and the real path is substituted on the way in. A symlink would install the
+  # placeholder and the service would fail to start on any other checkout.
+  sed "s|%h/code/Kravein|$REPO_DIR|g" \
+    "$REPO_DIR/systemd/kravein-whatsapp.service" > "$JOBS_UNITS/kravein-whatsapp.service"
+  systemctl --user daemon-reload
+
+  if systemctl --user enable --now kravein-whatsapp.service >/dev/null 2>&1; then
+    ok "WhatsApp service installed and running"
+    echo "    Pair:    $VENV_DIR/bin/python -m kravein whatsapp link"
+    echo "    Status:  systemctl --user status kravein-whatsapp.service"
+  else
+    echo "    Installed the unit but could not start it. Check:"
+    echo "      systemctl --user status kravein-whatsapp.service"
+    echo "      journalctl --user -u kravein-whatsapp.service -n 30"
+  fi
+else
+  echo "    neonize is not installed — the WhatsApp channel is unavailable."
+  echo "    Install it with: $VENV_DIR/bin/pip install neonize"
+  echo "    The routine engine works without it; notifications always fire first."
+fi
+
+# ---------------------------------------------------------------------------
 bold "7. web UI (optional)"
 
 # The UI is a static export, so Node is a build-time dependency only — nothing

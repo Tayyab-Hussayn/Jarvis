@@ -1,15 +1,20 @@
 # ROUTINES_DESIGN.md
 
 Design record for the Health & Habits routine manager. Written before
-implementation on 2026-09-06. **Nothing here is built yet.**
+implementation on 2026-09-06.
 
 Companion to `SCHEDULING_AUDIT.md`, which covers the jobs subsystem this
 extends.
 
-**Status: phases 1 and 2 built** (engine, store, `delivery.py` extraction,
-skills, tests). Phases 3–6 — the Habits panel, WhatsApp, the coach — are still
-design only. Amendments made during implementation are recorded in §8 at the
-bottom; where §1–§4 and §8 disagree, §8 is what was built.
+**Status: phases 1–5 built** (engine, store, `delivery.py` extraction,
+skills, tests), phase 3 (the Habits panel and its endpoints) and phase 4
+(WhatsApp outbound: resident service, socket IPC, QR pairing) and phase 5
+(inbound confirmations: allowlist, fixed vocabulary, state-machine dispatch).
+Phase 6 (the coach) is still design only.
+
+Amendments made during implementation are recorded in §8 (phases 1–2) and §9
+(phases 3–4). Where the design sections and those disagree, the amendments are
+what was built.
 
 ---
 
@@ -719,3 +724,117 @@ one. Both now go through `step_calendar_date`.
 | Engine alone, 30 steps, in-process | **0.37 ms** median, 0.59 ms p95 |
 | `zoneinfo` on a steady-state pass | **not imported** |
 | Suite | **368 passed** (338 before; 30 new) |
+
+
+---
+
+## 9. Phases 3 and 4: what implementation found
+
+**WhatsApp's pairing code does not have one lifetime.** Measured against a live
+session: the *first* code is valid 60s, every refresh after it 20s. A single
+TTL cannot express that and both guesses were built and both were wrong — 60s
+served a refresh that had been dead for forty seconds, 25s declared the first
+code dead at 25s and then showed nothing at all for the 35s until the next one
+arrived. The service now treats the server's own rotation as the authority:
+whatever code arrived most recently is the current one, and a constant is used
+only to notice that the pushes have *stopped*. Verified across 160s of live
+pairing — 40 samples, zero blank.
+
+**A second service instance took the first one's socket down with it.** `serve`
+unlinked whatever was at the path before binding, and `main` unlinked it again
+on the way out — so starting a duplicate stole the channel, and that duplicate
+exiting deleted the socket the survivor was still listening on. The symptom is
+the whole WhatsApp channel vanishing while a healthy daemon is still running.
+Now: refuse to start if something answers on the socket, and on shutdown only
+unlink the **inode** this process bound. Comparing paths cannot work — the path
+is the same string for every instance.
+
+**Undated steps sorted to the bottom of the timeline.** A chained step has no
+due time until its predecessor is confirmed, so ranking by `due_at` put
+Breakfast and Meds *after* the 9pm walk. An undated step now inherits its
+anchor's position, so the chain reads down the page in the order it happens.
+
+**`score/available` reads "0 / 0" before anything is due**, which is worse than
+no number. The tile shows the day's total until the first step opens.
+
+**The QR is encoded in Python, not the browser.** `qrcode` is already a
+dependency and the CLI needs it anyway, so the API sends rows of bits and the
+panel draws rectangles — no JS dependency, and the raw code never reaches the
+page in a form anything else would recognise as a credential.
+
+**`kravein whatsapp link` hung forever, and three things caused it.** The unit was never deployed
+(the installer printed the enable command instead of running it); the service auto-started a
+pairing session at boot because `session.db` existed, even with no device registered, which burned
+the window minutes before anyone looked; and `begin_link` could not restart a lapsed session
+because the connection thread was still alive. Fixed in that order: the installer deploys and
+enables, `linked_devices()` replaces the file-exists check, and linking always tears the client
+down first — on a background thread, since the teardown outlasts the caller's socket timeout.
+
+**The pairing QR scanned as nothing because it was inverted.** The payload was always correct —
+whatsmeow emits `https://wa.me/settings/linked_devices#%s,%s,%s,%s,%s` and that is what reached the
+screen. The terminal renderer left ink and paper to the terminal theme, so a dark theme swapped
+them. Colours are now stated explicitly and the quiet zone widened from 1 module to the spec's 4,
+in both the terminal and the web panel.
+
+### Measurements
+
+| | |
+|---|---|
+| Tick with routines + neonize installed | **56.9 ms** (neonize absent from `sys.modules`) |
+| Layout guard | **12/12 views scroll**, Habits adds exactly one scroll container |
+| QR continuity over 160s of live pairing | **0 blank samples**, 5 rotations |
+| Suite | **374 passed** |
+
+
+---
+
+## 10. Phase 5: inbound confirmations
+
+**Where the write happens, and why not through the server.** The brief said to
+route inbound commands to "the main Kravein event loop". There isn't one that
+is always up: `kravein serve` is opt-in, so a "done" sent with the browser
+closed would have done nothing. The service writes to `routines.py` directly —
+`routines.lock` already makes that safe alongside the minutely tick, which is
+what the lock was for — and then best-effort pushes `routine_event` to the web
+server *if* it happens to be running, exactly as the tick does. Same visible
+behaviour, no hidden dependency on a browser being open.
+
+**Five gates, then four words.** In order: inbound is off unless
+`whatsapp.owner_jid` is set; `IsFromMe` is refused because our own replies
+arrive through the same handler and one containing "done" would feed itself;
+group messages are refused because anyone can add a number to a group and being
+in one is not authorisation; the sender is compared on digits only, so a device
+suffix or a longer number containing the owner's cannot near-match; and
+anything older than `inbound_max_age_seconds` is ignored, because whatsmeow
+replays undelivered messages on reconnect and a replayed "done" would complete a
+step nobody did.
+
+Then `parse_command` — plain `==` against `done`, `skip`, `status`, `pause`,
+with an optional step id of the shape `s<digits>`. No model, ever. A test
+asserts the inbound path leaves `kravein.agent`, `kravein.llm` and
+`kravein.registry` out of `sys.modules` entirely, so this is structural rather
+than a promise.
+
+**Silence is the security property.** Every rejection returns `("", "")` — no
+reply, not even an error. Answering tells whoever sent it that something
+automated is reading the number. Nothing rejected is recorded with its contents
+or its sender, so the audit trail does not become a log of other people's
+messages; a test greps the recorded events for both and fails if either
+appears.
+
+**Ambiguity is refused, not guessed.** A bare "done" with two steps open lists
+them instead of picking one. Marking the wrong habit complete has no undo, and
+it is the same rule `skills/windows.py` follows for windows.
+
+**Two things found while building it.** `"done\nstatus"` was accepted, because
+`str.split()` treats a newline as ordinary whitespace — the vocabulary only
+stays narrow if the input is one flat line. And `"done please"` was accepted
+with `please` as the target, which is outside the specified vocabulary; the
+argument is now required to look like a step id.
+
+### Vocabulary
+
+`done`, `done <step_id>`, `skip`, `skip <step_id>`, `status`, `pause`,
+`resume`. `resume` was added after the first pass: pausing from a phone and
+then needing the laptop to start again is exactly the situation this channel
+exists to avoid, so a control that only went one way was a trap.

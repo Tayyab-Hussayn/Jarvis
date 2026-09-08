@@ -636,6 +636,7 @@ def tick(moment: datetime | None = None) -> int:
             title=event["title"],
             channels=event["channels"],
             urgency="critical" if event["insist"] else "normal",
+            ref=f"{event['routine']}/{event['step']}",
             push_path="/api/routine-event",
             push_payload={
                 "routine": event["routine"], "step": event["step"],
@@ -909,6 +910,129 @@ def resolve(routine_id: str, step_id: str, *, state: str,
 
     record_day(event=state, routine=routine_id, step=step_id, source=source)
     return result
+
+
+def live_steps(moment: datetime | None = None) -> list[dict[str, Any]]:
+    """Every step currently open for confirmation, soonest first.
+
+    "Open" means `due` or `nagging` — a step that has actually been asked
+    about. Locked steps are excluded because confirming one out of order is
+    exactly what the sequencing exists to prevent.
+    """
+    now = moment or now_utc()
+    out: list[dict[str, Any]] = []
+    for routine in snapshot(now)["routines"]:
+        if not routine.get("enabled", True):
+            continue
+        for step in routine["steps"]:
+            state = routine["today"]["steps"].get(step["id"], {})
+            if state.get("state") in LIVE_STATES:
+                out.append({
+                    "routine": routine["id"],
+                    "routine_name": routine.get("name", ""),
+                    "step": step["id"],
+                    "label": step.get("label", ""),
+                    "points": _points(step),
+                    "due_at": state.get("due_at", ""),
+                })
+    out.sort(key=lambda row: row["due_at"] or "")
+    return out
+
+
+def resolve_open(state: str, *, step_id: str = "", source: str = "cli",
+                 moment: datetime | None = None) -> tuple[bool, str]:
+    """Confirm or skip a step named loosely, or the only open one.
+
+    Returns (acted, message). Used by surfaces where the user cannot see a
+    list — a WhatsApp reply, mostly — so the ambiguous case has to be answered
+    with the candidates rather than a guess.
+
+    **Never resolves ambiguity by taking the first match.** Two steps open at
+    once and a bare "done" is genuinely unclear; picking one would mark the
+    wrong habit complete and there is no undo. That is the same rule
+    `skills/windows.py` follows for windows, for the same reason.
+    """
+    open_now = live_steps(moment)
+    if not open_now:
+        return False, "Nothing is waiting to be confirmed right now."
+
+    wanted = (step_id or "").strip().lower()
+    if wanted:
+        matches = [
+            row for row in open_now
+            if row["step"].lower() == wanted or row["label"].lower() == wanted
+        ]
+        if not matches:
+            names = ", ".join(f"{r['label']} ({r['step']})" for r in open_now)
+            return False, f"Nothing open called {step_id!r}. Waiting: {names}"
+    else:
+        matches = open_now
+
+    if len(matches) > 1:
+        names = ", ".join(f"{r['label']} ({r['step']})" for r in matches)
+        return False, f"Which one? {names}"
+
+    target = matches[0]
+    try:
+        result = resolve(target["routine"], target["step"], state=state,
+                         source=source, moment=moment)
+    except (RoutineError, RuntimeError) as exc:
+        return False, str(exc)
+
+    verb = "Done" if state == "done" else "Skipped"
+    return True, (
+        f"{verb}: {target['label']}. "
+        f"{result['score']}/{result['available']} points today."
+    )
+
+
+def status_line(moment: datetime | None = None) -> str:
+    """A short plain-text summary, for a surface with no screen."""
+    routines = snapshot(moment)["routines"]
+    if not routines:
+        return "No routines set up."
+
+    parts: list[str] = []
+    for routine in routines:
+        day = routine["today"]
+        if not routine.get("enabled", True):
+            parts.append(f"{routine['name']}: paused")
+            continue
+        if day.get("rest"):
+            parts.append(f"{routine['name']}: rest day")
+            continue
+        counts: dict[str, int] = {}
+        for step_state in day["steps"].values():
+            name = step_state.get("state", "")
+            counts[name] = counts.get(name, 0) + 1
+        parts.append(
+            f"{routine['name']}: {day['score']}/{day['available']} pts, "
+            f"{counts.get('done', 0)} done, {counts.get('missed', 0)} missed, "
+            f"streak {routine.get('streak', 0)}"
+        )
+
+    open_now = live_steps(moment)
+    if open_now:
+        parts.append("Waiting: " + ", ".join(
+            f"{r['label']} ({r['step']})" for r in open_now))
+    return "\n".join(parts)
+
+
+def pause_all(paused: bool = True) -> list[str]:
+    """Pause or resume every routine. Returns the names affected."""
+    changed: list[str] = []
+    with locked() as got:
+        if not got:
+            raise RuntimeError("the routine store is busy")
+        data = load()
+        for routine in data.get("routines", []):
+            if bool(routine.get("enabled", True)) == (not paused):
+                continue
+            routine["enabled"] = not paused
+            changed.append(routine.get("name", routine.get("id", "")))
+        if changed:
+            save(data)
+    return changed
 
 
 def _step_of(routine: dict[str, Any], step_id: str) -> dict[str, Any]:

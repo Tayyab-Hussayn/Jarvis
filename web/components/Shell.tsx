@@ -33,6 +33,7 @@ import { classNames } from "@/lib/format";
 export type ViewId =
   | "console"
   | "schedule"
+  | "habits"
   | "system"
   | "windows"
   | "files"
@@ -59,6 +60,8 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     items: [
       { id: "system", label: "System", icon: "system" },
       { id: "schedule", label: "Schedule", icon: "schedule" },
+      // Next to Schedule, not in Agent: both answer "what happens when".
+      { id: "habits", label: "Habits", icon: "habits" },
       { id: "windows", label: "Windows", icon: "windows" },
       { id: "files", label: "Files", icon: "files" },
       { id: "apps", label: "Apps", icon: "apps" },

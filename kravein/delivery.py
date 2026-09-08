@@ -55,14 +55,20 @@ def say(text: str) -> str:
         return f"{type(exc).__name__}: {exc}"
 
 
-def send_whatsapp(text: str) -> str:
-    """Not built yet. Phase 4.
+def send_whatsapp(text: str, *, ref: str = "") -> str:
+    """Hand off to the resident WhatsApp service. "" on success, else why not.
 
-    Deliberately a stub rather than an omission: the escalation ladder is
-    written and tested now, so when the socket client lands there is exactly
-    one line to change and no new branch to reason about.
+    Never loads `neonize` — that lives on the far side of a unix socket, in a
+    process that stays connected, because `connect()` blocks for the whole
+    session and a 50ms tick cannot host one.
     """
-    return "whatsapp is not linked yet"
+    try:
+        from .platform import whatsapp
+
+        sent, error = whatsapp.send(text, ref=ref)
+        return "" if sent else error
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
 
 
 def push(path: str, payload: dict[str, Any], *, timeout: float = 3.0) -> bool:
@@ -110,6 +116,7 @@ def deliver(
     timeout_ms: int = 0,
     push_path: str = "",
     push_payload: dict[str, Any] | None = None,
+    ref: str = "",
 ) -> dict[str, str]:
     """Say one thing through the channels asked for.
 
@@ -139,7 +146,7 @@ def deliver(
             if error:
                 problems[SPEAK] = error
         if WHATSAPP in wanted:
-            error = send_whatsapp(text)
+            error = send_whatsapp(text, ref=ref)
             if error:
                 problems[WHATSAPP] = error
 

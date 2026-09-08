@@ -267,6 +267,28 @@ def edit_routine_step(
 
 
 @skill(category="routines", danger=Danger.MODERATE)
+def delete_routine_step(routine_id: str, step_id: str) -> str:
+    """Remove one step from a routine.
+
+    Refused if another step is scheduled to run after this one, because that
+    step would have no time left to compute and would sit locked for ever.
+    Give it its own time first.
+
+    Args:
+        routine_id: Which routine, e.g. "r1".
+        step_id: Which step, e.g. "s2".
+    """
+    try:
+        removed = routines.remove_step(routine_id, step_id)
+    except ValueError as exc:
+        return str(exc)
+    if not removed:
+        return f"No step {step_id!r} in {routine_id}."
+    audit.record("routines.step_deleted", routine=routine_id, step=step_id)
+    return f"Removed {step_id} from {routine_id}."
+
+
+@skill(category="routines", danger=Danger.MODERATE)
 def pause_routine(routine_id: str, resume: bool = False) -> str:
     """Pause a routine so it stops nagging, or resume a paused one.
 

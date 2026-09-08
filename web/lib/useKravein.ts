@@ -23,6 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ClientFrame,
   JobEvent,
+  RoutineEvent,
   ConfirmView,
   Message,
   ServerFrame,
@@ -94,6 +95,10 @@ export function useKravein() {
   // They belong to no turn, so they are kept apart from `messages` rather than
   // being rendered as something the assistant said.
   const [jobEvents, setJobEvents] = useState<JobEvent[]>([]);
+  // Routine reminders arrive the same way and for the same reason: a separate
+  // process, no turn behind them. Kept apart from `messages` — a nag is not
+  // something the assistant said in conversation.
+  const [routineEvents, setRoutineEvents] = useState<RoutineEvent[]>([]);
   // The spoken turn currently being built, if any. Ids are `s…` so they cannot
   // collide with typed turns (`t…`), panel runs (`p…`) or the server's own
   // voice turn ids (`v…`, used for confirmation routing).
@@ -309,6 +314,16 @@ export function useKravein() {
             {
               id: frame.id, title: frame.title, text: frame.text,
               failed: frame.failed, at: Date.now(),
+            },
+            ...current,
+          ].slice(0, 20));
+          break;
+
+        case "routine_event":
+          setRoutineEvents((current) => [
+            {
+              routine: frame.routine, step: frame.step, label: frame.label,
+              text: frame.text, nag: frame.nag, at: Date.now(),
             },
             ...current,
           ].slice(0, 20));
@@ -842,6 +857,7 @@ export function useKravein() {
     // before it was right; there is nothing here left to wedge.
     cancelling: cancelling && busy,
     jobEvents,
+    routineEvents,
     respondToConfirm,
     dismissPanelConfirm,
     reset,

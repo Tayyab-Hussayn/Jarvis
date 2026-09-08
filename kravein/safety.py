@@ -97,6 +97,12 @@ _NEVER_DELETE = {
     Path.home() / ".ssh",
     Path.home() / ".gnupg",
     Path("/"),
+    # The WhatsApp device session. Not merely inconvenient to lose: the file
+    # *is* a full WhatsApp login, so it sits with the ssh and gpg keys rather
+    # than with ordinary application data. Copying it is impersonating the
+    # linked device, and no confirmation makes that a reasonable thing for a
+    # model to be doing on its own initiative.
+    config.DATA_DIR / "whatsapp",
 }
 
 

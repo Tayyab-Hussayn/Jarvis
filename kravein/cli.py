@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from typing import Any
 
 from . import audit, config, registry
@@ -370,6 +371,178 @@ class Repl:
 
 
 # ---------------------------------------------------------------------------
+# WhatsApp
+# ---------------------------------------------------------------------------
+
+def qr_matrix(code: str, border: int = 4):
+    """The pairing code as a matrix of modules, True where dark.
+
+    The quiet zone is four modules because that is what the QR spec requires.
+    The first version used one, which scanners are entitled to reject.
+    """
+    import qrcode
+
+    qr = qrcode.QRCode(border=border)
+    qr.add_data(code)
+    qr.make(fit=True)
+    return qr.get_matrix()
+
+
+# Black ink on a white card, stated explicitly rather than inherited.
+_QR_INK = "\033[30;47m"
+_QR_RESET = "\033[0m"
+
+
+def render_qr_lines(matrix) -> list[str]:
+    """Half-block rows for a module matrix, dark-on-light, colours forced.
+
+    **The polarity has to be set, not assumed.** A QR is dark modules on a
+    light background and scanners — WhatsApp's especially — will refuse the
+    inverse. The first version printed `█` for a dark module and a space for a
+    light one, leaving the actual colours to the terminal theme: on a dark
+    terminal `█` draws in the *light* foreground and the spaces show the *dark*
+    background, so every code came out inverted and no phone would read it. It
+    looked perfect on a light terminal, which is the worst way for this to
+    fail.
+
+    So each row is wrapped in an explicit black-on-white SGR pair. `█` is
+    foreground (black, dark module), a space is background (white, light
+    module), and the half blocks split the cell — which is what lets two module
+    rows share one character row, keeping the code inside a normal terminal.
+    """
+    rows = [list(row) for row in matrix]
+    if len(rows) % 2:                       # a last half-block needs a partner
+        rows.append([False] * len(rows[0]))
+
+    lines = []
+    for top, bottom in zip(rows[0::2], rows[1::2]):
+        cells = "".join(
+            "█" if (t and b) else "▀" if t else "▄" if b else " "
+            for t, b in zip(top, bottom)
+        )
+        lines.append(f"{_QR_INK}{cells}{_QR_RESET}")
+    return lines
+
+
+def _render_qr(code: str) -> None:
+    """Draw the pairing code in the terminal."""
+    try:
+        matrix = qr_matrix(code)
+    except ImportError:
+        print(red("Install `qrcode` to show the code here, or use the Habits panel."))
+        return
+
+    lines = render_qr_lines(matrix)
+    width, height = __import__("shutil").get_terminal_size((80, 24))
+
+    # A QR that scrolls off the top is a QR with no finder pattern, and it
+    # fails in a way that looks exactly like a bad code rather than a small
+    # window. Say which it is.
+    if len(matrix[0]) > width or len(lines) + 4 > height:
+        print(yellow(
+            f"  This terminal is {width}x{height}; the code needs "
+            f"{len(matrix[0])}x{len(lines) + 4}."
+        ))
+        print(dim("  Zoom out (Ctrl+-) and run it again, or open the Habits panel "
+                  "in `kravein serve`."))
+
+    print()
+    for line in lines:
+        print(line)
+    print()
+
+
+def _whatsapp_command(action: str) -> int:
+    """status / link / unlink / test, against the resident service."""
+    from .platform import whatsapp
+
+    if not whatsapp.available():
+        print(red("The WhatsApp service is not running."))
+        print(dim("  systemctl --user enable --now kravein-whatsapp.service"))
+        print(dim("  (or run it in the foreground: python -m kravein.whatsapp_service)"))
+        return 1
+
+    if action == "status":
+        state = whatsapp.state()
+        print(f"State    {state.get('state', '?')}")
+        if state.get("detail"):
+            print(f"Detail   {state['detail']}")
+        print(f"Linked   {'yes, ' + str(state.get('jid')) if state.get('linked') else 'no'}")
+        return 0
+
+    if action == "unlink":
+        result = whatsapp.unlink()
+        print(green("Unlinked.") if result.get("ok")
+              else red(f"Could not unlink: {result.get('error')}"))
+        return 0 if result.get("ok") else 1
+
+    if action == "test":
+        sent, error = whatsapp.send(
+            "Kravein test message. If you can read this, the reminder channel works.",
+            ref="cli/test",
+        )
+        print(green("Sent.") if sent else red(f"Not sent: {error}"))
+        return 0 if sent else 1
+
+    # link
+    result = whatsapp.begin_link()
+    if not result.get("ok"):
+        print(red(f"Could not start pairing: {result.get('error')}"))
+        return 1
+
+    print("On your phone: WhatsApp → Settings → Linked devices → Link a device.")
+    print(dim("Waiting for a code…"))
+
+    # Poll rather than block on a callback: the code rotates every 20s and the
+    # terminal has to redraw when it does, or you scan something that expired a
+    # minute ago.
+    #
+    # The waiting is bounded twice over. A pairing session that never produces
+    # a first code is a broken connection, not a slow one — the earlier version
+    # had only the outer deadline and printed "Waiting for a code…" for three
+    # minutes while the service sat on a channel that had closed, which reads
+    # exactly like a hang.
+    shown = ""
+    first_code_by = time.time() + 30
+    deadline = time.time() + 180
+
+    while time.time() < deadline:
+        state = whatsapp.state()
+        name = state.get("state", "")
+
+        if name == "connected":
+            print(green(f"Linked{' as ' + str(state.get('jid')) if state.get('jid') else ''}."))
+            return 0
+        if name in ("unlinked", "error") and shown:
+            print(red(f"Pairing ended: {state.get('detail') or name}"))
+            return 1
+
+        code = str(state.get("qr", ""))
+        if code and code != shown:
+            shown = code
+            _render_qr(code)
+            print(dim("Scan this. It refreshes on its own until you do."))
+        elif not shown and time.time() > first_code_by:
+            print(red("The service is not producing a pairing code."))
+            print(dim(f"  Its state is '{name}'"
+                      f"{' — ' + str(state.get('detail')) if state.get('detail') else ''}."))
+            print(dim("  Check:  systemctl --user status kravein-whatsapp.service"))
+            print(dim("  Logs:   journalctl --user -u kravein-whatsapp.service -n 30"))
+            return 1
+        elif shown and state.get("qr_stale"):
+            # Codes stopped arriving mid-pairing. Nothing to scan and nothing
+            # coming, so say so instead of redrawing a dead square.
+            print(red("The code went stale — the pairing window closed."))
+            print(dim("  Run `kravein whatsapp link` again."))
+            return 1
+
+        time.sleep(2)
+
+    print(red("Gave up waiting. Nothing was linked; run `kravein whatsapp link` again."))
+    return 1
+
+
+# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
@@ -420,6 +593,13 @@ def build_parser() -> argparse.ArgumentParser:
     send = sub.add_parser("send", help="send a request to a running daemon")
     send.add_argument("text", nargs="+")
     send.add_argument("--socket", default="")
+
+    whatsapp = sub.add_parser("whatsapp", help="the WhatsApp reminder channel")
+    whatsapp.add_argument(
+        "action", nargs="?", default="status",
+        choices=["status", "link", "unlink", "test"],
+        help="status (default), link a phone by QR, unlink it, or send a test message",
+    )
 
     serve = sub.add_parser("serve", help="run the web UI")
     serve.add_argument("--host", default="127.0.0.1",
@@ -547,6 +727,9 @@ def main(argv: list[str] | None = None) -> int:
         reply = send_request(" ".join(args.text), socket_path=args.socket or None)
         print(reply)
         return 0
+
+    if command == "whatsapp":
+        return _whatsapp_command(args.action)
 
     if command == "serve":
         from . import webauth
