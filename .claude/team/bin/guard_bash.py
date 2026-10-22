@@ -168,6 +168,9 @@ def main() -> None:
         names = [t.rsplit("/", 1)[-1] for t in tokens]
         if me != "orchestrator" and any(n == "team" and nxt in ("grant", "revoke") for n, nxt in zip(names, names[1:])):
             block("`team grant/revoke` is for the orchestrator. Ask for a grant with /conflict-report.")
+        if me != "orchestrator" and any(n == "team" and nxt == "account" and len(names) > i + 2
+                                        for i, (n, nxt) in enumerate(zip(names, names[1:]))):
+            block("`team account <value>` switches the Claude account for every launch; only the orchestrator or owner sets it.")
 
     if "git" not in cmd and "gh" not in cmd and "team" not in cmd:
         sys.exit(0)

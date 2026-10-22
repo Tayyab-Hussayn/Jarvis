@@ -18,15 +18,23 @@ RUNTIME="$ROOT/.claude/team/runtime"
 ID_FILE="$RUNTIME/orchestrator-session"
 mkdir -p "$RUNTIME"
 
-FRESH=0
+FRESH=0; ACCOUNT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --fresh) FRESH=1; shift ;;
+    --account) ACCOUNT="${2:?--account needs a value}"; shift 2 ;;
     *) break ;;
   esac
 done
 
 cd "$ROOT"
+# Claude account: --account, else runtime/account (`team account`), else the environment (account.sh).
+# A conversation lives in the config directory it was created in, so resuming after a switch finds
+# nothing and falls through to a fresh session — kb/state is what carries the work across.
+# shellcheck source=account.sh
+. "$(dirname "$(readlink -f "$0")")/account.sh"
+krv_apply_account "$ROOT" "$ACCOUNT"
+echo "[orchestrator] account=$(krv_account_label)" >&2
 export KRV_AGENT="orchestrator"
 ARGS=(--append-system-prompt-file "$ROOT/.claude/team/personas/orchestrator.md"
       --settings '{"crossSessionInbound": "accept"}'

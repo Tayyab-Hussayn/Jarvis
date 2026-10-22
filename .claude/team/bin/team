@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Team control for the Kravein agent team.
 #
-#   team up [--fresh] [--model m] [agent...]
+#   team up [--fresh] [--model m] [--account 1|2|dir] [agent...]
 #                                    start agents in tmux session "kravein-team"; resumes previous conversations
 #                                    unless --fresh. Default: all agents, models per roster "models".
+#   team account [1|2|dir|clear]    show / set the Claude account for agents and start-lead.sh (machine-local;
+#                                    only chooses CLAUDE_CONFIG_DIR, never logs anything in or out)
 #   team stop <agent>                gracefully exit one agent (e.g. to restart it on another model)
 #   team down [--now]                gracefully exit every agent (Esc, /exit), then close the tmux session.
 #   team status                      windows, worktrees, owner overrides, guard blocks (24h)
@@ -58,7 +60,7 @@ case "$cmd" in
     while [ $# -gt 0 ]; do
       case "$1" in
         --fresh) opts+=(--fresh); shift ;;
-        --model) opts+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+        --model|--account) opts+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
         *) break ;;
       esac
     done
@@ -77,6 +79,19 @@ case "$cmd" in
       echo "started: $a ${opts[*]}"
     done
     echo "Owner: attach with  .claude/team/bin/team attach   (switch windows: Ctrl-b <number>, detach: Ctrl-b d)"
+    ;;
+
+  account)
+    # shellcheck source=account.sh
+    . "$BIN/account.sh"
+    f="$(krv_account_file "$ROOT")"
+    case "${1:-}" in
+      "") if [ -s "$f" ]; then echo "account: $(cat "$f")  (from $f)"; else echo "account: not set (launches use the caller's environment: $(krv_account_label))"; fi ;;
+      clear) rm -f "$f"; echo "account setting cleared" ;;
+      *) ( krv_apply_account "$ROOT" "$1" ) || exit 1
+         mkdir -p "$(dirname "$f")"; echo "$1" > "$f"
+         echo "account set to $1 — applies to the next 'team up' and start-lead.sh (running agents keep theirs; restart with 'team stop' + 'team up')" ;;
+    esac
     ;;
 
   stop)
@@ -106,6 +121,7 @@ case "$cmd" in
     else
       echo "tmux session '$SESSION': not running"
     fi
+    ( . "$BIN/account.sh"; f="$(krv_account_file "$ROOT")"; echo "account for launches: $( [ -s "$f" ] && cat "$f" || echo 'not set (caller environment)')" )
     git -C "$ROOT" worktree list
     now=$(date +%s)
     for a in $AGENTS; do
