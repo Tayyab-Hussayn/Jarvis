@@ -56,10 +56,15 @@ import com.kravein.connect.KraveinConnectForegroundService
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
 import com.kravein.connect.core.DeviceCredential
-import com.kravein.connect.core.GatewayEndpoint
+import com.kravein.connect.core.OfferParse
 import com.kravein.connect.core.PairingOffer
-import com.kravein.connect.network.KraveinGatewayDiscovery
-import com.kravein.connect.pairing.PairingPayloadParser
+import com.kravein.connect.core.PairingOfferParser
+import com.kravein.connect.network.PairResult
+import com.kravein.connect.network.PairingClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.rememberCoroutineScope
 import com.kravein.connect.pairing.PairingStorage
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -79,7 +84,6 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Send
 
 
 
@@ -108,29 +112,25 @@ fun KraveinConnectApp(
     onStartService: () -> Unit,
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    val discovery = remember { KraveinGatewayDiscovery(context) }
+    val scope = rememberCoroutineScope()
     val storage = remember { PairingStorage(context) }
+    val pairingClient = remember { PairingClient() }
     val connectionState by AgentStateStore.connectionState.collectAsState()
-    val gateway by AgentStateStore.gateway.collectAsState()
     val credential by AgentStateStore.credential.collectAsState()
-    val pairingOffer by AgentStateStore.pairingOffer.collectAsState()
     val status by AgentStateStore.statusText.collectAsState()
     val lastError by AgentStateStore.lastError.collectAsState()
     val logs by AgentStateStore.logs.collectAsState()
 
     var showManual by rememberSaveable { mutableStateOf(false) }
     var manualHost by rememberSaveable { mutableStateOf("") }
-    var manualPort by rememberSaveable { mutableStateOf("8765") }
-    var scanError by rememberSaveable { mutableStateOf<String?>(null) }
-
-    DisposableEffect(Unit) {
-        onDispose { discovery.stop() }
-    }
+    var manualPort by rememberSaveable { mutableStateOf("8787") }
+    var manualCode by rememberSaveable { mutableStateOf("") }
+    var pairError by rememberSaveable { mutableStateOf<String?>(null) }
+    var pairing by remember { mutableStateOf(false) }
 
     val cameraGranted = remember { ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED }
     val notificationsGranted = remember { Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED }
-    
+
     val setupMissing = listOfNotNull(
         if (!cameraGranted) "Camera" else null,
         if (!notificationsGranted) "Notifications" else null,
@@ -153,13 +153,56 @@ fun KraveinConnectApp(
         }
     }
 
+    // The server refused the stored credential (revoked): reconnecting cannot fix it, so go to pairing.
+    LaunchedEffect(connectionState) {
+        if (connectionState == ConnectionState.NEEDS_PAIRING) {
+            navController.navigate("connect") { popUpTo(0) }
+        }
+    }
+
+    // Redeem the offer off the main thread; the credential goes straight to encrypted storage.
+    fun pair(offer: PairingOffer) {
+        pairing = true
+        pairError = null
+        AgentStateStore.setStatus("Pairing")
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                pairingClient.redeem(offer, Build.MODEL ?: "Android phone").also {
+                    if (it is PairResult.Paired) storage.saveCredential(it.credential)
+                }
+            }
+            pairing = false
+            when (result) {
+                is PairResult.Paired -> {
+                    AgentStateStore.setError(null)
+                    AgentStateStore.setConnectionState(ConnectionState.CONNECTING)
+                    AgentStateStore.setCredential(result.credential)
+                    onStartService()
+                }
+                is PairResult.Failed -> {
+                    pairError = result.message
+                    AgentStateStore.setStatus("Pairing failed")
+                }
+            }
+        }
+    }
+
+    fun startWith(parse: OfferParse) {
+        when (parse) {
+            is OfferParse.Ok -> pair(parse.offer)
+            is OfferParse.Rejected -> pairError = parse.reason
+        }
+    }
+
+    val nowSeconds = { System.currentTimeMillis() / 1000 }
+
     Box(modifier = Modifier.fillMaxSize()) {
         // Render 3D Background
         HolographicBackground()
 
         // UI Overlay
         NavHost(
-            navController = navController, 
+            navController = navController,
             startDestination = startDest,
             modifier = Modifier.fillMaxSize(),
             enterTransition = { fadeIn(tween(500)) },
@@ -172,7 +215,7 @@ fun KraveinConnectApp(
                     notificationsGranted = notificationsGranted,
                     onRequestCameraPermission = onRequestCameraPermission,
                     onRequestNotificationPermission = onRequestNotificationPermission,
-                    onContinue = { 
+                    onContinue = {
                         if (credential != null) navController.navigate("home") { popUpTo(0) }
                         else navController.navigate("welcome") { popUpTo(0) }
                     }
@@ -189,70 +232,37 @@ fun KraveinConnectApp(
                 )
             }
             composable("connect") {
-                // If they have an offer, jump to pairing
-                if (pairingOffer != null) {
-                    PairingPendingScreen(
-                        offer = pairingOffer!!,
-                        gateway = gateway,
-                        state = connectionState,
-                        status = status,
-                        error = lastError,
-                        onRequestPairing = onStartService,
-                        onCancel = { AgentStateStore.setPairingOffer(null) },
-                    )
-                } else if (showManual) {
+                if (showManual) {
                     ManualConnectDialog(
-                        host = manualHost, port = manualPort,
-                        onHostChange = { manualHost = it }, onPortChange = { manualPort = it },
+                        host = manualHost, port = manualPort, code = manualCode,
+                        onHostChange = { manualHost = it }, onPortChange = { manualPort = it }, onCodeChange = { manualCode = it },
                         onDismiss = { showManual = false },
                         onConnect = {
-                            val p = manualPort.toIntOrNull() ?: 8765
-                            AgentStateStore.setGateway(GatewayEndpoint(name = "Kravein PC", host = manualHost.trim(), port = p))
-                            AgentStateStore.setStatus("Manual endpoint selected")
-                            onStartService()
                             showManual = false
-                            navController.navigate("connected_anim")
-                        }
-                    )
-                } else {
-                    ConnectChoiceScreen(
-                        onScanQr = { 
-                            if (!cameraGranted) onRequestCameraPermission()
-                            navController.navigate("scanner") 
-                        },
-                        onEnterIp = { showManual = true },
-                        onFindLocal = {
-                            discovery.start(
-                                onFound = {
-                                    AgentStateStore.setGateway(it)
-                                    AgentStateStore.setStatus("Gateway Online")
-                                    onStartService()
-                                    navController.navigate("connected_anim")
-                                },
-                                onError = { AgentStateStore.setError(it) }
-                            )
+                            startWith(PairingOfferParser.fromParts(manualHost, manualPort, manualCode, nowSeconds()))
+                            manualCode = ""
                         }
                     )
                 }
+                ConnectChoiceScreen(
+                    pairing = pairing,
+                    error = pairError ?: lastError,
+                    onScanQr = {
+                        if (!cameraGranted) onRequestCameraPermission()
+                        pairError = null
+                        navController.navigate("scanner")
+                    },
+                    onEnterManually = { showManual = true },
+                )
             }
             composable("scanner") {
                 QrScannerScreen(
                     onBack = { navController.popBackStack() },
                     onRequestPermission = onRequestCameraPermission,
-                    errorText = scanError,
+                    errorText = pairError,
                     onScanned = { raw ->
-                        val offer = PairingPayloadParser.parse(raw)
-                        if (offer == null) {
-                            scanError = "That QR code does not look like a Kravein pairing code."
-                            AgentStateStore.setError(scanError)
-                        } else {
-                            scanError = null
-                            storage.saveGatewayHint(offer)
-                            AgentStateStore.setPairingOffer(offer)
-                            AgentStateStore.setGateway(GatewayEndpoint(name = "Kravein PC", host = offer.host, port = offer.port))
-                            AgentStateStore.setStatus("Pairing payload loaded")
-                            navController.popBackStack()
-                        }
+                        navController.popBackStack()
+                        startWith(PairingOfferParser.parse(raw, nowSeconds()))
                     }
                 )
             }
@@ -265,7 +275,6 @@ fun KraveinConnectApp(
                 if (credential != null) {
                     ConnectedScreen(
                         credential = credential!!,
-                        gateway = gateway,
                         state = connectionState,
                         logs = logs,
                         status = status,
@@ -282,21 +291,8 @@ fun KraveinConnectApp(
                             }
                             context.startActivity(intent)
                         },
-                        onOpenChat = { navController.navigate("chat") }
                     )
                 }
-            }
-            composable("chat") {
-                ChatScreen(
-                    onBack = { navController.popBackStack() },
-                    onSendMessage = { text ->
-                        val intent = Intent(context, KraveinConnectForegroundService::class.java).apply {
-                            action = KraveinConnectForegroundService.ACTION_SEND_CHAT
-                            putExtra(KraveinConnectForegroundService.EXTRA_CHAT_TEXT, text)
-                        }
-                        context.startService(intent)
-                    }
-                )
             }
         }
     }
@@ -352,16 +348,28 @@ fun AboutScreen(onNext: () -> Unit) {
 }
 
 @Composable
-fun ConnectChoiceScreen(onScanQr: () -> Unit, onEnterIp: () -> Unit, onFindLocal: () -> Unit) {
+fun ConnectChoiceScreen(pairing: Boolean, error: String?, onScanQr: () -> Unit, onEnterManually: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         GlassCard {
             Text("Pair Device", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Open Kravein on your PC, choose Phone, and scan the QR code it shows.",
+                color = androidx.compose.ui.graphics.Color.White,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            error?.let {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(it, color = MaterialTheme.colorScheme.error, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
             Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onScanQr, modifier = Modifier.fillMaxWidth()) { Text("Scan QR Code") }
-            Spacer(modifier = Modifier.height(12.dp))
-            OutlinedButton(onClick = onFindLocal, modifier = Modifier.fillMaxWidth()) { Text("Auto Discover") }
-            Spacer(modifier = Modifier.height(12.dp))
-            TextButton(onClick = onEnterIp) { Text("Enter IP Manually", color = androidx.compose.ui.graphics.Color.White) }
+            if (pairing) {
+                androidx.compose.material3.CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            } else {
+                Button(onClick = onScanQr, modifier = Modifier.fillMaxWidth()) { Text("Scan QR Code") }
+                Spacer(modifier = Modifier.height(12.dp))
+                TextButton(onClick = onEnterManually) { Text("Enter Code Manually", color = androidx.compose.ui.graphics.Color.White) }
+            }
         }
     }
 }
@@ -435,90 +443,13 @@ private fun PermissionRow(label: String, granted: Boolean) {
 }
 
 @Composable
-private fun DiscoveryScreen(
-    gateway: GatewayEndpoint?,
-    status: String,
-    error: String?,
-    onConnect: (() -> Unit)?,
-    onFindKravein: () -> Unit,
-    onScanQr: () -> Unit,
-    onEnterIp: () -> Unit,
-) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp).background(androidx.compose.ui.graphics.Color.Transparent).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text("KRAVEIN CONNECT", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black, color = androidx.compose.ui.graphics.Color.White)
-        Spacer(Modifier.height(8.dp))
-        Text("Connect this device to Kravein AI.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(24.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), contentColor = androidx.compose.ui.graphics.Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))) {
-            Column(Modifier.padding(20.dp)) {
-                Text("Connection", fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(6.dp))
-                Text(gateway?.let { "${it.name} · ${it.host}:${it.port}" } ?: "No gateway selected")
-                Spacer(Modifier.height(4.dp))
-                Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                error?.let {
-                    Spacer(Modifier.height(6.dp))
-                    Text(it, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        if (gateway != null && onConnect != null) {
-            Button(onClick = onConnect, modifier = Modifier.fillMaxWidth()) { Text("Connect") }
-            Spacer(Modifier.height(12.dp))
-        }
-        Button(onClick = onFindKravein, modifier = Modifier.fillMaxWidth()) { Text("Find Kravein") }
-        Spacer(Modifier.height(12.dp))
-        FilledTonalButton(onClick = onScanQr, modifier = Modifier.fillMaxWidth()) { Text("Scan QR") }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = onEnterIp, modifier = Modifier.fillMaxWidth()) { Text("Enter IP") }
-    }
-}
-
-@Composable
-private fun PairingPendingScreen(
-    offer: PairingOffer,
-    gateway: GatewayEndpoint?,
-    state: ConnectionState,
-    status: String,
-    error: String?,
-    onRequestPairing: () -> Unit,
-    onCancel: () -> Unit,
-) {
-    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
-        Text("CONNECT TO KRAVEIN?", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
-        Spacer(Modifier.height(8.dp))
-        Text("${gateway?.name ?: "Kravein PC"}\n${gateway?.host ?: offer.host}:${offer.port}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(20.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), contentColor = androidx.compose.ui.graphics.Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))) {
-            Column(Modifier.padding(16.dp)) {
-                Text("Pair this device?")
-                Text("Code ${offer.pairingCode}", fontWeight = FontWeight.Bold)
-                Text("State: $state")
-                Text("Status: $status")
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        Button(onClick = onRequestPairing, modifier = Modifier.fillMaxWidth()) { Text("Request Pairing") }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel") }
-    }
-}
-
-@Composable
 private fun ConnectedScreen(
     credential: DeviceCredential,
-    gateway: GatewayEndpoint?,
     state: ConnectionState,
     logs: List<String>,
     status: String,
     onDisconnect: () -> Unit,
     onOpenPermissions: () -> Unit,
-    onOpenChat: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp).background(androidx.compose.ui.graphics.Color.Transparent).verticalScroll(rememberScrollState()),
@@ -529,40 +460,12 @@ private fun ConnectedScreen(
         Spacer(Modifier.height(20.dp))
         Card(colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), contentColor = androidx.compose.ui.graphics.Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))) {
             Column(Modifier.padding(16.dp)) {
-                Text(gateway?.name ?: "Kravein PC", fontWeight = FontWeight.Bold)
+                Text("${credential.host}:${credential.port}", fontWeight = FontWeight.Bold)
                 Text(credential.deviceName)
                 Text("Battery status is reported by the agent.")
                 Text("Network: Wi-Fi")
                 Text("State: $state")
                 Text(status)
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-        
-        Card(
-            onClick = onOpenChat,
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                contentColor = MaterialTheme.colorScheme.primary
-            ),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text("Kravein Chat", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Synchronized with your PC", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f))
-                }
-                Icon(
-                    imageVector = androidx.compose.material.icons.Icons.Default.Send,
-                    contentDescription = "Open Chat",
-                    tint = MaterialTheme.colorScheme.primary
-                )
             }
         }
         Spacer(Modifier.height(16.dp))
@@ -592,22 +495,26 @@ private fun ConnectedScreen(
 private fun ManualConnectDialog(
     host: String,
     port: String,
+    code: String,
     onHostChange: (String) -> Unit,
     onPortChange: (String) -> Unit,
+    onCodeChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onConnect: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Enter IP") },
+        title = { Text("Enter pairing details") },
         text = {
             Column {
                 OutlinedTextField(value = host, onValueChange = onHostChange, label = { Text("Host") }, singleLine = true)
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(value = port, onValueChange = onPortChange, label = { Text("Port") }, singleLine = true)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = code, onValueChange = onCodeChange, label = { Text("Pairing code") }, singleLine = true)
             }
         },
-        confirmButton = { TextButton(onClick = onConnect) { Text("Connect") } },
+        confirmButton = { TextButton(onClick = onConnect) { Text("Pair") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

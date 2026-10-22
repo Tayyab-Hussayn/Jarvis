@@ -34,6 +34,14 @@ android {
     }
 }
 
+// The vocabulary test compares the app against the server's definition of the channel. Declared as an input
+// so editing kravein/phone_protocol.json re-runs it instead of reusing a cached pass.
+val phoneProtocolJson = rootProject.file("../kravein/phone_protocol.json")
+tasks.withType<Test>().configureEach {
+    systemProperty("kravein.protocol.json", phoneProtocolJson.absolutePath)
+    inputs.file(phoneProtocolJson)
+}
+
 dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
