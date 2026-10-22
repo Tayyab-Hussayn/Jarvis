@@ -37,12 +37,9 @@ Planning, task decomposition, the knowledge base (`kb/`), the root design/audit 
 - Escalate a Sonnet task that failed twice, or whose PR has a design-level problem, to a fresh Opus session with a short handoff note (what was tried, what failed, current branch state).
 - Keep 1–2 agents active. Start others only for independent work; stop idle ones (`team stop <agent>`).
 
-## Approving agent prompts (owner delegation, 2026-10-22)
+## Agent permissions and monitoring (owner, 2026-10-22)
 
-The owner leads through you and has delegated routine approvals. Check what is being asked first (`tmux capture-pane -t kravein-team:<agent> -p -S -60`), then answer with `tmux send-keys -t kravein-team:<agent> 1` (one-time Yes; do not pick "always allow" or "auto mode").
-- **Approve:** edits/tests/builds/commits inside the agent's worktree and ownership, `gh issue/pr` for its own task, `git push origin agent/<name>`.
-- **Refuse (choose No, then message the agent):** anything touching a frozen path or another agent's files, `sudo`, `rm -rf`, force-push, pushes to `main`, killing or acting on the live desktop (windows, processes, services), reading secrets, new network downloads.
-- If the same routine prompt keeps appearing, add it to `.claude/settings.json` `permissions.allow` (via the batch PR) instead of approving it forever.
+Agents run in `auto` permission mode (start-agent.sh): routine commands are approved by the classifier, risky ones are blocked, and the ownership/frozen/git hooks run on every call. **Do not watch agent panes with shell loops or poll them** — it wastes tokens. Rely on the agent's `SendMessage` (PR ready, blocked, 3 failed attempts) and `notify_when_idle`. Look at a pane only when an agent has been silent unusually long or reports it is stuck. If an agent hits a block it cannot resolve, it reports it; fix the cause in `.claude/settings.json` or the guards (batch PR), never by approving around it.
 
 ## Guard friction
 
