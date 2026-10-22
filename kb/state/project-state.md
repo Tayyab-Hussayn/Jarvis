@@ -1,7 +1,7 @@
 ---
 type: state
 owner: orchestrator
-updated: 2026-10-22
+updated: 2026-10-23
 ---
 
 # Project state (orchestrator-edited; keep under 60 lines)
@@ -27,4 +27,4 @@ updated: 2026-10-22
 ## Blockers
 - None.
 
-Baseline: `.venv/bin/python -m pytest tests/engine tests/skills tests/test_web_transport.py -q` → 428 pass (engine 248, skills 93, web transport 87). Expected failures: `test_screen_processor.py`, `test_gesture_utils.py`, `test_kravein_connect*.py`.
+Baseline (2026-10-23, after #32): `.venv/bin/python -m pytest tests/engine tests/skills tests/web tests/test_web_transport.py -q` → 547 pass. Expected failures: `test_screen_processor.py`, `test_gesture_utils.py`, `test_kravein_connect*.py`.
