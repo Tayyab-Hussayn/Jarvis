@@ -9,10 +9,10 @@ updated: 2026-10-22
 ## Done
 - Linux port `kravein/`: 161 skills, web UI (`kravein serve`), voice (local + Gemini Live), jobs/routines on a systemd tick, WhatsApp confirmation channel, LAN access, stop button.
 - 2026-10-19: opt-in tool routing (`llm.tool_routing`, default `off`) and `skill.unenforced` audit tripwire.
-- 2026-10-22: multi-agent workflow installed (engine, skills, web, qa); agents default to acceptEdits; trial #2 -> PR #4 merged; audit fixes PR #5 (path-scoped hard-won rules, bash frozen guard).
+- 2026-10-22: multi-agent workflow installed (engine, skills, web, qa); agents default to acceptEdits; trial #2 -> PR #4; audit fixes #5; prompt fix #7; legacy suite split per module #8.
 
 ## In flight
-- #6 qa: split `tests/test_linux_port.py` into tests/engine|skills|web (grants 24h). Engine idle, synced, stopped.
+- Nothing assigned. Engine stopped; qa idle after #8.
 
 ## Next (see `pending.md`)
 - Run `tools/eval_models.py` off-vs-auto for tool routing; flip default if parity (needs live provider calls).
@@ -26,4 +26,4 @@ updated: 2026-10-22
 ## Blockers
 - None.
 
-Baseline: `.venv/bin/python -m pytest tests/test_linux_port.py -q` → 314 pass; `tests/test_web_transport.py` → 87 pass. Expected failures: `test_screen_processor.py`, `test_gesture_utils.py`, `test_kravein_connect*.py`.
+Baseline: `.venv/bin/python -m pytest tests/engine tests/skills tests/test_web_transport.py -q` → 428 pass (engine 248, skills 93, web transport 87). Expected failures: `test_screen_processor.py`, `test_gesture_utils.py`, `test_kravein_connect*.py`.

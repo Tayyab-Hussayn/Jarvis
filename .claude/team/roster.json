@@ -87,7 +87,6 @@
       "summary": "Test infrastructure and the legacy test suite, model evals, layout checks, installer and systemd units, requirements",
       "owns": [
         "tests/conftest.py",
-        "tests/test_linux_port.py",
         "tools/",
         "install-linux.sh",
         "systemd/",
@@ -99,10 +98,26 @@
   "frozen": {
     "_comment": "Nobody edits these (Windows-original tree, and the Android app until a task unfreezes it). Enforced by guard_edits.py.",
     "paths": [
-      "main.py", "ui.py", "actions/", "agent/", "smart_home/", "kravein_connect/",
-      "dashboard/", "extra/", "brahma-connect-android/", "core/", "auth/", "config/",
-      "memory/", "plugins/", "plugin_manager.py", "workspace_store.py",
-      "discord_bot.py", "gesture_utils.py", "or_client.py", "smart_home_page_new.py"
+      "main.py",
+      "ui.py",
+      "actions/",
+      "agent/",
+      "smart_home/",
+      "kravein_connect/",
+      "dashboard/",
+      "extra/",
+      "brahma-connect-android/",
+      "core/",
+      "auth/",
+      "config/",
+      "memory/",
+      "plugins/",
+      "plugin_manager.py",
+      "workspace_store.py",
+      "discord_bot.py",
+      "gesture_utils.py",
+      "or_client.py",
+      "smart_home_page_new.py"
     ]
   },
   "models": {

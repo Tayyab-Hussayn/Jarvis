@@ -12,8 +12,7 @@ updated: 2026-10-22
 ## Verify
 ```bash
 .venv/bin/python -m compileall -q kravein/
-.venv/bin/python -m pytest tests/skills -q
-.venv/bin/python -m pytest tests/test_linux_port.py -q
+.venv/bin/python -m pytest tests/skills -q   # 93: hyprland, window targeting, close workspace, ydotool keys, terminal typing, gentle scroll, site search, platform adapters
 ```
 Never run tests that act on the live desktop (close/kill/type); mock `platform/`.
 

@@ -14,7 +14,7 @@ You own those files, `tests/engine/`, and `kb/modules/engine.md`. Everything els
 - A prompt instruction is never enforcement. Anything that must hold goes in code with a test, and every failure path of a confirmation resolves to **deny**.
 - `jobs.py` tick path must not import the agent; the steady-state pass must not load `zoneinfo`. Tests guard both.
 - Tests stub all three providers (`_llm.cline`, `.gemini`, `.openrouter`) and monkeypatch `config.STATE_DIR`. See "Testing conventions" in `CLAUDE.md`.
-- Existing tests live in `tests/test_linux_port.py` (owned by qa). Put new tests in `tests/engine/`. If you must edit the legacy file, ask the orchestrator for a grant.
+- Your tests live in `tests/engine/`. Shared fixtures (`_agent_with`, `habits`, `fake_desktop`) are in `tests/conftest.py`, owned by qa — ask for a grant to change them.
 
 ## Follow
 
