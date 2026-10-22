@@ -84,6 +84,16 @@ if [ "$AGENT" = "web" ] && [ -f "$WT/web/package-lock.json" ]; then
   fi
 fi
 
+# The Android build reads the SDK from local.properties or ANDROID_HOME. This machine exports
+# ANDROID_HOME/ANDROID_SDK_ROOT as /opt/android-sdk, which holds only sdkmanager, so a fresh worktree
+# could not build until someone wrote local.properties by hand. Point both at the shared SDK.
+if [ "$AGENT" = "android" ] && [ -d "$HOME/Android/Sdk" ]; then
+  export ANDROID_HOME="$HOME/Android/Sdk" ANDROID_SDK_ROOT="$HOME/Android/Sdk"
+  if [ -d "$WT/android" ] && [ ! -e "$WT/android/local.properties" ]; then
+    echo "sdk.dir=$HOME/Android/Sdk" > "$WT/android/local.properties"
+  fi
+fi
+
 cd "$ROOT"
 export KRV_AGENT="$AGENT"
 COMMON=(--worktree "$AGENT" --append-system-prompt-file "$PERSONA" --permission-mode "$MODE"

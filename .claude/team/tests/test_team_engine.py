@@ -323,6 +323,7 @@ sa = (BIN / "start-agent.sh").read_text()
 expect("start-agent.sh defaults to auto (never bypass)", "KRV_AGENT_PERMISSION_MODE:-auto" in sa and "bypassPermissions\"" not in sa, True)
 expect("start-agent.sh links .venv into the worktree", 'ln -s "$ROOT/.venv"' in sa, True)
 expect("start-agent.sh can start an agent already assigned (--task, numeric only)", "--task) TASK=" in sa and "*[!0-9]*" in sa, True)
+expect("android worktree gets the shared SDK (local.properties + ANDROID_HOME)", 'ANDROID_HOME="$HOME/Android/Sdk"' in sa and "local.properties" in sa, True)
 expect("web node_modules is installed, not symlinked (Turbopack)", "npm ci --prefer-offline" in sa and 'ln -s "$ROOT/web/node_modules"' not in sa, True)
 expect("no SSW leftovers in bin", any("SSW_" in f.read_text() for f in BIN.iterdir() if f.is_file()), False)
 
