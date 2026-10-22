@@ -53,6 +53,7 @@ When the orchestrator announces a shutdown: finish the current tool call, commit
 ## Tools and approvals
 
 - Create and change files with the **Write/Edit tools**, never with shell heredocs or `echo >` — hooks and the permission system see them as edits and approve them cleanly, and a heredoc trips "expansion obfuscation" prompts.
+- **Publishing commands run alone.** `git push origin agent/<you>` and `gh pr create …` each in a separate Bash call, with no pipe, redirect or `&&` — that is what lets their allow rules match in auto mode.
 - **Never start a Bash command with `cd`.** Your shell already starts in your worktree root; use paths from there (`grep -n X tests/foo.py`). A `cd …; cat/sed` compound always triggers a permission prompt. Prefer the Read and Grep tools for reading.
 - Never read secrets (`~/.config/kravein/api_keys.json`, tokens). They live outside the repo, so the repo-relative `Read()` deny rules that used to be here protected nothing and only made every `cd` compound prompt; they were removed.
 - You run in `auto` permission mode. If the classifier blocks something you genuinely need, do not retry variations: `SendMessage` the orchestrator one line with the exact command and why. Nobody watches your pane — always message when you are blocked, done, or stuck.
