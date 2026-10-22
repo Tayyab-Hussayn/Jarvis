@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from . import audit, config, registry
+from . import audit, config, registry, toolselect
 from .llm import LLMError, ToolCall, client
 from .platform import detect
 from .safety import Confirmer, confirmer_scope
@@ -142,6 +142,12 @@ class Agent:
         self.messages: list[dict[str, Any]] = []
         self._lock = threading.RLock()
         self._llm = client()
+        # Skill categories this conversation has used or asked for. They stay
+        # exposed on later turns so a follow-up ("now close it") is not shown
+        # a toolset narrowed to its own wording. None of this is read unless
+        # tool routing is on.
+        self._tool_categories: set[str] = set()
+        self._turn_categories: set[str] | None = None
 
     # -- helpers ---------------------------------------------------------
 
@@ -204,6 +210,7 @@ class Agent:
         """Clear the conversation history."""
         with self._lock:
             self.messages.clear()
+            self._tool_categories.clear()
         audit.record("agent.reset", source=self.source)
 
     def _trim_history(self) -> None:
@@ -215,6 +222,50 @@ class Agent:
         while cut < len(self.messages) and self.messages[cut].get("role") == "tool":
             cut += 1
         del self.messages[:cut]
+
+    # -- tool routing ----------------------------------------------------
+
+    def _routing_on(self) -> bool:
+        return str(config.get("llm.tool_routing", "off")).lower() == "auto"
+
+    def enable_categories(self, wanted: list[str]) -> None:
+        """Add categories for the rest of this turn (called by ``more_tools``)."""
+        self._tool_categories.update(wanted)
+        if self._turn_categories is not None:
+            self._turn_categories.update(wanted)
+
+    def _tools_for_turn(self, text: str) -> list[dict[str, Any]]:
+        """Tool schemas for this turn; every skill unless routing narrows it."""
+        if not self._routing_on():
+            self._turn_categories = None
+            return registry.tool_declarations()
+        chosen = toolselect.select(text, self._tool_categories)
+        self._turn_categories = set(chosen) if chosen is not None else None
+        # `more_tools` only means something when the list was narrowed.
+        decls = registry.tool_declarations(
+            categories=chosen, routing=chosen is not None
+        )
+        audit.record(
+            "agent.tools_routed", source=self.source,
+            categories=sorted(chosen) if chosen is not None else "all",
+            tools=len(decls),
+        )
+        return decls
+
+    def _current_tools(self, text: str, cached: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Reuse the turn's list, rebuilding only if ``more_tools`` widened it.
+
+        Rebuilding on every round would be harmless but pointless; the list
+        stays byte-identical between rounds so the provider's prompt cache
+        keeps matching until the model actually asks for something new.
+        """
+        if self._turn_categories is None:
+            return cached
+        wanted = len({d["name"] for d in cached})
+        fresh = registry.tool_declarations(
+            categories=self._turn_categories, routing=True
+        )
+        return fresh if len(fresh) != wanted else cached
 
     # -- main loop -------------------------------------------------------
 
@@ -263,7 +314,7 @@ class Agent:
             self.messages.append({"role": "user", "content": text})
             self._trim_history()
 
-            tools = registry.tool_declarations()
+            tools = self._tools_for_turn(text)
             system = self.system_prompt()
 
             # The confirmer must be installed for the whole loop, since skills
@@ -275,6 +326,7 @@ class Agent:
                         return give_up("before_model")
 
                     try:
+                        tools = self._current_tools(text, tools)
                         reply = self._llm.complete(
                             self._with_context(), system=system, tools=tools
                         )
@@ -365,6 +417,9 @@ class Agent:
             source=self.source,
             context=self,
         )
+        used = registry.get_skill(call.name)
+        if used is not None and used.category != "tools":
+            self._tool_categories.add(used.category)
         self._emit(
             "tool_result", result,
             name=call.name, call_id=call_id, result=result,

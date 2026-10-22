@@ -1,0 +1,32 @@
+[Unit]
+Description=Kravein WhatsApp session
+Documentation=file:%h/code/Kravein/ROUTINES_DESIGN.md
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/Kravein
+
+# A resident process, not a oneshot, and that is the whole design. neonize's
+# connect() blocks its thread for the entire session rather than returning once
+# connected, so a short-lived process cannot send a message without paying a
+# full pairing handshake first — and repeated connect/disconnect churn is what
+# makes a linked device look unstable to WhatsApp.
+ExecStart=%h/code/Kravein/.venv/bin/python -m kravein.whatsapp_service
+
+# The socket lives in the runtime directory and must not survive a reboot; a
+# stale socket path with no process behind it reads as "linked" to anything
+# that only checks for the file.
+RuntimeDirectory=kravein
+RuntimeDirectoryMode=0700
+
+# Reconnection is handled inside the process with its own backoff, so restart
+# here is for a genuine crash. Rate-limited because a linked device that
+# hammers the servers is a device that gets banned.
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

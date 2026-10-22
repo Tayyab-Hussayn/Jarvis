@@ -13,10 +13,16 @@ build-tested here.
 
 ## How we work
 
-Solo, fully local project — just the user and Claude Code. No task list, no third-party review,
-no GitHub workflow (no branches, no PRs) — this isn't hosted or shared, just work directly. The
-user describes what they want in plain language; Claude interprets intent, drives the rest, and
-owns the outcome.
+The owner (Roman Urdu speaker — reply in simple Roman Urdu with a clear recommendation; code, docs,
+issues, PRs and commits in English) works with one **orchestrator** Claude session and four module
+agents: **engine**, **skills**, **web**, **qa**. Each agent is its own Claude Code session in its own
+git worktree (`.claude/worktrees/<name>` on `agent/<name>`), may edit only the paths it owns, and
+reaches `main` through a reviewed, squash-merged PR on the private GitHub remote. The orchestrator
+plans, assigns (`/assign-task`), reviews (`/review-pr`), merges (`/merge-pr`) and keeps the knowledge
+base; it does not write module feature code. Protocol: `.claude/rules/team-protocol.md`. Overview:
+`kb/how-the-team-works.md`. Ownership: `.claude/team/roster.json`. The Windows-original tree and
+`brahma-connect-android/` are **frozen** — nobody edits them until a task unfreezes them in the roster.
+A one-person task that needs no team is still fine to do directly in the main checkout.
 
 **Brainstorm → plan → build.** For anything non-trivial — a new feature, a behavior change
 touching more than a file or two, an architectural call — use plan mode before writing code:
@@ -38,10 +44,13 @@ a CI pipeline.
 **Session start**: the `orient` skill runs first, every session — re-checks git state, doesn't
 trust a stale mental model of what's done.
 
-**`user-space/STATE.md` is a living task log, not just a snapshot.** For any big or long-running
+**`user-space/STATE.md` is a gitignored scratch log; `kb/state/project-state.md` is the tracked truth.** For any big or long-running
 task, update it after each phase completes — what was done, what's next — so progress survives
 a session boundary even without the user asking. `/update-state` does a full manual refresh; the
 per-phase updates during active work happen on their own, without that command.
+
+## Current state
+@kb/state/project-state.md
 
 ## Two codebases live here
 
@@ -327,6 +336,97 @@ swaps the inode — a `flock` held on it guards a path that no longer exists, an
 think they hold it. `jobs.lock` is never replaced, so it is a stable thing to lock. A job is also
 marked `running` *before* the Agent is built, so the next minute's tick skips it; and `running`
 records a pid, so a crashed run is reaped instead of wedging the job for ever.
+
+**`zoneinfo` costs 5.2ms, so do not ask it anything the store already knows.** The routine engine
+first decided "has the day rolled over?" by converting the current instant to local wall-clock —
+which loads the timezone database on every one of the 1,440 ticks a day, to answer a question
+whose answer changes at 04:00. The day instance now caches its own end as a UTC instant
+(`ends_at`), and the steady-state pass does no timezone arithmetic at all: **5.0ms → 0.9ms**,
+measured against a populated 30-step store. A test fails if `zoneinfo` reappears in `sys.modules`
+after a steady-state pass. The general rule: everything stored is UTC, and local wall-clock is
+touched exactly once, when a day is opened.
+
+**Measure the pass that does nothing, separately from the pass that does something.** The first
+benchmark of that same tick said the routine pass added 14.3ms and looked like a serious
+regression. It was measuring `notify-send` being spawned, because the fixture had steps genuinely
+due — real delivery, not engine cost. The engine was 0.37ms throughout. A scheduler benchmark
+that does not separate "found nothing" from "found something and told the user" is measuring the
+notification daemon.
+
+**"Never asked" is not "asked and failed."** A routine created at 4pm reported its 07:00 step as
+missed before that step had ever existed, and a laptop switched off all morning manufactured a
+morning of failures for reminders nobody was shown. A day opened after a step was already
+unreachable starts it `skipped`, which keeps it out of the score entirely. The test is whether the
+**window has closed**, not whether the due time has passed: the first version compared against the
+due time, and a step scheduled for the current minute was stood down by the tick that ran two
+seconds later. That one only showed up by running it for real — the suite was green.
+
+**Expiry and unlocking have to run to a fixed point.** One pass of each is not enough in either
+order. Expiring a step fails the chain behind it, and unlocking a step can immediately expire it
+when the tick is running late. With a single pass a broken chain dribbles out one state change per
+minute and the panel shows `locked` for a step that can never run. `routines._settle` loops until
+nothing moves, bounded by the chain length.
+
+**WhatsApp's pairing QR does not have one lifetime.** The first code of a session is valid 60s
+and every refresh after it 20s — measured, twice, because the first measurement started *after*
+the first code and concluded "20s" for everything. A single TTL is wrong in both directions: 60s
+serves a code that died forty seconds ago, 25s blanks the screen for 35s waiting for a refresh
+that is not due yet. `whatsapp_service` treats the server's rotation as the authority — the most
+recent code *is* the current one — and uses a constant only to notice the pushes have stopped.
+
+**A unix socket on disk says nothing about whether anything is behind it.** The WhatsApp service
+unlinked the path before binding and again on exit, so a second instance stole the channel from a
+working one, and that duplicate exiting deleted the socket the survivor was still listening on —
+the channel disappears while a healthy daemon is still running, and `Restart=always` makes that
+routine. Now: probe the socket and refuse to start if something answers, and on shutdown unlink
+only the **inode** this process bound. Path comparison cannot work; the path is identical for
+every instance.
+
+**A live thread is not evidence that pairing still works.** whatsmeow stops pushing QR codes a
+couple of minutes after a pairing session opens, but the thread inside `client.connect()` stays
+alive and the state stays `pairing`. `Session.start()` short-circuited on a live thread, so asking
+to link again did nothing at all and `kravein whatsapp link` sat on "Waiting for a code…" for a
+channel that had closed twenty minutes earlier. Linking now always tears the client down and
+builds a new one — and does it on a background thread, because waiting for `connect()` to unwind
+outlasts the caller's socket timeout and a socket handler blocked on a join stalls every request
+behind it.
+
+**A session file is not a linked device.** neonize creates `session.db` the moment a client is
+constructed, so `SESSION_DB.exists()` is true after any *attempted* pairing. The service used that
+to decide whether to auto-connect at boot, which meant it opened a pairing session nobody was
+watching, burned the window, and sat in `pairing` with a dead code — which is what the user then
+runs `whatsapp link` into. `linked_devices()` asks the store for registered devices instead, and
+answers without opening a connection.
+
+**Ship the unit, do not describe it.** `install-linux.sh` wrote `kravein-whatsapp.service` into
+`~/.config/systemd/user/` and then *printed* the `systemctl --user enable --now` line for the user
+to run. The installer had never been run, so the unit was not on disk either, and enabling it
+failed with "Unit does not exist" — telling someone to enable a unit you never deployed is the
+same as not shipping it. The installer now creates the directory, substitutes the real repo path
+(copy, not symlink: the unit is a template carrying `%h/code/Kravein`), reloads, and enables. Never
+`sudo systemctl --user` — that targets root's absent session bus, not the user's.
+
+**A QR's polarity has to be set, never inherited.** The terminal renderer printed `█` for a dark
+module and a space for a light one, leaving the actual colours to the terminal theme. On a dark
+theme `█` draws in the *light* foreground and the spaces show the *dark* background, so every
+pairing code came out inverted and WhatsApp refused all of them — while looking perfect on a light
+theme, which is the worst way for this to fail. Each row now carries an explicit black-on-white
+SGR pair (`\033[30;47m`). The quiet zone is also four modules, per spec, not the one it shipped
+with. Asserted by decoding the rendered half-blocks back into a matrix and comparing against the
+encoder, because "it looks like a QR" is not a test.
+
+**Inbound WhatsApp is a confirmation channel, not a chat, and the narrowness is the feature.**
+A message arriving there is untrusted network input reaching a process that changes local state, so
+it never touches the model — an LLM asked to "work out what they meant" turns the reminder channel
+into a remote prompt-injection route into an assistant that runs shell commands, and prompting does
+not close that. Five gates before any parsing (configured, not from us, not a group, owner
+allowlist matched on digits, recent), then a four-word vocabulary matched with `==`. Two of those
+gates are non-obvious and both are real: **our own replies come back through the same handler**, so
+a confirmation containing "done" would feed itself; and **whatsmeow replays undelivered messages on
+reconnect**, so this morning's "done" can arrive at teatime and silently complete a step nobody
+did. Everything that fails a gate is dropped in **silence** — replying even with an error confirms
+to a stranger that something automated is reading the number — and nothing rejected is logged with
+its contents, or the audit trail becomes a record of other people's messages.
 
 **A timeout cap is only as good as the failover behind it.** Capping Cline at 45s looked like a
 straight win — a slow primary hands over instead of holding a turn for 180s while Stop can do

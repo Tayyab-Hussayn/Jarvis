@@ -1,0 +1,18 @@
+---
+name: assign-task
+description: Orchestrator — create a complete task packet as a GitHub issue for one module agent, label it, and notify the agent. Use for every unit of work handed to engine, skills, web, or qa.
+---
+
+# Assign a task (orchestrator)
+
+1. **Check readiness** (CLAUDE.md "How we work"): requirement clear, owner module known, relevant docs/audit findings identified, dependencies merged or explicitly sequenced, acceptance criteria testable. A change that crosses modules (e.g. a new `@skill` parameter the web UI renders) → split it so the interface lands first, or `team grant` the one file.
+2. **Size it:** one PR, reviewable in one sitting (roughly ≤ 400 changed lines of non-generated code). Split larger work.
+3. **Create the issue** from `.github/ISSUE_TEMPLATE/task.md`:
+   ```bash
+   gh issue create --title "<module>: <outcome>" --label "agent:<name>,type:task" --body-file <tmpfile>
+   ```
+   The packet must contain: goal, acceptance criteria (checklist), owned paths the work touches, read-only inputs (docs with section names), dependencies (issue/PR numbers), out of scope, verification expected.
+4. **Choose the model** and write it in the packet: `sonnet` by default; `opus` for `safety.py`, `webauth.py`, the confirmation flow, concurrency/threading, or a task that already failed on Sonnet. Start the agent for this task in a fresh session with that model: `team stop <agent>` (if running), then `team up --fresh --model <m> <agent>`. Only one or two agents should be active at once.
+5. **Grant cross-module paths up front** if the task needs them and no other agent's open work touches them: `.claude/team/bin/team grant <agent> <path> <hours> <issue>`. List the grant in the task packet.
+6. **Notify:** `SendMessage` to the agent's session name: `New task #<n>: <title>. Run /task-start.`
+7. **Record** the assignment in the "In flight" list of `kb/state/project-state.md`.

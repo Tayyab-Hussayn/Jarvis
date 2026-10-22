@@ -23,6 +23,9 @@ export type ServerFrame =
   // Pushed by the scheduled-jobs tick, which runs in its own process. Arrives
   // unsolicited, with no turn behind it.
   | { t: "job_event"; id: string; title: string; text: string; failed: boolean }
+  // Pushed by the routine pass inside the same tick. A reminder that was
+  // just sent, so an open Habits panel updates without waiting for a poll.
+  | { t: "routine_event"; routine: string; step: string; label: string; text: string; nag: number }
   | { t: "error"; id?: string; message: string }
   | { t: "reset_ok" }
   | { t: "voice_state"; phase: string; text: string }
@@ -149,6 +152,15 @@ export type VoicePhase =
   | "thinking"
   | "speaking"
   | "error";
+
+export interface RoutineEvent {
+  routine: string;
+  step: string;
+  label: string;
+  text: string;
+  nag: number;
+  at: number;
+}
 
 export interface JobEvent {
   id: string;

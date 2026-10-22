@@ -97,6 +97,12 @@ _NEVER_DELETE = {
     Path.home() / ".ssh",
     Path.home() / ".gnupg",
     Path("/"),
+    # The WhatsApp device session. Not merely inconvenient to lose: the file
+    # *is* a full WhatsApp login, so it sits with the ssh and gpg keys rather
+    # than with ordinary application data. Copying it is impersonating the
+    # linked device, and no confirmation makes that a reasonable thing for a
+    # model to be doing on its own initiative.
+    config.DATA_DIR / "whatsapp",
 }
 
 
@@ -384,6 +390,17 @@ def set_confirmer(fn: Confirmer | None) -> None:
     _local.confirmer = fn
 
 
+def enforce_calls() -> int:
+    """How many times :func:`enforce` has run on this thread.
+
+    ``registry.dispatch`` reads it before and after a skill to notice a
+    destructive skill that finished without ever consulting safety. It is
+    only a tripwire: the registry cannot enforce for the skill, because only
+    the skill knows what its arguments mean.
+    """
+    return getattr(_local, "enforce_calls", 0)
+
+
 def _denied_targets() -> set[str]:
     targets = getattr(_local, "denied_targets", None)
     if targets is None:
@@ -483,6 +500,7 @@ def enforce(
     memory. Pass it wherever the skill knows — parsing the target back out of
     ``action_desc`` is a fallback, not a design.
     """
+    _local.enforce_calls = enforce_calls() + 1
     if verdict.blocked:
         audit.record(
             "safety.blocked",

@@ -168,6 +168,47 @@ def create_app(token: str | None = None) -> Any:
         audit.record("web.job_event", id=payload.get("id", ""), clients=reached)
         return {"delivered": reached}
 
+    @app.get("/api/habits", dependencies=auth)
+    def api_habits(history: int = 30) -> dict[str, Any]:
+        return _habits_snapshot(history=max(0, min(int(history), 200)))
+
+    # Posted by the routine pass inside the same tick, for the same reason as
+    # `/api/job-event`: a short-lived process with no way to reach a browser.
+    @app.post("/api/routine-event", dependencies=auth)
+    async def api_routine_event(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise _unauthorized("Expected a JSON object")
+        reached = events.broadcast(
+            "routine_event",
+            routine=str(payload.get("routine", "")),
+            step=str(payload.get("step", "")),
+            label=str(payload.get("label", "")),
+            text=str(payload.get("text", "")),
+            nag=int(payload.get("nag", 0) or 0),
+        )
+        audit.record("web.routine_event", routine=payload.get("routine", ""),
+                     step=payload.get("step", ""), clients=reached)
+        return {"delivered": reached}
+
+    @app.get("/api/whatsapp", dependencies=auth)
+    def api_whatsapp() -> dict[str, Any]:
+        return _whatsapp_state()
+
+    @app.post("/api/whatsapp/link", dependencies=auth)
+    def api_whatsapp_link() -> dict[str, Any]:
+        """Ask the resident service to begin pairing.
+
+        Only ever starts the flow. The QR itself is read back through
+        `/api/whatsapp`, so a code never travels as the answer to a POST that
+        something might log.
+        """
+        from .platform import whatsapp
+
+        result = whatsapp.begin_link()
+        audit.record("web.whatsapp_link", ok=bool(result.get("ok")))
+        return result
+
     @app.get("/api/settings", dependencies=auth)
     def api_settings() -> dict[str, Any]:
         return {"settings": _redacted_settings()}
@@ -835,6 +876,64 @@ def _jobs_snapshot(*, history: int = 30) -> dict[str, Any]:
             snapshot["history"].reverse()
 
     return snapshot
+
+
+def _habits_snapshot(*, history: int = 30) -> dict[str, Any]:
+    """Routines, today's instance and recent days — records, not prose.
+
+    `routines.snapshot()` rolls the day in memory without saving, so a panel
+    refresh always shows the current day even if no tick has run since the
+    boundary, and cannot itself close a day.
+    """
+    from . import routines as routines_mod
+
+    snapshot: dict[str, Any] = {
+        "timer_active": False,
+        "now": routines_mod.iso(routines_mod.now_utc()),
+        "timezone": routines_mod.local_timezone(),
+        "streak_threshold": routines_mod.STREAK_THRESHOLD,
+        "routines": [],
+        "history": [],
+        "whatsapp": {"state": "unavailable"},
+    }
+
+    # The timer's state comes first for the same reason it does on the jobs
+    # panel: a routine that cannot nag looks identical to one that can.
+    with contextlib.suppress(Exception):
+        from .platform import shell
+
+        if shell.have("systemctl"):
+            result = shell.run(
+                ["systemctl", "--user", "is-active", "kravein-jobs.timer"], timeout=8
+            )
+            snapshot["timer_active"] = result.stdout.strip() == "active"
+
+    with contextlib.suppress(Exception):
+        snapshot.update(routines_mod.snapshot())
+
+    if history:
+        with contextlib.suppress(Exception):
+            snapshot["history"] = routines_mod.history(limit=history)
+
+    with contextlib.suppress(Exception):
+        snapshot["whatsapp"] = _whatsapp_state()
+
+    return snapshot
+
+
+def _whatsapp_state() -> dict[str, Any]:
+    """Connection state, with the pairing code already rendered to squares.
+
+    The raw code stays out of the payload: the browser only ever needs
+    something to draw, and a credential that is never serialised in a form
+    anything else understands is one fewer place it can leak from.
+    """
+    from .platform import whatsapp
+
+    state = dict(whatsapp.state())
+    code = str(state.pop("qr", ""))
+    state["qr_modules"] = whatsapp.qr_modules(code) if code else []
+    return state
 
 
 def _voice_snapshot(*, probe: bool = False) -> dict[str, Any]:

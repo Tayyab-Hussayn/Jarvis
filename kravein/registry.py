@@ -312,10 +312,27 @@ def categories() -> dict[str, list[Skill]]:
     return dict(sorted(out.items()))
 
 
-def tool_declarations(include_unavailable: bool = False) -> list[dict[str, Any]]:
-    """Build the function-declaration list handed to the LLM."""
+def tool_declarations(
+    include_unavailable: bool = False,
+    categories: set[str] | frozenset[str] | None = None,
+    routing: bool = False,
+) -> list[dict[str, Any]]:
+    """Build the function-declaration list handed to the LLM.
+
+    ``categories`` narrows the list (``None`` means every skill). ``routing``
+    says the caller is using tool routing, which is the only time the
+    routing-only skills (``more_tools``) mean anything — everywhere else they
+    stay out, so turning routing off reproduces the old list exactly.
+    """
+    from .toolselect import ROUTING_ONLY_SKILLS
+
     decls = []
     for entry in sorted(all_skills().values(), key=lambda s: s.name):
+        if entry.name in ROUTING_ONLY_SKILLS:
+            if not routing:
+                continue
+        elif categories is not None and entry.category not in categories:
+            continue
         ok, _ = entry.available()
         if not ok and not include_unavailable:
             continue
@@ -418,6 +435,8 @@ def dispatch(
     if "_context" in sig.parameters:
         cleaned["_context"] = context
 
+    enforced_before = safety.enforce_calls()
+
     with audit.action(entry.name, params, source=source) as ctx:
         try:
             result = entry.func(**cleaned)
@@ -430,6 +449,20 @@ def dispatch(
         except Exception as exc:
             ctx["result"] = f"{type(exc).__name__}: {exc}"
             return f"Skill '{entry.name}' failed: {type(exc).__name__}: {exc}"
+
+        # Tripwire, not enforcement: a skill declared DESTRUCTIVE or worse that
+        # returned without calling safety.enforce() at all (directly or through
+        # a skill it delegates to) is a skill someone forgot to guard. Only the
+        # skill knows what its arguments mean, so the registry cannot enforce
+        # for it — but it can make the omission visible in the audit log.
+        if (
+            entry.danger >= Danger.DESTRUCTIVE
+            and safety.enforce_calls() == enforced_before
+        ):
+            audit.record(
+                "skill.unenforced", skill=entry.name, source=source,
+                danger=entry.danger.name,
+            )
 
         text = result if isinstance(result, str) else str(result)
         ctx["result"] = text

@@ -23,6 +23,7 @@ import { BrainView } from "@/components/BrainView";
 import { Console } from "@/components/Console";
 import { ControlView } from "@/components/ControlView";
 import { FilesView } from "@/components/FilesView";
+import { HabitsView } from "@/components/HabitsView";
 import { JobsView } from "@/components/JobsView";
 import { Palette } from "@/components/Palette";
 import { ScreenView } from "@/components/ScreenView";
@@ -81,6 +82,7 @@ export default function Page() {
     cancel,
     cancelling,
     jobEvents,
+    routineEvents,
     respondToConfirm,
     dismissPanelConfirm,
     reset,
@@ -241,6 +243,7 @@ export default function Page() {
               />
             )}
             {view === "schedule" && <JobsView run={run} jobEvents={jobEvents} />}
+            {view === "habits" && <HabitsView run={run} routineEvents={routineEvents} />}
             {view === "system" && <SystemView run={run} system={system.data} />}
             {view === "windows" && <WindowsView run={run} />}
             {view === "files" && <FilesView run={run} />}

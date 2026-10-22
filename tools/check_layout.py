@@ -27,7 +27,7 @@ from kravein import webauth
 from kravein.platform import browser
 
 VIEWS = (
-    "console", "schedule", "system", "windows", "files", "apps",
+    "console", "schedule", "habits", "system", "windows", "files", "apps",
     "control", "screen", "activity", "brain", "settings",
 )
 

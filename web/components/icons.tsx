@@ -31,9 +31,19 @@ export type IconName =
   | "trash"
   | "chevron"
   | "mic"
-  | "schedule";
+  | "schedule"
+  | "habits";
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  // A checklist with a rising line through it: sequence plus progress, which
+  // is what a routine is.
+  habits: (
+    <>
+      <path d="M4 7h6M4 12h6M4 17h6" />
+      <path d="m13 8 2.5 2.5L20 6" />
+      <path d="M13 14.5 15.5 17 20 12.5" />
+    </>
+  ),
   // Clock with a hand — scheduled work.
   schedule: (
     <>

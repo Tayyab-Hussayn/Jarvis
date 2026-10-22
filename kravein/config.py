@@ -183,6 +183,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "novarouter_model": "kimi-k3",
         "temperature": 0.4,
         "max_tool_iterations": 8,
+        # "off" sends every skill with every request; "auto" sends only the
+        # categories the request needs (see toolselect.py). Stays "off" until
+        # tools/eval_models.py shows the narrowed set completes as many tasks.
+        "tool_routing": "off",
     },
     "safety": {
         # When false, destructive skills refuse outright instead of prompting.
@@ -192,9 +196,30 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             "/boot", "/efi", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
             "/var/lib/pacman", "/proc", "/sys", "/dev",
         ],
-        # Extra paths the user marks read-only.
-        "readonly_paths": [],
+        # Extra paths the user marks read-only. The WhatsApp session is here by
+        # default because that file is a full device login — losing it means
+        # re-pairing, and copying it means somebody else is that device.
+        "readonly_paths": ["~/.local/share/kravein/whatsapp"],
         "confirm_timeout_seconds": 120,
+    },
+    "whatsapp": {
+        # Who Kravein sends reminders to. Empty means the linked account
+        # itself, which always works and cannot reach anyone else by accident.
+        "owner": "",
+        # **The inbound allowlist.** Only this number's direct messages are
+        # read, and only against a fixed command vocabulary — everything else
+        # is dropped without a reply, because answering confirms to a stranger
+        # that something automated is listening. Digits only, country code
+        # included, no "+" or spaces. Empty disables inbound entirely, which is
+        # the safe default: a channel nobody configured should not be open.
+        "owner_jid": "",
+        # Ignore anything older than this when it arrives. Reconnecting
+        # replays undelivered messages, and a replayed "done" must not silently
+        # complete today's step.
+        "inbound_max_age_seconds": 300,
+        # Commands accepted per minute from the owner. Cheap guard against a
+        # stuck client hammering the routine store.
+        "inbound_rate_limit": 20,
     },
     "daemon": {
         "socket": str(SOCKET_PATH),

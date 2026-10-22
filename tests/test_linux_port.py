@@ -8,6 +8,7 @@ adapters are exercised only where they can run headlessly.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -3159,3 +3160,1028 @@ def test_editing_a_finished_job_puts_it_back_in_play(store):
 
     updated = store.edit(job["id"], when=store.now_utc() + timedelta(hours=2))
     assert updated["state"] == "pending"
+
+
+# ---------------------------------------------------------------------------
+# Health & habits routines
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def habits(tmp_path, monkeypatch):
+    """Point the routine store at a temp dir, and never deliver for real."""
+    from kravein import delivery, routines as routines_mod
+
+    monkeypatch.setattr(routines_mod, "STORE", tmp_path / "routines.json")
+    monkeypatch.setattr(routines_mod, "LOCK", tmp_path / "routines.lock")
+    monkeypatch.setattr(routines_mod, "HISTORY", tmp_path / "routine-days.jsonl")
+
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        delivery, "deliver",
+        lambda text, **kw: sent.append({"text": text, **kw}) or {},
+    )
+    routines_mod.sent = sent          # handed to the test, not part of the module
+    return routines_mod
+
+
+def _morning(store, tz="UTC", day_start="04:00"):
+    """Wake 07:00 → Breakfast 30m after it is actually confirmed → Meds after that."""
+    routine = store.add_routine("Morning", day_start=day_start, tz_name=tz)
+    store.add_step(routine["id"], label="Wake up", at="07:00", points=10,
+                   window_minutes=60, nag={"every_minutes": 10, "max": 3})
+    store.add_step(routine["id"], label="Breakfast", after_step="s1", after_minutes=30,
+                   points=10, window_minutes=90, nag={"every_minutes": 15, "max": 2})
+    store.add_step(routine["id"], label="Meds", after_step="s2", after_minutes=5,
+                   points=10, window_minutes=60, nag={"every_minutes": 10, "max": 1})
+    return routine["id"]
+
+
+def _at(day, hour, minute=0):
+    from datetime import datetime, timezone
+
+    return datetime(2026, 9, day, hour, minute, tzinfo=timezone.utc)
+
+
+def _states(store, routine_id):
+    data = store.load()
+    return {k: v["state"] for k, v in data["today"][routine_id]["steps"].items()}
+
+
+# --- sequencing ------------------------------------------------------------
+
+def test_a_locked_step_cannot_be_completed(habits):
+    """The refusal *is* the sequencing mechanic, so it must be an error."""
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    assert _states(habits, rid) == {"s1": "nagging", "s2": "locked", "s3": "locked"}
+
+    with pytest.raises(habits.RoutineError) as exc:
+        habits.resolve(rid, "s2", state="done", moment=_at(6, 7, 5))
+    assert "Wake up" in str(exc.value)
+
+
+def test_a_locked_step_is_never_nagged_or_expired(habits):
+    """A step waiting on a confirmation must not burn its window in the meantime."""
+    rid = _morning(habits)
+    # Stay inside s1's own 60-minute window: this is about s2 sitting behind an
+    # unconfirmed step, not about what happens once the chain has failed.
+    for minute in (0, 10, 20, 30, 40, 50):
+        habits.tick(_at(6, 7, minute))
+
+    states = _states(habits, rid)
+    assert states["s2"] == "locked"
+    stored = habits.load()["today"][rid]["steps"]
+    assert stored["s2"]["nags_sent"] == 0
+    assert stored["s2"]["due_at"] == ""      # not knowable yet
+    assert [e for e in habits.sent if "Breakfast" in e["text"]] == []
+
+
+def test_confirming_a_step_unlocks_the_next_one(habits):
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    habits.resolve(rid, "s1", state="done", moment=_at(6, 7, 4))
+
+    stored = habits.load()["today"][rid]["steps"]
+    assert stored["s1"]["state"] == "done"
+    # 30 minutes after it was *actually* done, not after it was due.
+    assert stored["s2"]["due_at"] == habits.iso(_at(6, 7, 34))
+    assert stored["s3"]["due_at"] == ""      # still behind s2
+
+
+def test_a_materialised_time_does_not_drift(habits):
+    """Recomputing on later ticks would shift the timeline under the user."""
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    habits.resolve(rid, "s1", state="done", moment=_at(6, 7, 4))
+    due = habits.load()["today"][rid]["steps"]["s2"]["due_at"]
+
+    for minute in (10, 20, 33, 34, 40):
+        habits.tick(_at(6, 7, minute))
+    assert habits.load()["today"][rid]["steps"]["s2"]["due_at"] == due
+
+
+def test_a_missed_prerequisite_fails_the_chain(habits):
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    habits.tick(_at(6, 8, 30))            # past s1's 60m window
+    assert _states(habits, rid) == {"s1": "missed", "s2": "missed", "s3": "missed"}
+
+
+def test_a_skipped_prerequisite_stands_the_chain_down(habits):
+    """Deliberately skipping must not read the same as failing."""
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    habits.resolve(rid, "s1", state="skipped", moment=_at(6, 7, 5))
+    habits.tick(_at(6, 7, 6))
+    assert _states(habits, rid) == {"s1": "skipped", "s2": "skipped", "s3": "skipped"}
+
+    day = habits.load()["today"][rid]
+    assert day["available"] == 0          # nothing was ever on the hook
+    assert day["score"] == 0
+
+
+def test_a_cycle_in_requires_is_refused_at_write_time(habits):
+    """A cycle leaves every step locked for ever with nothing to explain it."""
+    routine = habits.add_routine("Loop")
+    habits.add_step(routine["id"], label="A", at="07:00")
+    habits.add_step(routine["id"], label="B", after_step="s1", after_minutes=5)
+    with pytest.raises(habits.RoutineError):
+        habits.edit_step(routine["id"], "s1", requires=["s2"])
+
+
+# --- the day boundary ------------------------------------------------------
+
+def test_the_day_starts_at_day_start_not_midnight(habits):
+    """01:00 is the tail of a long evening, not a new morning."""
+    rid = _morning(habits)
+    routine = habits.load()["routines"][0]
+    assert habits.day_key(routine, _at(6, 23, 0)) == "2026-09-06"
+    assert habits.day_key(routine, _at(7, 1, 0)) == "2026-09-06"
+    assert habits.day_key(routine, _at(7, 5, 0)) == "2026-09-07"
+
+
+def test_a_late_night_step_lands_on_the_following_date(habits):
+    """With a 04:00 boundary, 01:00 belongs to the day but happens tomorrow."""
+    routine = habits.add_routine("Night", tz_name="UTC")
+    habits.add_step(routine["id"], label="Lights out", at="01:00")
+    stored = habits.load()["routines"][0]
+    due = habits.step_due_at(stored, stored["steps"][0], "2026-09-06")
+    assert due == _at(7, 1, 0)
+
+
+def test_rollover_closes_the_old_day_and_opens_the_new_one(habits):
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    habits.resolve(rid, "s1", state="done", moment=_at(6, 7, 10))
+
+    habits.tick(_at(7, 6, 0))             # next routine day
+    day = habits.load()["today"][rid]
+    assert day["date"] == "2026-09-07"
+    assert set(_states(habits, rid).values()) == {"locked"}
+
+    closed = [r for r in habits.history(50) if r.get("event") == "closed"]
+    assert closed[0]["date"] == "2026-09-06"
+    assert closed[0]["score"] == 10 and closed[0]["missed"] == 2
+
+
+def test_rollover_is_idempotent(habits):
+    """Two passes in the same day must not close it twice."""
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    habits.tick(_at(7, 6, 0))
+    habits.tick(_at(7, 6, 1))
+    habits.tick(_at(7, 6, 2))
+    closed = [r for r in habits.history(50) if r.get("event") == "closed"]
+    assert len(closed) == 1
+
+
+def test_a_week_asleep_collapses_to_one_gap_record(habits):
+    """No catch-up: six days of failure nobody was given the chance to do."""
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    habits.tick(_at(13, 6, 0))            # a week later, first tick after waking
+
+    closed = [r for r in habits.history(50) if r.get("event") == "closed"]
+    gaps = [r for r in habits.history(50) if r.get("event") == "skipped_days"]
+    assert len(closed) == 1 and len(gaps) == 1
+    assert gaps[0]["days"] == 6
+    assert habits.load()["routines"][0]["streak"] == 0
+    assert habits.load()["today"][rid]["date"] == "2026-09-13"
+
+
+def test_a_rest_day_has_no_steps_and_keeps_the_streak(habits):
+    from datetime import datetime, timezone
+
+    routine = habits.add_routine("Weekdays", days=[0, 1, 2, 3, 4], tz_name="UTC")
+    habits.add_step(routine["id"], label="Standup", at="09:00", points=10)
+    rid = routine["id"]
+
+    habits.tick(datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc))   # Friday
+    habits.resolve(rid, "s1", state="done",
+                   moment=datetime(2026, 9, 4, 9, 1, tzinfo=timezone.utc))
+    habits.tick(datetime(2026, 9, 5, 6, 0, tzinfo=timezone.utc))   # Saturday
+
+    day = habits.load()["today"][rid]
+    assert day["rest"] is True and day["steps"] == {} and day["total"] == 0
+    assert habits.load()["routines"][0]["streak"] == 1
+
+    habits.tick(datetime(2026, 9, 6, 6, 0, tzinfo=timezone.utc))   # Sunday
+    assert habits.load()["routines"][0]["streak"] == 2
+
+
+# --- daylight saving -------------------------------------------------------
+
+def test_a_step_inside_the_spring_forward_gap_resolves_forward(habits):
+    """02:30 does not exist that day; the step must fire, not vanish."""
+    from datetime import datetime
+
+    routine = habits.add_routine("Night", tz_name="Europe/London", day_start="04:00")
+    habits.add_step(routine["id"], label="Odd one", at="01:30")
+    stored = habits.load()["routines"][0]
+
+    # 2027-03-28: London jumps 01:00 GMT straight to 02:00 BST, so the gap is
+    # 01:00–02:00 and 01:30 is the time that does not exist.
+    assert habits.in_dst_gap(datetime(2027, 3, 28).date(), 1, 30,
+                             habits.zone("Europe/London"))
+    due = habits.step_due_at(stored, stored["steps"][0], "2027-03-27")
+    local = due.astimezone(habits.zone("Europe/London"))
+    assert (local.hour, local.minute) == (2, 30)      # after the transition
+    assert habits.dst_note(stored, stored["steps"][0], "2027-03-27")
+
+
+def test_a_step_inside_the_fall_back_repeat_fires_on_the_first_pass(habits):
+    """01:30 happens twice; it must be one step, on the earlier occurrence."""
+    from datetime import datetime, timezone
+
+    routine = habits.add_routine("Night", tz_name="Europe/London", day_start="04:00")
+    habits.add_step(routine["id"], label="Odd one", at="01:30")
+    stored = habits.load()["routines"][0]
+
+    # 2027-10-31: London falls 02:00 BST → 01:00 GMT, so 01:30 occurs twice.
+    due = habits.step_due_at(stored, stored["steps"][0], "2027-10-30")
+    assert due == datetime(2027, 10, 31, 0, 30, tzinfo=timezone.utc)   # BST, the first
+    assert not habits.dst_note(stored, stored["steps"][0], "2027-10-30")
+
+
+# --- nagging ---------------------------------------------------------------
+
+def test_nags_are_capped_and_escalate(habits):
+    rid = _morning(habits)
+    for minute in (0, 10, 20, 30, 40, 50):
+        habits.tick(_at(6, 7, minute))
+
+    wake = [e for e in habits.sent if "Wake up" in e["text"]]
+    assert len(wake) == 3                                    # nag_max
+    assert [e["channels"] for e in wake] == [
+        ("notify",), ("notify", "speak"), ("notify", "speak", "whatsapp"),
+    ]
+
+
+def test_insist_starts_one_rung_louder_and_never_blocks(habits):
+    """`insist` is the sanctioned alternative to hard blocking."""
+    routine = habits.add_routine("Meds", tz_name="UTC")
+    habits.add_step(routine["id"], label="Take meds", at="07:00", insist=True,
+                    nag={"every_minutes": 10, "max": 1})
+    habits.tick(_at(6, 7, 0))
+
+    sent = habits.sent[-1]
+    assert sent["channels"] == ("notify", "speak")
+    assert sent["urgency"] == "critical"
+
+
+def test_reminder_wording_rotates_through_the_stored_messages(habits):
+    """The tick must never call a model to write a reminder."""
+    routine = habits.add_routine("Morning", tz_name="UTC")
+    habits.add_step(routine["id"], label="Wake up", at="07:00",
+                    messages=["Time to get up.", "Morning. Out of bed."],
+                    nag={"every_minutes": 10, "max": 3})
+    for minute in (0, 10, 20):
+        habits.tick(_at(6, 7, minute))
+    assert [e["text"] for e in habits.sent] == [
+        "Time to get up.", "Morning. Out of bed.", "Time to get up.",
+    ]
+
+
+def test_an_open_step_expires_into_missed(habits):
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    habits.tick(_at(6, 7, 59))
+    assert _states(habits, rid)["s1"] == "nagging"
+    habits.tick(_at(6, 8, 1))
+    assert _states(habits, rid)["s1"] == "missed"
+
+
+def test_a_zero_window_stays_open_until_the_day_ends(habits):
+    routine = habits.add_routine("Loose", tz_name="UTC")
+    habits.add_step(routine["id"], label="Whenever", at="07:00", window_minutes=0,
+                    nag={"every_minutes": 60, "max": 1})
+    rid = routine["id"]
+    habits.tick(_at(6, 7, 0))
+    habits.tick(_at(6, 23, 0))
+    assert _states(habits, rid)["s1"] == "nagging"
+
+
+# --- scoring and streaks ---------------------------------------------------
+
+def test_available_grows_through_the_day(habits):
+    """Scoring the morning against the whole day reads as failure."""
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+    day = habits.load()["today"][rid]
+    assert (day["score"], day["available"], day["total"]) == (0, 10, 30)
+
+    habits.resolve(rid, "s1", state="done", moment=_at(6, 7, 5))
+    day = habits.load()["today"][rid]
+    assert (day["score"], day["available"]) == (10, 10)
+
+    habits.tick(_at(6, 7, 40))
+    day = habits.load()["today"][rid]
+    assert (day["score"], day["available"]) == (10, 20)
+    assert day["score"] <= day["available"] <= day["total"]
+
+
+def test_the_streak_survives_at_eighty_percent(habits):
+    """A single missed step ending a streak is too punishing to survive a week."""
+    routine = habits.add_routine("Five", tz_name="UTC")
+    for hour in (7, 8, 9, 10, 11):
+        habits.add_step(routine["id"], label=f"Step {hour}", at=f"{hour:02d}:00",
+                        points=10, window_minutes=30, nag={"max": 0})
+    rid = routine["id"]
+
+    habits.tick(_at(6, 7, 0))
+    for step, hour in zip(("s1", "s2", "s3", "s4"), (7, 8, 9, 10)):
+        habits.tick(_at(6, hour, 0))
+        habits.resolve(rid, step, state="done", moment=_at(6, hour, 5))
+    habits.tick(_at(7, 6, 0))             # roll over with s5 missed: 40/50 = 80%
+
+    closed = [r for r in habits.history(50) if r.get("event") == "closed"][0]
+    assert closed["ratio"] == 0.8 and closed["kept_streak"] is True
+    assert habits.load()["routines"][0]["streak"] == 1
+
+
+def test_the_streak_breaks_below_the_threshold(habits):
+    routine = habits.add_routine("Five", tz_name="UTC")
+    for hour in (7, 8, 9, 10, 11):
+        habits.add_step(routine["id"], label=f"Step {hour}", at=f"{hour:02d}:00",
+                        points=10, window_minutes=30, nag={"max": 0})
+    rid = routine["id"]
+
+    habits.tick(_at(6, 7, 0))
+    for step, hour in zip(("s1", "s2", "s3"), (7, 8, 9)):
+        habits.tick(_at(6, hour, 0))
+        habits.resolve(rid, step, state="done", moment=_at(6, hour, 5))
+    habits.tick(_at(7, 6, 0))             # 30/50 = 60%
+
+    closed = [r for r in habits.history(50) if r.get("event") == "closed"][0]
+    assert closed["kept_streak"] is False
+    assert habits.load()["routines"][0]["streak"] == 0
+
+
+# --- the import budget -----------------------------------------------------
+
+def test_the_routine_pass_imports_nothing_heavy(habits):
+    """Routines ride the tick, so they inherit its budget: 1,440 runs a day."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from kravein import routines\n"
+        "routines.tick()\n"
+        "heavy = sorted(m for m in sys.modules if m.startswith(("
+        "'kravein.agent','kravein.llm','kravein.registry','kravein.cline',"
+        "'kravein.jobs','google','requests','fastapi','urllib.request')))\n"
+        "print('HEAVY:' + ','.join(heavy))\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60,
+    ).stdout
+    assert "HEAVY:" in out
+    loaded = out.split("HEAVY:")[1].strip()
+    assert loaded == "", f"the routine pass pulled in heavy modules: {loaded}"
+
+
+def test_a_steady_state_pass_does_not_load_the_timezone_database(habits, tmp_path):
+    """`zoneinfo` costs 5.2ms, and the day's end does not move.
+
+    The first version recomputed the day key from local wall-clock on every
+    pass, which meant loading the timezone database 1,440 times a day to ask a
+    question whose answer changes at 04:00. The day instance caches its own end
+    as a UTC instant instead; this fails if anyone reintroduces the wall-clock
+    comparison on the hot path.
+    """
+    import subprocess
+    import sys
+
+    env = dict(os.environ, XDG_STATE_HOME=str(tmp_path / "state"),
+               XDG_CONFIG_HOME=str(tmp_path / "cfg"),
+               XDG_DATA_HOME=str(tmp_path / "data"))
+    setup = (
+        "from kravein import routines\n"
+        "r = routines.add_routine('Morning', tz_name='Asia/Karachi')\n"
+        "routines.add_step(r['id'], label='Wake', at='23:30')\n"
+        "routines.tick()\n"
+    )
+    subprocess.run([sys.executable, "-c", setup], env=env, check=True, timeout=60)
+
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys\n"
+         "from kravein import routines\n"
+         "routines.tick()\n"
+         "print('TZ:' + ('yes' if 'zoneinfo' in sys.modules else 'no'))\n"],
+        env=env, capture_output=True, text=True, timeout=60,
+    ).stdout
+    assert "TZ:no" in out, "the steady-state routine pass loaded zoneinfo"
+
+
+def test_a_routine_created_after_its_time_does_not_report_a_miss(habits):
+    """A step that did not exist at 07:00 cannot have been missed at 07:00."""
+    routine = habits.add_routine("Morning", tz_name="UTC")
+    habits.add_step(routine["id"], label="Wake up", at="07:00", points=10)
+    rid = routine["id"]
+
+    habits.tick(_at(6, 16, 0))            # created and first seen at 4pm
+    day = habits.load()["today"][rid]
+    assert day["steps"]["s1"]["state"] == "skipped"
+    assert day["steps"]["s1"]["source"] == "day opened late"
+    assert (day["score"], day["available"]) == (0, 0)
+    assert habits.sent == []
+
+
+def test_a_machine_switched_off_all_morning_manufactures_no_failures(habits):
+    """The laptop being shut is not the user failing a habit."""
+    rid = _morning(habits)
+    habits.tick(_at(6, 11, 0))            # first tick of the day, hours late
+    assert _states(habits, rid)["s1"] == "skipped"
+    assert habits.load()["today"][rid]["available"] == 0
+
+    habits.tick(_at(7, 6, 0))             # roll over: a skipped day is not a failed one
+    closed = [r for r in habits.history(50) if r.get("event") == "closed"][0]
+    assert closed["missed"] == 0 and closed["skipped"] == 3
+
+
+def test_a_step_due_this_minute_is_not_stood_down(habits):
+    """The boundary case the first version of the late-open rule got wrong.
+
+    A step scheduled for the current minute was stood down by the tick that
+    ran two seconds later, because the rule compared against the due time
+    rather than the end of the window. Caught by running it for real, not by
+    the suite — hence this test.
+    """
+    routine = habits.add_routine("Now", tz_name="UTC")
+    habits.add_step(routine["id"], label="Right now", at="07:00", window_minutes=60,
+                    nag={"every_minutes": 10, "max": 1})
+    rid = routine["id"]
+
+    habits.tick(_at(6, 7, 0) + __import__("datetime").timedelta(seconds=2))
+    assert _states(habits, rid)["s1"] == "nagging"
+    assert len(habits.sent) == 1
+
+
+def test_a_deliberate_skip_is_divided_out_of_the_streak(habits):
+    """A skip is a decision, not a failure. Scoring it as one kills the button."""
+    routine = habits.add_routine("Five", tz_name="UTC")
+    for hour in (7, 8, 9, 10, 11):
+        habits.add_step(routine["id"], label=f"Step {hour}", at=f"{hour:02d}:00",
+                        points=10, window_minutes=30, nag={"max": 0})
+    rid = routine["id"]
+
+    habits.tick(_at(6, 7, 0))
+    # Three done, one skipped on purpose, one genuinely missed.
+    for step, hour in zip(("s1", "s2", "s3"), (7, 8, 9)):
+        habits.tick(_at(6, hour, 0))
+        habits.resolve(rid, step, state="done", moment=_at(6, hour, 5))
+    habits.tick(_at(6, 10, 0))
+    habits.resolve(rid, "s4", state="skipped", moment=_at(6, 10, 5))
+    habits.tick(_at(7, 6, 0))                      # s5 rolls over as missed
+
+    closed = [r for r in habits.history(50) if r.get("event") == "closed"][0]
+    assert closed["total"] == 50 and closed["skipped_points"] == 10
+    assert closed["judged"] == 40                  # the skip left the denominator
+    assert closed["ratio"] == 0.75                 # 30/40, not 30/50
+    assert closed["kept_streak"] is False          # the *miss* still counts
+
+
+def test_skipping_everything_but_one_step_still_judges_that_step(habits):
+    routine = habits.add_routine("Two", tz_name="UTC")
+    habits.add_step(routine["id"], label="A", at="07:00", points=10,
+                    window_minutes=30, nag={"max": 0})
+    habits.add_step(routine["id"], label="B", at="08:00", points=10,
+                    window_minutes=30, nag={"max": 0})
+    rid = routine["id"]
+
+    habits.tick(_at(6, 7, 0))
+    habits.resolve(rid, "s1", state="done", moment=_at(6, 7, 5))
+    habits.tick(_at(6, 8, 0))
+    habits.resolve(rid, "s2", state="skipped", moment=_at(6, 8, 5))
+    habits.tick(_at(7, 6, 0))
+
+    closed = [r for r in habits.history(50) if r.get("event") == "closed"][0]
+    assert closed["judged"] == 10 and closed["ratio"] == 1.0
+    assert closed["kept_streak"] is True
+
+
+# ---------------------------------------------------------------------------
+# Delivery escalation and the WhatsApp channel
+# ---------------------------------------------------------------------------
+
+def test_whatsapp_is_additive_never_the_only_channel(monkeypatch):
+    """A reminder must not be lost because the optional half of it failed."""
+    from kravein import delivery
+
+    shown: list[str] = []
+    monkeypatch.setattr(delivery, "send_notification",
+                        lambda text, title, **kw: shown.append(text) or "")
+    monkeypatch.setattr(delivery, "say", lambda text: "")
+    monkeypatch.setattr(delivery, "send_whatsapp",
+                        lambda text, ref="": "the WhatsApp service is not running")
+
+    problems = delivery.deliver(
+        "Take your meds", channels=(delivery.NOTIFY, delivery.SPEAK, delivery.WHATSAPP),
+    )
+    assert shown == ["Take your meds"]              # the floor still fired
+    assert delivery.WHATSAPP in problems            # and the failure is reported
+    assert delivery.NOTIFY not in problems
+
+
+def test_a_failure_notice_is_not_escalated(monkeypatch):
+    """One problem must not become three interruptions."""
+    from kravein import delivery
+
+    spoken: list[str] = []
+    sent: list[str] = []
+    monkeypatch.setattr(delivery, "send_notification", lambda *a, **k: "")
+    monkeypatch.setattr(delivery, "say", lambda text: spoken.append(text) or "")
+    monkeypatch.setattr(delivery, "send_whatsapp", lambda text, ref="": sent.append(text) or "")
+
+    delivery.deliver("it broke", failed=True,
+                     channels=(delivery.NOTIFY, delivery.SPEAK, delivery.WHATSAPP))
+    assert spoken == [] and sent == []
+
+
+def test_the_whatsapp_client_degrades_when_the_service_is_absent(tmp_path, monkeypatch):
+    """A missing socket is the normal case, not an error."""
+    from kravein.platform import whatsapp
+
+    monkeypatch.setattr(whatsapp, "SOCKET", tmp_path / "nothing.sock")
+    assert whatsapp.available() is False
+    assert whatsapp.state()["state"] == "unavailable"
+
+    sent, error = whatsapp.send("hello")
+    assert sent is False and "not running" in error
+    assert whatsapp.begin_link()["ok"] is False
+
+
+def test_the_socket_client_never_loads_neonize(tmp_path):
+    """The 8MB Go runtime lives behind the socket, not on the tick path."""
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys\n"
+         "from kravein.platform import whatsapp\n"
+         "whatsapp.state(); whatsapp.send('x')\n"
+         "print('NEONIZE:' + ('yes' if 'neonize' in sys.modules else 'no'))\n"],
+        capture_output=True, text=True, timeout=60,
+    ).stdout
+    assert "NEONIZE:no" in out, "the socket client pulled in neonize"
+
+
+def test_the_escalation_ladder_climbs_one_rung_at_a_time():
+    from kravein import delivery
+
+    assert delivery.escalation(1, escalate=False) == (delivery.NOTIFY,)
+    assert delivery.escalation(9, escalate=False) == (delivery.NOTIFY,)
+    assert delivery.escalation(1, escalate=True) == (delivery.NOTIFY,)
+    assert delivery.escalation(2, escalate=True) == (delivery.NOTIFY, delivery.SPEAK)
+    assert delivery.escalation(3, escalate=True) == (
+        delivery.NOTIFY, delivery.SPEAK, delivery.WHATSAPP)
+    # `insist` starts one rung up, and never gains a rung that blocks anything.
+    assert delivery.escalation(1, escalate=True, insist=True) == (
+        delivery.NOTIFY, delivery.SPEAK)
+
+
+def test_the_pairing_code_encodes_to_a_square_grid():
+    """The panel draws what this returns; an empty grid renders nothing."""
+    from kravein.platform import whatsapp
+
+    rows = whatsapp.qr_modules("2@abcdef==,ghijkl==,mnopqr==")
+    assert rows and len(rows) == len(rows[0])
+    assert set("".join(rows)) <= {"0", "1"}
+    assert whatsapp.qr_modules("") == []
+
+
+# ---------------------------------------------------------------------------
+# The pairing QR must be dark-on-light, whatever the terminal theme
+# ---------------------------------------------------------------------------
+
+def _decode_rendered_qr(lines: list[str]) -> list[list[bool]]:
+    """Read the rendered half-block rows back into a module matrix.
+
+    Inverts exactly what the renderer did, so a polarity mistake shows up as a
+    mismatch rather than as a QR nobody can scan.
+    """
+    rows: list[list[bool]] = []
+    for line in lines:
+        body = line.replace("\033[30;47m", "").replace("\033[0m", "")
+        top, bottom = [], []
+        for cell in body:
+            top.append(cell in "█▀")
+            bottom.append(cell in "█▄")
+        rows.append(top)
+        rows.append(bottom)
+    return rows
+
+
+def test_the_pairing_qr_is_rendered_dark_on_light():
+    """WhatsApp will not read an inverted code, and a dark terminal inverts it.
+
+    The first renderer printed `█` for a dark module and left the colours to
+    the theme, so on a dark terminal the ink and the paper swapped and no phone
+    would scan it. It looked right on a light terminal — the worst way for this
+    to fail — so the polarity is asserted here rather than eyeballed.
+    """
+    from kravein import cli
+
+    code = "https://wa.me/settings/linked_devices#2@abc,def,ghi,jkl,5"
+    matrix = cli.qr_matrix(code)
+    lines = cli.render_qr_lines(matrix)
+
+    # Every row carries an explicit black-on-white pair; nothing is inherited.
+    assert all(line.startswith("\033[30;47m") and line.endswith("\033[0m")
+               for line in lines)
+
+    decoded = _decode_rendered_qr(lines)
+    for y, row in enumerate(matrix):
+        assert decoded[y] == row, f"row {y} does not match the encoder"
+
+    # The quiet zone is four modules of *light*, as the spec requires. In this
+    # rendering light means background, i.e. a space.
+    assert all(cell is False for cell in matrix[0])
+    assert all(not row[0] for row in matrix)
+    body = lines[0].replace("\033[30;47m", "").replace("\033[0m", "")
+    assert body.strip() == "", "the top quiet zone is not blank"
+
+
+def test_the_qr_quiet_zone_is_four_modules():
+    from kravein import cli
+
+    matrix = cli.qr_matrix("https://wa.me/settings/linked_devices#2@a,b,c,d,5")
+    # Count blank leading rows: must be at least the spec's four.
+    blank = 0
+    for row in matrix:
+        if any(row):
+            break
+        blank += 1
+    assert blank >= 4, f"quiet zone is only {blank} modules"
+
+
+# ---------------------------------------------------------------------------
+# WhatsApp inbound: allowlist, vocabulary, dispatch
+# ---------------------------------------------------------------------------
+
+OWNER = "923001234567"
+
+
+@pytest.fixture
+def inbound(monkeypatch):
+    """The inbound handler with a known owner and no real config on disk."""
+    from kravein import config as config_mod
+    from kravein import whatsapp_service as svc
+
+    settings = {
+        "whatsapp.owner_jid": OWNER,
+        "whatsapp.inbound_max_age_seconds": 300,
+        "whatsapp.inbound_rate_limit": 20,
+    }
+    monkeypatch.setattr(config_mod, "get",
+                        lambda key, default=None: settings.get(key, default))
+    monkeypatch.setattr(svc.config, "get",
+                        lambda key, default=None: settings.get(key, default))
+    return svc
+
+
+def _msg(inbound, sender=OWNER, text="done", *, from_me=False, group=False, age=0.0):
+    now = 1_000_000.0
+    return inbound.handle_inbound(
+        sender=sender, text=text, is_from_me=from_me, is_group=group,
+        timestamp=now - age, now=now,
+    )
+
+
+# --- the allowlist ---------------------------------------------------------
+
+def test_a_stranger_gets_nothing_at_all(inbound):
+    """No action and, critically, no reply — a reply confirms someone is here."""
+    assert _msg(inbound, sender="447700900000", text="done") == ("", "")
+    assert _msg(inbound, sender="447700900000", text="status") == ("", "")
+    assert _msg(inbound, sender="", text="done") == ("", "")
+
+
+def test_the_owner_is_matched_on_digits_not_formatting(inbound):
+    """Device suffixes and punctuation must not smuggle a near-match through."""
+    assert _msg(inbound, sender=OWNER)[0] == "done"
+    assert _msg(inbound, sender=f"+{OWNER}")[0] == "done"
+    # A different number that merely contains the owner's is not the owner.
+    assert _msg(inbound, sender=OWNER + "9") == ("", "")
+    assert _msg(inbound, sender="9" + OWNER) == ("", "")
+
+
+def test_inbound_is_off_until_an_owner_is_configured(inbound, monkeypatch):
+    """A channel nobody set up must not be open."""
+    monkeypatch.setattr(inbound.config, "get", lambda key, default=None: "")
+    assert _msg(inbound, sender=OWNER, text="done") == ("", "")
+
+
+def test_our_own_replies_cannot_feed_themselves(inbound):
+    """A confirmation saying "Done: Breakfast" comes back through this handler."""
+    assert _msg(inbound, from_me=True, text="done") == ("", "")
+
+
+def test_a_group_message_is_refused_even_from_the_owner(inbound):
+    """Anyone can add a number to a group; being in one is not authorisation."""
+    assert _msg(inbound, group=True, text="done") == ("", "")
+
+
+def test_a_replayed_message_cannot_complete_a_step(inbound):
+    """Reconnecting replays undelivered messages — a morning "done" at teatime."""
+    assert _msg(inbound, text="done", age=60)[0] == "done"        # fresh enough
+    assert _msg(inbound, text="done", age=6 * 3600) == ("", "")   # this morning
+
+
+# --- the vocabulary --------------------------------------------------------
+
+def test_the_vocabulary_is_exactly_what_was_specified(inbound):
+    assert inbound.parse_command("done") == ("done", "")
+    assert inbound.parse_command("done s2") == ("done", "s2")
+    assert inbound.parse_command("skip") == ("skip", "")
+    assert inbound.parse_command("skip s3") == ("skip", "s3")
+    assert inbound.parse_command("status") == ("status", "")
+    assert inbound.parse_command("pause") == ("pause", "")
+    assert inbound.parse_command("resume") == ("resume", "")
+    # Phone keyboards capitalise; that is forgiven, nothing else is.
+    assert inbound.parse_command("  DONE  ") == ("done", "")
+
+
+def test_anything_outside_the_vocabulary_is_dropped(inbound):
+    for text in (
+        "",
+        "hello",
+        "please mark breakfast done",
+        "done please",              # the argument must be a step id
+        "done breakfast",           # not even a real label
+        "status now",               # status takes no argument
+        "pause everything",
+        "resume all",
+        "resumed",
+        "done; rm -rf /",
+        "done && curl evil.example.com",
+        "done\nstatus",
+        "undone",
+        "d0ne",
+        "x" * 200,                  # long enough to be an injection attempt
+        "done ../../etc/passwd",    # path-ish argument
+        "done $(whoami)",
+    ):
+        assert inbound.parse_command(text) is None, f"accepted {text!r}"
+
+
+def test_an_unrecognised_message_from_the_owner_is_still_silent(inbound):
+    """Even the owner gets no error text — the reply path is for commands only."""
+    assert _msg(inbound, text="what's my score?") == ("", "")
+
+
+def test_dropped_messages_are_never_logged_with_their_contents(inbound, monkeypatch):
+    """The audit trail must not become a log of other people's messages."""
+    from kravein import audit as audit_mod
+
+    records: list[dict] = []
+    monkeypatch.setattr(audit_mod, "record",
+                        lambda event, **fields: records.append({"event": event, **fields}))
+    monkeypatch.setattr(inbound.audit, "record",
+                        lambda event, **fields: records.append({"event": event, **fields}))
+
+    secret = "this is a private message nobody should keep"
+    _msg(inbound, sender="447700900000", text=secret)
+    _msg(inbound, sender=OWNER, text=secret)
+
+    assert records, "nothing was recorded at all"
+    blob = json.dumps(records)
+    assert secret not in blob
+    assert "447700900000" not in blob
+    assert all(r["event"].startswith("whatsapp.inbound") for r in records)
+
+
+# --- dispatch into the state machine ---------------------------------------
+
+def test_a_whatsapp_done_confirms_the_open_step(habits, inbound, monkeypatch):
+    from kravein import whatsapp_service as svc
+
+    monkeypatch.setattr(svc, "_notify_ui", lambda *a, **k: None)
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))                       # s1 is now nagging
+
+    reply = svc.run_command("done", "", moment=_at(6, 7, 5))
+    assert "Wake up" in reply
+    assert _states(habits, rid)["s1"] == "done"
+    assert habits.load()["today"][rid]["steps"]["s1"]["source"] == "whatsapp"
+
+
+def test_a_bare_done_with_two_steps_open_refuses_and_lists_them(habits, inbound, monkeypatch):
+    """Never resolve an ambiguous target by taking the first match."""
+    from kravein import whatsapp_service as svc
+
+    monkeypatch.setattr(svc, "_notify_ui", lambda *a, **k: None)
+    routine = habits.add_routine("Two", tz_name="UTC")
+    habits.add_step(routine["id"], label="Alpha", at="07:00", window_minutes=180)
+    habits.add_step(routine["id"], label="Beta", at="07:30", window_minutes=180)
+    rid = routine["id"]
+    habits.tick(_at(6, 7, 45))
+
+    reply = svc.run_command("done", "", moment=_at(6, 7, 46))
+    assert "Which one?" in reply and "Alpha" in reply and "Beta" in reply
+    assert set(_states(habits, rid).values()) == {"nagging"}   # nothing was touched
+
+    assert "Done: Beta" in svc.run_command("done", "s2", moment=_at(6, 7, 47))
+    assert _states(habits, rid)["s2"] == "done"
+
+
+def test_done_cannot_reach_a_locked_step(habits, inbound, monkeypatch):
+    """The sequencing holds over WhatsApp exactly as it does everywhere else."""
+    from kravein import whatsapp_service as svc
+
+    monkeypatch.setattr(svc, "_notify_ui", lambda *a, **k: None)
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))                       # s1 open, s2 locked behind it
+
+    reply = svc.run_command("done", "s2", moment=_at(6, 7, 5))
+    assert "s2" in reply or "Nothing open" in reply
+    assert _states(habits, rid)["s2"] == "locked"
+
+
+def test_status_and_pause_report_without_touching_the_model(habits, inbound):
+    from kravein import whatsapp_service as svc
+
+    rid = _morning(habits)
+    habits.tick(_at(6, 7, 0))
+
+    status = svc.run_command("status", "", moment=_at(6, 7, 5))
+    assert "Morning" in status and "Waiting" in status
+
+    paused = svc.run_command("pause", "", moment=_at(6, 7, 5))
+    assert "Morning" in paused
+    assert habits.load()["routines"][0]["enabled"] is False
+
+
+def test_pause_can_be_undone_from_the_same_channel(habits, inbound):
+    """A control that only goes one way strands you away from the machine."""
+    from kravein import whatsapp_service as svc
+
+    _morning(habits)
+    habits.tick(_at(6, 7, 0))
+
+    assert "Morning" in svc.run_command("pause", "", moment=_at(6, 7, 5))
+    assert habits.load()["routines"][0]["enabled"] is False
+    assert "already paused" in svc.run_command("pause", "", moment=_at(6, 7, 6))
+
+    assert "Resumed" in svc.run_command("resume", "", moment=_at(6, 7, 7))
+    assert habits.load()["routines"][0]["enabled"] is True
+    assert "Nothing was paused" in svc.run_command("resume", "", moment=_at(6, 7, 8))
+
+
+def test_the_inbound_path_never_imports_the_agent_or_the_llm():
+    """Untrusted text must not be able to reach a model, structurally."""
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys\n"
+         "from kravein import whatsapp_service as svc\n"
+         "svc.parse_command('done s2')\n"
+         "svc.handle_inbound(sender='1', text='done', is_from_me=False,\n"
+         "                   is_group=False, timestamp=0, now=0, allow='1')\n"
+         "bad = sorted(m for m in sys.modules if m.startswith(("
+         "'kravein.agent','kravein.llm','kravein.registry','neonize')))\n"
+         "print('BAD:' + ','.join(bad))\n"],
+        capture_output=True, text=True, timeout=60,
+    ).stdout
+    assert "BAD:" in out
+    assert out.split("BAD:")[1].strip() == "", "inbound reached the model stack"
+
+
+# ---------------------------------------------------------------------------
+# Unenforced-skill tripwire
+# ---------------------------------------------------------------------------
+
+def _register_temp_skills(monkeypatch):
+    """Register two throwaway DESTRUCTIVE skills; one guards itself, one forgets."""
+    registry.load_skills()
+    monkeypatch.setattr(registry, "_registry", dict(registry._registry))
+
+    @registry.skill(name="tmp_guarded", danger=Danger.DESTRUCTIVE, category="tmp")
+    def tmp_guarded() -> str:
+        """Guarded."""
+        safety.enforce(
+            safety.Verdict(danger=Danger.SAFE), "guarded", skill="tmp_guarded"
+        )
+        return "done"
+
+    @registry.skill(name="tmp_forgetful", danger=Danger.DESTRUCTIVE, category="tmp")
+    def tmp_forgetful() -> str:
+        """Forgets to call safety."""
+        return "done"
+
+
+def _unenforced_events(monkeypatch):
+    from kravein import audit
+
+    events: list[dict] = []
+    real = audit.record
+    monkeypatch.setattr(
+        audit, "record",
+        lambda kind, **kw: (events.append({"kind": kind, **kw}), real(kind, **kw))[1],
+    )
+    return events
+
+
+def test_destructive_skill_that_skips_safety_is_flagged(monkeypatch):
+    _register_temp_skills(monkeypatch)
+    events = _unenforced_events(monkeypatch)
+
+    assert registry.dispatch("tmp_forgetful", {}) == "done"  # behaviour unchanged
+
+    flagged = [e for e in events if e["kind"] == "skill.unenforced"]
+    assert [e["skill"] for e in flagged] == ["tmp_forgetful"]
+
+
+def test_destructive_skill_that_calls_enforce_is_not_flagged(monkeypatch):
+    _register_temp_skills(monkeypatch)
+    events = _unenforced_events(monkeypatch)
+
+    assert registry.dispatch("tmp_guarded", {}) == "done"
+
+    assert not [e for e in events if e["kind"] == "skill.unenforced"]
+
+
+# ---------------------------------------------------------------------------
+# Tool routing
+# ---------------------------------------------------------------------------
+
+def _names(decls):
+    return {d["name"] for d in decls}
+
+
+def test_routing_off_reproduces_the_full_tool_list():
+    """The default must be byte-identical to what was sent before routing."""
+    full = registry.tool_declarations()
+    assert "more_tools" not in _names(full)
+    assert _names(full) == {
+        n for n, s in registry.all_skills().items()
+        if n != "more_tools" and s.available()[0]
+    }
+
+
+def test_routing_narrows_but_keeps_core():
+    from kravein import toolselect
+
+    chosen = toolselect.select("turn the volume down")
+    assert "settings" in chosen and toolselect.CORE <= chosen
+    narrowed = registry.tool_declarations(categories=chosen, routing=True)
+    assert len(narrowed) < len(registry.tool_declarations())
+    assert "more_tools" in _names(narrowed)
+    assert "run_command" in _names(narrowed)  # the escape hatch survives
+
+
+def test_routing_fails_open_when_nothing_matches():
+    from kravein import toolselect
+
+    assert toolselect.select("hmm") is None
+
+
+def test_routing_understands_roman_urdu_and_sticky_categories():
+    from kravein import toolselect
+
+    assert "schedule" in toolselect.select("kal 5 baje yaad dilana")
+    assert "browser" in toolselect.select("hmm", sticky={"browser"})
+
+
+def test_more_tools_lists_every_category():
+    """The docstring is the schema; a category it omits is unreachable."""
+    doc = registry.all_skills()["more_tools"].description
+    for category in registry.categories():
+        if category != "tools":
+            assert category in doc
+
+
+def test_every_category_has_a_routing_decision():
+    """A new category must be routable or core, or routing silently hides it."""
+    from kravein import toolselect
+
+    for category in registry.categories():
+        assert (
+            category in toolselect.CATEGORY_HINTS
+            or category in toolselect.CORE
+            or category == "tools"
+        ), category
+
+
+def test_agent_widens_toolset_via_more_tools(monkeypatch):
+    from kravein import agent as agent_mod, config
+
+    monkeypatch.setattr(
+        config, "get",
+        lambda key, default=None: "auto" if key == "llm.tool_routing" else default,
+    )
+    a = agent_mod.Agent.__new__(agent_mod.Agent)
+    a._tool_categories, a._turn_categories, a.source = set(), None, "test"
+
+    tools = a._tools_for_turn("turn the volume down")
+    assert "browser_open" not in _names(tools)
+
+    registry.dispatch("more_tools", {"categories_wanted": ["browser"]}, context=a)
+    widened = a._current_tools("turn the volume down", tools)
+    assert "browser_open" in _names(widened)
+    assert "browser" in a._tool_categories  # and it sticks for later turns
