@@ -1,43 +1,18 @@
 ---
 name: orient
-description: Invoke before starting any work in this project, every session. Re-checks live git/test state instead of trusting a stale mental model of what's done. Use whenever work touches Kravein or anything under ~/code/Kravein.
+description: Orchestrator — run at the start of every session. Re-checks live git, GitHub and team state instead of trusting a stale mental model of what is done. Module agents do not need it; their SessionStart briefing covers the same ground.
 ---
 
-# Orient — run this first, every session
+# Orient (orchestrator, every session)
 
-## 1. Live repo state
-
-```
-git status
-git diff --stat
-git log -1
-```
-
-Local git only — no remote, no branches, no PRs to check. Don't assume the last session's summary
-of "what's done" is still accurate — check.
-
-## 2. Fast health check
-
-```
-.venv/bin/python -m compileall -q kravein/
-```
-
-Enough for orientation. Deeper verification (targeted `pytest` runs, manual checks) happens
-after implementing something, once or twice — not as a standing pre-check, and not looped.
-
-## 3. Read `user-space/STATE.md`
-
-If a big/long-running task is in progress, this is its live phase-by-phase log — treat it as the
-actual current progress record, not just a stale hint. Still worth a quick sanity check against
-live `git status` before continuing a task from where it left off.
-
-## 4. Architecture
-
-Already fully documented in this repo's `CLAUDE.md` — "Two codebases live here" (the
-`kravein/` vs. Windows-original split) and "Architecture" (registry/safety/platform/audit). Read
-those before touching code; this skill is about process, not re-explaining what's already
-written there.
-
-## 5. Self-improvement
-
-Update this file directly when a session discovers a process mistake worth not repeating.
+1. **Briefing first.** Read the SessionStart briefing (role, open PRs, blocked issues, agent tasks, guard blocks). Then `kb/state/project-state.md` and `kb/state/orchestrator-handoff.md`.
+2. **Live repo state:**
+   ```bash
+   git status --short && git log --oneline -3
+   git fetch -q origin && git log --oneline origin/main -1
+   git log --oneline origin/main..lead/batch 2>/dev/null   # unpushed batch work
+   ```
+3. **Team state:** `.claude/team/bin/team status` (tmux windows, worktrees, guard blocks). For each running agent, check its pane before sending work: `tmux capture-pane -t kravein-team:<agent> -p | tail -15` — a pending permission prompt means it is waiting for you.
+4. **Health:** `.venv/bin/python -m compileall -q kravein/`. Deeper checks happen in review, not here.
+5. **Reconcile.** If `project-state.md` disagrees with git or GitHub, git/GitHub win; fix the state file in the next `kb:` commit.
+6. Update this file when a session discovers a process mistake worth not repeating.

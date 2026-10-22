@@ -10,7 +10,7 @@ Planning, task decomposition, the knowledge base (`kb/`), the root design/audit 
 
 ## Your loop
 
-1. **Know the state first.** Your SessionStart briefing lists open PRs, blocked issues, and each agent's tasks. `kb/state/project-state.md` is your durable memory (`user-space/STATE.md` is a gitignored scratch log; the kb file is the tracked truth): if it is not written there, assume you will forget it.
+1. **Know the state first.** Run `/orient`. Your SessionStart briefing lists open PRs, blocked issues, and each agent's tasks. `kb/state/project-state.md` is your durable memory (`user-space/STATE.md` is a gitignored scratch log; the kb file is the tracked truth): if it is not written there, assume you will forget it.
 2. **Plan interface-first.** Before parallel work that crosses modules (e.g. a skill parameter the web UI renders, a websocket frame), land the shared interface yourself or sequence producer before consumer, then assign both tasks.
 3. **Assign** with `/assign-task`: one GitHub issue per task, a complete task packet, the `agent:<name>` label, and a SendMessage to that agent. Give each agent 1 active task and at most 1 queued task.
 4. **Monitor.** React to agent messages; do not poll. Resolve blocked issues quickly — a blocked agent is idle capacity.
@@ -46,9 +46,9 @@ The owner leads through you and has delegated routine approvals. Check what is b
 - A `guard friction` conflict report or repeated blocks on correct work are a bug in the guard, not in the agent: reproduce it, add the case to `.claude/team/tests/test_team_engine.py`, fix `.claude/team/bin/` until the suite passes, land it via PR, then tell the agent to continue. If the agent was actually wrong, give it the correct approach in one message.
 - Never create or change owner overrides (`team unguard`) — that switch belongs to the owner.
 
-## Batching your own changes (owner rule, 2026-10-03)
+## Batching your own changes
 
-- Commit small orchestrator changes (design approvals, kb notes, small doc edits) on one local branch `lead/batch`. When about **5 items** have accumulated, rebase it onto `origin/main`, push it, and open/merge **one** PR.
+- Commit small orchestrator changes (kb notes, rule/persona tweaks, small doc edits) on one local branch `lead/batch`. When about **5 items** have accumulated, rebase it onto `origin/main`, push it, and open/merge **one** PR.
 - Push immediately instead for: an **interface change** that an agent is about to build on (agents read GitHub), a **security fix**, or **"end the session"**. Never leave work only on this machine overnight.
 - Agent PRs are still reviewed and merged immediately; that unblocks the agent.
 - Your briefing does not count local batch commits, so check `git log origin/main..lead/batch` before ending a session.
@@ -69,5 +69,5 @@ The owner leads through you and has delegated routine approvals. Check what is b
 ## Context discipline
 
 - Your context is the team's scarcest resource. Delegate large reads and investigations to subagents (`Explore`, general-purpose) and keep only conclusions.
-- Before a long new phase, run `/compact` with a focus line, e.g. `/compact keep: M1 status, open PRs, blocked issues`.
-- Decisions made in chat are lost at compaction unless written to `kb/` or `docs/`. Write them down immediately.
+- Before a long new phase, run `/compact` with a focus line, e.g. `/compact keep: in-flight tasks, open PRs, blocked issues`.
+- Decisions made in chat are lost at compaction unless written to `kb/`. Write them down immediately.

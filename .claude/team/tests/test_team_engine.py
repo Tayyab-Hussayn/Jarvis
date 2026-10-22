@@ -267,7 +267,24 @@ expect("frozen: owner unguard does not lift a freeze", c, 2, o)
 c, o = edit(R / ".claude/team/state/unguard-engine", cwd=R)
 expect("frozen: state dir still blocked for orchestrator", c, 2, o)
 
+
+print("== frozen paths via bash ==")
+for cmd, want in [
+    ("sed -i 's/a/b/' main.py", 2), ("rm -f actions/a.py", 2), ("echo x > main.py", 2), ("echo x >>main.py", 2),
+    ("cp kravein/agent.py brahma-connect-android/A.java", 2), ("git rm actions/a.py", 2), ("mv main.py old.py", 2),
+    ("cat main.py", 0), ("grep -n x actions/a.py", 0), ("cp main.py /tmp/x.py", 0), ("sed -n 1,5p main.py", 0),
+    ("sed -i 's/a/b/' kravein/agent.py", 0), ("echo x > /tmp/main.py", 0), ("rm -f kravein/agent.pyc", 0),
+]:
+    c, o = bash(cmd, agent="engine")
+    expect(f"bash frozen (engine): {cmd}", c, want, o)
+c, o = bash("sed -i 's/a/b/' main.py", cwd=R)
+expect("bash frozen: orchestrator blocked too", c, 2, o)
+c, o = bash("sed -i 's/a/b/' CLAUDE.md", cwd=R)
+expect("bash frozen: orchestrator may sed a non-frozen file", c, 0, o)
+
 print("== launcher safety ==")
+sl = (BIN / "start-lead.sh").read_text()
+expect("start-lead.sh does not pass the resume id twice", 'local id="$1"' in sl and '--resume "$id" "$@"' in sl, True)
 for f in sorted(p for p in BIN.iterdir() if p.is_file()):
     txt = f.read_text()
     expect(f"no --dangerously-skip-permissions in {f.name}", "dangerously-skip-permissions" not in txt, True)

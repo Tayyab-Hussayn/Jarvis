@@ -36,8 +36,9 @@ case " $* " in *" --model "*) ;; *)
 esac
 
 try_resume() {   # $1 = session id or name; fails fast (<10 s) when there is nothing to resume
-  local start rc; start=$(date +%s)
-  set +e; claude "${ARGS[@]}" --resume "$1" "$@"; rc=$?; set -e
+  # Shift the id off first: passing "$@" unshifted handed the id to claude a second time, as a prompt.
+  local id="$1" start rc; shift; start=$(date +%s)
+  set +e; claude "${ARGS[@]}" --resume "$id" "$@"; rc=$?; set -e
   if [ $rc -ne 0 ] && [ $(( $(date +%s) - start )) -lt 10 ]; then return 10; fi
   exit $rc
 }

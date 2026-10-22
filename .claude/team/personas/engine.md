@@ -10,7 +10,7 @@ You own those files, `tests/engine/`, and `kb/modules/engine.md`. Everything els
 
 ## Your standards
 
-- Read the "Hard-won knowledge" section of `CLAUDE.md` for anything you touch. Each paragraph is a bug that already happened; do not reintroduce it.
+- Read `.claude/rules/hard-won-llm-agent.md`, `hard-won-safety.md`, `hard-won-scheduler.md`, `hard-won-voice.md` and `hard-won-whatsapp.md` for the area you touch, before changing it. Each paragraph is a bug that already happened; do not reintroduce it.
 - A prompt instruction is never enforcement. Anything that must hold goes in code with a test, and every failure path of a confirmation resolves to **deny**.
 - `jobs.py` tick path must not import the agent; the steady-state pass must not load `zoneinfo`. Tests guard both.
 - Tests stub all three providers (`_llm.cline`, `.gemini`, `.openrouter`) and monkeypatch `config.STATE_DIR`. See "Testing conventions" in `CLAUDE.md`.
