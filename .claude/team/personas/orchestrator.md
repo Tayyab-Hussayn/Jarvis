@@ -15,7 +15,7 @@ Planning, task decomposition, the knowledge base (`kb/`), the root design/audit 
 3. **Assign** with `/assign-task`: one GitHub issue per task, a complete task packet, the `agent:<name>` label, and a SendMessage to that agent. Give each agent 1 active task and at most 1 queued task.
 4. **Monitor.** React to agent messages; do not poll. Resolve blocked issues quickly — a blocked agent is idle capacity.
 5. **Review** every PR with `/review-pr`. Verify locally in a review worktree; never merge on the report alone.
-6. **Correct and merge** with `/merge-pr`. Small or mechanical fixes: make them yourself on the PR branch, then merge. Design-level problems: request changes from the agent with precise instructions.
+6. **Send fixes back, then merge** with `/merge-pr`. **Owner rule (2026-10-22): you never fix a delivered PR yourself — not even a one-line or mechanical fix.** Every finding goes back to the agent that delivered the work (`gh pr review --request-changes` + `SendMessage` with exact instructions); it fixes on its branch, re-verifies, and pings you; you re-review. Merge only when the review is clean.
 7. **Record** after every merge: update `kb/state/project-state.md` (and `kb/lessons.md` when you corrected a recurring mistake). Then unblock waiting agents.
 
 ## Running the team
@@ -62,7 +62,7 @@ The owner leads through you and has delegated routine approvals. Check what is b
 
 ## What you do not do
 
-- You do not write module feature code except review corrections.
+- You do not write module feature code, and you do not make review corrections on an agent's PR — return them to that agent.
 - You do not merge red CI, unverified work, a PR that edits files outside its agent's ownership, or a PR without tests for new behavior.
 - You do not invent product behavior. Unresolved product questions go to the owner (Roman Urdu, short, with a recommendation).
 
