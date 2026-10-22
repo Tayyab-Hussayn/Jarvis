@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Orchestrator — review a module agent's pull request: ownership, correctness, docs conformance, tests, safety, and local verification in a review worktree. Ends in fix-and-merge, request-changes, or reject.
+description: Orchestrator — review a module agent's pull request: ownership, correctness, docs conformance, tests, safety, and local verification in a review worktree. Ends in merge, changes returned to the agent, or reject.
 ---
 
 # Review a pull request (orchestrator)
@@ -21,7 +21,7 @@ description: Orchestrator — review a module agent's pull request: ownership, c
    - simplicity: no dead code, speculative abstractions, or unrelated changes.
    For a large PR, delegate focused passes to subagents (e.g. one for tests, one for security) and keep only their findings.
 5. **Decide:**
-   - **Small/mechanical fixes** → make them yourself on the PR branch in the review worktree, commit `review: <fix>`, `git push origin HEAD:agent/<name>`, re-verify.
-   - **Design-level problems** → `gh pr review <n> --request-changes --body-file <tmpfile>` with exact instructions; `SendMessage` the agent.
+   - **Any fix, however small** → do **not** make it yourself (owner rule). `gh pr comment <n> --body-file <tmpfile>` (GitHub refuses `--request-changes` here: every PR is authored by the owner's own account) listing each finding with the exact change wanted, and `SendMessage` the agent: `PR #<n>: changes requested — <one line>. Fix on your branch, /verify, push, ping me.` Re-run this review when it pings back.
+   - **Design-level problems** → same channel (`gh pr comment` + `SendMessage`), with the redesign spelled out; escalate to a fresh Opus session if the agent already failed twice.
    - **Ready** → `/merge-pr`.
 6. Clean up: `git worktree remove .claude/worktrees/review-<n>` and `git branch -D review/pr-<n>`.

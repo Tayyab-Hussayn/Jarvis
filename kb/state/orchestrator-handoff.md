@@ -14,6 +14,9 @@ updated: 2026-10-22
 ## Starting the orchestrator
 - Always start as the orchestrator with `.claude/team/bin/start-lead.sh` (persona appended, session named `orchestrator`, resumes `runtime/orchestrator-session`). A plain `claude` session has no persona and agents cannot reach it by name.
 
+## Review fixes
+- **Owner rule (2026-10-22): never fix a delivered PR yourself.** Every review finding, however small, goes back to the delivering agent to fix on its branch; then re-review. (PR #8 had an orchestrator `review:` commit — that is no longer allowed.)
+
 ## Approvals
 - The owner delegated routine agent approvals to the orchestrator (2026-10-22): read the pane, then `tmux send-keys -t kravein-team:<agent> 1`. Refuse list is in the persona.
 
