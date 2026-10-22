@@ -98,7 +98,9 @@
       "Bash(android/gradlew *)",
       "Read(~/code/smart-sticky-wallpaper/**)",
       "Read(~/Android/Sdk/**)",
-      "Read(~/.gradle/**)"
+      "Read(~/.gradle/**)",
+      "Bash(git mv *)",
+      "Bash(git rm *)"
     ],
     "deny": [
       "Bash(git push --force*)",
