@@ -620,6 +620,34 @@ def _auto_yes(action: str, detail: str, danger: Danger) -> bool:
     return True
 
 
+def _pick_lan_host(
+    requested: str, addresses: list[str]
+) -> tuple[str | None, list[str]]:
+    """Choose the address `serve --lan` binds: (host, []) or (None, message lines).
+
+    An explicit --host must be one this machine really holds as a private
+    address — serving anywhere else would expose a different network than the
+    owner named. Without one, only a single candidate is unambiguous; with
+    several (a docker bridge plus wifi) taking the first would silently expose
+    the wrong network, so refuse and list them.
+    """
+    if not addresses:
+        return None, ["Could not find a private LAN address on this machine."]
+    if requested != "127.0.0.1":         # 127.0.0.1 is the parser default: "not given"
+        if requested in addresses:
+            return requested, []
+        return None, [
+            f"{requested} is not a private address of this machine.",
+            *(f"  kravein serve --lan --host {a}" for a in addresses),
+        ]
+    if len(addresses) > 1:
+        return None, [
+            "This machine has more than one private address:",
+            *(f"  kravein serve --lan --host {a}" for a in addresses),
+        ]
+    return addresses[0], []
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -740,17 +768,12 @@ def main(argv: list[str] | None = None) -> int:
             # Resolve here rather than passing a sentinel down, so the address
             # actually being exposed is printed before anything binds.
             addresses = webauth.local_addresses()
-            if not addresses:
-                print(red("Could not find a private LAN address on this machine."))
+            host, problem = _pick_lan_host(args.host, addresses)
+            if host is None:
+                print(red(problem[0]))
+                for line in problem[1:]:
+                    print(line)
                 return 1
-            if len(addresses) > 1 and args.host == "127.0.0.1":
-                # Several interfaces — a docker bridge and real wifi, say.
-                # Guessing would expose the wrong network.
-                print("This machine has more than one private address:")
-                for address in addresses:
-                    print(f"  kravein serve --host {address}")
-                return 1
-            host = addresses[0]
 
         return serve_web(
             host=host, port=args.port, open_browser=not args.no_open
