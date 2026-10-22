@@ -183,6 +183,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "novarouter_model": "kimi-k3",
         "temperature": 0.4,
         "max_tool_iterations": 8,
+        # "off" sends every skill with every request; "auto" sends only the
+        # categories the request needs (see toolselect.py). Stays "off" until
+        # tools/eval_models.py shows the narrowed set completes as many tasks.
+        "tool_routing": "off",
     },
     "safety": {
         # When false, destructive skills refuse outright instead of prompting.

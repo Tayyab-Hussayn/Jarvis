@@ -4050,3 +4050,138 @@ def test_the_inbound_path_never_imports_the_agent_or_the_llm():
     ).stdout
     assert "BAD:" in out
     assert out.split("BAD:")[1].strip() == "", "inbound reached the model stack"
+
+
+# ---------------------------------------------------------------------------
+# Unenforced-skill tripwire
+# ---------------------------------------------------------------------------
+
+def _register_temp_skills(monkeypatch):
+    """Register two throwaway DESTRUCTIVE skills; one guards itself, one forgets."""
+    registry.load_skills()
+    monkeypatch.setattr(registry, "_registry", dict(registry._registry))
+
+    @registry.skill(name="tmp_guarded", danger=Danger.DESTRUCTIVE, category="tmp")
+    def tmp_guarded() -> str:
+        """Guarded."""
+        safety.enforce(
+            safety.Verdict(danger=Danger.SAFE), "guarded", skill="tmp_guarded"
+        )
+        return "done"
+
+    @registry.skill(name="tmp_forgetful", danger=Danger.DESTRUCTIVE, category="tmp")
+    def tmp_forgetful() -> str:
+        """Forgets to call safety."""
+        return "done"
+
+
+def _unenforced_events(monkeypatch):
+    from kravein import audit
+
+    events: list[dict] = []
+    real = audit.record
+    monkeypatch.setattr(
+        audit, "record",
+        lambda kind, **kw: (events.append({"kind": kind, **kw}), real(kind, **kw))[1],
+    )
+    return events
+
+
+def test_destructive_skill_that_skips_safety_is_flagged(monkeypatch):
+    _register_temp_skills(monkeypatch)
+    events = _unenforced_events(monkeypatch)
+
+    assert registry.dispatch("tmp_forgetful", {}) == "done"  # behaviour unchanged
+
+    flagged = [e for e in events if e["kind"] == "skill.unenforced"]
+    assert [e["skill"] for e in flagged] == ["tmp_forgetful"]
+
+
+def test_destructive_skill_that_calls_enforce_is_not_flagged(monkeypatch):
+    _register_temp_skills(monkeypatch)
+    events = _unenforced_events(monkeypatch)
+
+    assert registry.dispatch("tmp_guarded", {}) == "done"
+
+    assert not [e for e in events if e["kind"] == "skill.unenforced"]
+
+
+# ---------------------------------------------------------------------------
+# Tool routing
+# ---------------------------------------------------------------------------
+
+def _names(decls):
+    return {d["name"] for d in decls}
+
+
+def test_routing_off_reproduces_the_full_tool_list():
+    """The default must be byte-identical to what was sent before routing."""
+    full = registry.tool_declarations()
+    assert "more_tools" not in _names(full)
+    assert _names(full) == {
+        n for n, s in registry.all_skills().items()
+        if n != "more_tools" and s.available()[0]
+    }
+
+
+def test_routing_narrows_but_keeps_core():
+    from kravein import toolselect
+
+    chosen = toolselect.select("turn the volume down")
+    assert "settings" in chosen and toolselect.CORE <= chosen
+    narrowed = registry.tool_declarations(categories=chosen, routing=True)
+    assert len(narrowed) < len(registry.tool_declarations())
+    assert "more_tools" in _names(narrowed)
+    assert "run_command" in _names(narrowed)  # the escape hatch survives
+
+
+def test_routing_fails_open_when_nothing_matches():
+    from kravein import toolselect
+
+    assert toolselect.select("hmm") is None
+
+
+def test_routing_understands_roman_urdu_and_sticky_categories():
+    from kravein import toolselect
+
+    assert "schedule" in toolselect.select("kal 5 baje yaad dilana")
+    assert "browser" in toolselect.select("hmm", sticky={"browser"})
+
+
+def test_more_tools_lists_every_category():
+    """The docstring is the schema; a category it omits is unreachable."""
+    doc = registry.all_skills()["more_tools"].description
+    for category in registry.categories():
+        if category != "tools":
+            assert category in doc
+
+
+def test_every_category_has_a_routing_decision():
+    """A new category must be routable or core, or routing silently hides it."""
+    from kravein import toolselect
+
+    for category in registry.categories():
+        assert (
+            category in toolselect.CATEGORY_HINTS
+            or category in toolselect.CORE
+            or category == "tools"
+        ), category
+
+
+def test_agent_widens_toolset_via_more_tools(monkeypatch):
+    from kravein import agent as agent_mod, config
+
+    monkeypatch.setattr(
+        config, "get",
+        lambda key, default=None: "auto" if key == "llm.tool_routing" else default,
+    )
+    a = agent_mod.Agent.__new__(agent_mod.Agent)
+    a._tool_categories, a._turn_categories, a.source = set(), None, "test"
+
+    tools = a._tools_for_turn("turn the volume down")
+    assert "browser_open" not in _names(tools)
+
+    registry.dispatch("more_tools", {"categories_wanted": ["browser"]}, context=a)
+    widened = a._current_tools("turn the volume down", tools)
+    assert "browser_open" in _names(widened)
+    assert "browser" in a._tool_categories  # and it sticks for later turns
