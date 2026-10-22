@@ -23,6 +23,7 @@ updated: 2026-10-22
 | Look at the agents | `.claude/team/bin/team attach` — `Ctrl-b 1..4` switch window, `Ctrl-b d` detach |
 | Talk to one agent directly | `team attach engine`, then type |
 | Lift guards for an agent (owner only, plain terminal) | `team unguard engine 60` · restore: `team guard engine` |
+| Switch the Claude account for launches | `team account 2` (second account, `~/.claude-account2`) · back: `team account 1` · show: `team account` · then `team stop <agent>` + `team up <agent>`; orchestrator: `start-lead.sh --account 2`. Only sets `CLAUDE_CONFIG_DIR`; never logs out. A conversation lives in its account, so a switched agent starts fresh. |
 | See everything | `team status` |
 | End of day | tell the orchestrator "now end the session" → it shuts agents down → you `/exit` it |
 

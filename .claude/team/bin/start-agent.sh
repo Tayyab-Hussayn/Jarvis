@@ -25,15 +25,16 @@ STATE="$ROOT/.claude/team/state"
 cfg() { python3 -c "import json,sys; r=json.load(open('$ROSTER')); print(r.get('models',{}).get(sys.argv[1], sys.argv[2]))" "$1" "$2"; }
 
 if ! python3 -c "import json,sys; sys.exit(0 if sys.argv[1] in json.load(open(sys.argv[2]))['agents'] else 1)" "$AGENT" "$ROSTER"; then
-  echo "usage: $0 <agent> [--fresh] [--model m] [claude flags]" >&2
+  echo "usage: $0 <agent> [--fresh] [--model m] [--account 1|2|dir] [claude flags]" >&2
   exit 1
 fi
 
-FRESH=0; MODEL="$(cfg agent_default sonnet)"
+FRESH=0; MODEL="$(cfg agent_default sonnet)"; ACCOUNT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --fresh) FRESH=1; shift ;;
     --model) MODEL="$2"; shift 2 ;;
+    --account) ACCOUNT="${2:?--account needs a value}"; shift 2 ;;
     *) break ;;
   esac
 done
@@ -50,6 +51,11 @@ mkdir -p "$STATE"
 unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID CLAUDE_PID CLAUDE_EFFORT \
       CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_SESSION_ATTENDED \
       CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH
+
+# Claude account (CLAUDE_CONFIG_DIR): --account, else runtime/account (`team account`), else the environment.
+# shellcheck source=account.sh
+. "$(dirname "$(readlink -f "$0")")/account.sh"
+krv_apply_account "$ROOT" "$ACCOUNT"
 
 git -C "$ROOT" fetch origin --quiet || echo "warning: fetch failed; continuing with local refs" >&2
 
@@ -74,7 +80,7 @@ cd "$ROOT"
 export KRV_AGENT="$AGENT"
 COMMON=(--worktree "$AGENT" --append-system-prompt-file "$PERSONA" --permission-mode "$MODE"
         --model "$MODEL" --settings '{"autoMemoryEnabled": false, "crossSessionInbound": "accept"}')
-echo "[$AGENT] model=$MODEL mode=$MODE $( [ $FRESH = 1 ] && echo fresh || echo resume-if-possible )"
+echo "[$AGENT] account=$(krv_account_label) model=$MODEL mode=$MODE $( [ $FRESH = 1 ] && echo fresh || echo resume-if-possible )"
 
 # Run claude; if it exits within a few seconds with an error (e.g. nothing to resume), report failure so the caller can fall back.
 try_launch() {
