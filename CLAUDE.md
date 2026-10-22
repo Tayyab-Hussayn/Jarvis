@@ -13,10 +13,16 @@ build-tested here.
 
 ## How we work
 
-Solo, fully local project — just the user and Claude Code. No task list, no third-party review,
-no GitHub workflow (no branches, no PRs) — this isn't hosted or shared, just work directly. The
-user describes what they want in plain language; Claude interprets intent, drives the rest, and
-owns the outcome.
+The owner (Roman Urdu speaker — reply in simple Roman Urdu with a clear recommendation; code, docs,
+issues, PRs and commits in English) works with one **orchestrator** Claude session and four module
+agents: **engine**, **skills**, **web**, **qa**. Each agent is its own Claude Code session in its own
+git worktree (`.claude/worktrees/<name>` on `agent/<name>`), may edit only the paths it owns, and
+reaches `main` through a reviewed, squash-merged PR on the private GitHub remote. The orchestrator
+plans, assigns (`/assign-task`), reviews (`/review-pr`), merges (`/merge-pr`) and keeps the knowledge
+base; it does not write module feature code. Protocol: `.claude/rules/team-protocol.md`. Overview:
+`kb/how-the-team-works.md`. Ownership: `.claude/team/roster.json`. The Windows-original tree and
+`brahma-connect-android/` are **frozen** — nobody edits them until a task unfreezes them in the roster.
+A one-person task that needs no team is still fine to do directly in the main checkout.
 
 **Brainstorm → plan → build.** For anything non-trivial — a new feature, a behavior change
 touching more than a file or two, an architectural call — use plan mode before writing code:
@@ -38,10 +44,13 @@ a CI pipeline.
 **Session start**: the `orient` skill runs first, every session — re-checks git state, doesn't
 trust a stale mental model of what's done.
 
-**`user-space/STATE.md` is a living task log, not just a snapshot.** For any big or long-running
+**`user-space/STATE.md` is a gitignored scratch log; `kb/state/project-state.md` is the tracked truth.** For any big or long-running
 task, update it after each phase completes — what was done, what's next — so progress survives
 a session boundary even without the user asking. `/update-state` does a full manual refresh; the
 per-phase updates during active work happen on their own, without that command.
+
+## Current state
+@kb/state/project-state.md
 
 ## Two codebases live here
 

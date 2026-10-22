@@ -1,0 +1,113 @@
+{
+  "_comment": "Machine-readable source of truth for the agent team. Ownership entries ending in '/' are directory prefixes; anything else is an exact file path. A path owned by nobody is orchestrator-owned.",
+  "base_branch": "main",
+  "orchestrator": {
+    "session_name": "orchestrator",
+    "persona": ".claude/team/personas/orchestrator.md",
+    "owns": [
+      "CLAUDE.md",
+      ".claude/",
+      ".github/pull_request_template.md",
+      ".github/ISSUE_TEMPLATE/",
+      "kb/",
+      "pending.md",
+      "README-LINUX.md",
+      "AGENT_AUDIT.md",
+      "PLAN.md",
+      "UI_AUDIT.md",
+      "SCHEDULING_AUDIT.md",
+      "ROUTINES_DESIGN.md",
+      ".gitignore",
+      "pytest.ini"
+    ]
+  },
+  "agents": {
+    "engine": {
+      "branch": "agent/engine",
+      "persona": ".claude/team/personas/engine.md",
+      "label": "agent:engine",
+      "summary": "Agent loop, LLM facade and providers, skill registry, safety, audit, config, tool routing, jobs and routines, voice, WhatsApp service, CLI/daemon",
+      "owns": [
+        "kravein/__init__.py",
+        "kravein/__main__.py",
+        "kravein/agent.py",
+        "kravein/audit.py",
+        "kravein/cli.py",
+        "kravein/cline.py",
+        "kravein/config.py",
+        "kravein/daemon.py",
+        "kravein/delivery.py",
+        "kravein/jobs.py",
+        "kravein/live.py",
+        "kravein/llm.py",
+        "kravein/registry.py",
+        "kravein/routines.py",
+        "kravein/safety.py",
+        "kravein/timeutil.py",
+        "kravein/toolselect.py",
+        "kravein/voice.py",
+        "kravein/whatsapp_service.py",
+        "tests/engine/",
+        "kb/modules/engine.md"
+      ]
+    },
+    "skills": {
+      "branch": "agent/skills",
+      "persona": ".claude/team/personas/skills.md",
+      "label": "agent:skills",
+      "summary": "Skills (what the assistant can do) and the platform/ layer that wraps every OS concern: Hyprland/Sway/X11, input, audio, browser, terminal, files",
+      "owns": [
+        "kravein/skills/",
+        "kravein/platform/",
+        "kravein/gentle.py",
+        "tests/skills/",
+        "kb/modules/skills.md"
+      ]
+    },
+    "web": {
+      "branch": "agent/web",
+      "persona": ".claude/team/personas/web.md",
+      "label": "agent:web",
+      "summary": "Next.js frontend and the web transport (FastAPI server, websocket events, token/Origin/Host auth)",
+      "owns": [
+        "web/",
+        "kravein/web-dist/",
+        "kravein/server.py",
+        "kravein/events.py",
+        "kravein/webauth.py",
+        "tests/test_web_transport.py",
+        "tests/web/",
+        "kb/modules/web.md"
+      ]
+    },
+    "qa": {
+      "branch": "agent/qa",
+      "persona": ".claude/team/personas/qa.md",
+      "label": "agent:qa",
+      "summary": "Test infrastructure and the legacy test suite, model evals, layout checks, installer and systemd units, requirements",
+      "owns": [
+        "tests/conftest.py",
+        "tests/test_linux_port.py",
+        "tools/",
+        "install-linux.sh",
+        "systemd/",
+        "requirements-linux.txt",
+        "kb/modules/qa.md"
+      ]
+    }
+  },
+  "frozen": {
+    "_comment": "Nobody edits these (Windows-original tree, and the Android app until a task unfreezes it). Enforced by guard_edits.py.",
+    "paths": [
+      "main.py", "ui.py", "actions/", "agent/", "smart_home/", "kravein_connect/",
+      "dashboard/", "extra/", "brahma-connect-android/", "core/", "auth/", "config/",
+      "memory/", "plugins/", "plugin_manager.py", "workspace_store.py",
+      "discord_bot.py", "gesture_utils.py", "or_client.py", "smart_home_page_new.py"
+    ]
+  },
+  "models": {
+    "_comment": "Agents run Sonnet by default; mark a task 'Model: opus' when it touches safety.py, webauth.py, confirmation flow, concurrency, or a bug that already failed on Sonnet. Choose at task start (fresh session); never switch mid-task.",
+    "orchestrator": "opus",
+    "agent_default": "sonnet"
+  }
+}

@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# Team control for the Kravein agent team.
+#
+#   team up [--fresh] [--model m] [agent...]
+#                                    start agents in tmux session "kravein-team"; resumes previous conversations
+#                                    unless --fresh. Default: all agents, models per roster "models".
+#   team stop <agent>                gracefully exit one agent (e.g. to restart it on another model)
+#   team down [--now]                gracefully exit every agent (Esc, /exit), then close the tmux session.
+#   team status                      windows, worktrees, owner overrides, guard blocks (24h)
+#   team attach [agent]              owner: open the tmux session (optionally on one agent's window)
+#   team send <agent> <text...>      type a prompt into an agent's session (fallback to SendMessage)
+#   team grant <agent> <path> <hours> <issue>   ORCHESTRATOR: temporary write access outside ownership
+#   team grants | team revoke <agent> [path]    list / remove grants
+#   team unguard <agent> [minutes]   OWNER ONLY, plain terminal: lift team guards for an agent (default 60 min)
+#   team guard <agent>               OWNER ONLY: restore guards now
+#
+# The orchestrator runs outside tmux (e.g. in its own terminal via start-lead.sh).
+set -euo pipefail
+
+# Always the MAIN checkout, even when invoked from a worktree (git common dir = <main>/.git).
+ROOT="$(dirname "$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --path-format=absolute --git-common-dir)")"
+BIN="$ROOT/.claude/team/bin"
+STATE="$ROOT/.claude/team/state"
+RUNTIME="$ROOT/.claude/team/runtime"
+SESSION="kravein-team"
+AGENTS=$(python3 -c "import json;print(' '.join(json.load(open('$ROOT/.claude/team/roster.json'))['agents']))")
+mkdir -p "$STATE"
+
+need_tmux() { command -v tmux >/dev/null || { echo "tmux is not installed. Install tmux with your package manager." >&2; exit 1; }; }
+is_agent() { for a in $AGENTS; do [ "$a" = "$1" ] && return 0; done; return 1; }
+has_window() { tmux list-windows -t "$SESSION" -F '#W' 2>/dev/null | grep -qx "$1"; }
+# Gracefully exit one agent: interrupt, /exit, then confirm "Keep worktree" (never remove it).
+graceful_exit() {
+  local a="$1" pane
+  tmux send-keys -t "$SESSION:$a" Escape; sleep 1
+  tmux send-keys -t "$SESSION:$a" -l "/exit"; sleep 0.5; tmux send-keys -t "$SESSION:$a" Enter
+  for _ in $(seq 1 30); do
+    has_window "$a" || return 0
+    pane="$(tmux capture-pane -p -t "$SESSION:$a" 2>/dev/null || true)"
+    if printf '%s' "$pane" | grep -q "❯ 1. Keep worktree"; then tmux send-keys -t "$SESSION:$a" Enter; fi
+    sleep 1
+  done
+  has_window "$a" || return 0
+  tmux kill-window -t "$SESSION:$a"; echo "forced: $a (did not exit within 30 s)" >&2
+}
+owner_only() {
+  if [ -n "${CLAUDECODE:-}" ]; then
+    echo "refused: '$1' is owner-only. Run it yourself in a plain terminal, not from a Claude session." >&2
+    exit 1
+  fi
+}
+
+cmd="${1:-status}"; shift || true
+case "$cmd" in
+  up)
+    need_tmux
+    opts=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --fresh) opts+=(--fresh); shift ;;
+        --model) opts+=("$1" "${2:?$1 needs a value}"); shift 2 ;;
+        *) break ;;
+      esac
+    done
+    targets="${*:-$AGENTS}"
+    for a in $targets; do is_agent "$a" || { echo "unknown agent: $a" >&2; exit 1; }; done
+    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+      tmux new-session -d -s "$SESSION" -n _shell -c "$ROOT"
+      tmux set-option -t "$SESSION" mouse on >/dev/null
+      tmux set-option -t "$SESSION" history-limit 50000 >/dev/null
+      tmux set-option -t "$SESSION" remain-on-exit off >/dev/null
+      tmux set-option -t "$SESSION" focus-events on >/dev/null
+    fi
+    for a in $targets; do
+      if has_window "$a"; then echo "already running: $a"; continue; fi
+      tmux new-window -d -t "$SESSION" -n "$a" -c "$ROOT" "$(printf '%q ' "$BIN/start-agent.sh" "$a" "${opts[@]}")"
+      echo "started: $a ${opts[*]}"
+    done
+    echo "Owner: attach with  .claude/team/bin/team attach   (switch windows: Ctrl-b <number>, detach: Ctrl-b d)"
+    ;;
+
+  stop)
+    need_tmux
+    a="${1:?agent}"
+    is_agent "$a" && has_window "$a" || { echo "agent not running: $a"; exit 0; }
+    graceful_exit "$a"; echo "stopped: $a (worktree kept)"
+    ;;
+
+  down)
+    need_tmux
+    tmux has-session -t "$SESSION" 2>/dev/null || { echo "no team session running"; exit 0; }
+    pids=()
+    for a in $AGENTS; do
+      has_window "$a" || continue
+      graceful_exit "$a" & pids+=($!)
+      echo "exiting: $a"
+    done
+    [ "${1:-}" = "--now" ] || wait "${pids[@]}" 2>/dev/null || true
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    echo "team session closed. Worktrees, branches, and conversations are kept; 'team up' resumes them."
+    ;;
+
+  status)
+    if command -v tmux >/dev/null && tmux has-session -t "$SESSION" 2>/dev/null; then
+      echo "tmux session '$SESSION': $(tmux list-windows -t "$SESSION" -F '#W' | grep -v '^_shell$' | tr '\n' ' ')"
+    else
+      echo "tmux session '$SESSION': not running"
+    fi
+    git -C "$ROOT" worktree list
+    now=$(date +%s)
+    for a in $AGENTS; do
+      f="$STATE/unguard-$a"
+      if [ -f "$f" ] && [ "$(cat "$f")" -gt "$now" ]; then echo "OWNER OVERRIDE: $a until $(date -d @"$(cat "$f")" +%H:%M)"; fi
+    done
+    python3 -c "import sys; sys.path.insert(0,'$BIN'); from team_lib import recent_blocks; b=recent_blocks(24); print('guard blocks (24h):', b or 'none')"
+    ;;
+
+  attach)
+    need_tmux
+    if [ -n "${1:-}" ]; then exec tmux attach -t "$SESSION:$1"; else exec tmux attach -t "$SESSION"; fi
+    ;;
+
+  send)
+    need_tmux
+    a="${1:?agent}"; shift
+    is_agent "$a" && has_window "$a" || { echo "agent not running: $a" >&2; exit 1; }
+    tmux send-keys -t "$SESSION:$a" -l "$*"
+    tmux send-keys -t "$SESSION:$a" Enter
+    echo "sent to $a"
+    ;;
+
+  grant)
+    # Orchestrator: give an agent temporary write access to a path for one task.
+    #   team grant <agent> <path-or-dir/> <hours> <issue#>
+    [ -z "${KRV_AGENT:-}" ] || [ "$KRV_AGENT" = "orchestrator" ] || { echo "refused: only the orchestrator grants" >&2; exit 1; }
+    a="${1:?agent}"; path="${2:?path (end directories with /)}"; hours="${3:?hours}"; issue="${4:?issue number}"
+    is_agent "$a" || { echo "unknown agent: $a" >&2; exit 1; }
+    python3 - "$RUNTIME/grants.json" "$a" "$path" "$hours" "$issue" <<'PY'
+import json, re, sys, time, pathlib
+f, agent, path, hours, issue = sys.argv[1:]
+f = pathlib.Path(f)
+f.parent.mkdir(parents=True, exist_ok=True)
+data = json.loads(f.read_text()) if f.exists() else {}
+now = time.time()
+data = {k: [g for g in v if g["until"] > now] for k, v in data.items()}
+data.setdefault(agent, []).append({"path": re.sub(r"^(\./)+", "", path), "issue": int(issue), "until": int(now + float(hours) * 3600)})
+f.write_text(json.dumps(data, indent=2))
+print(f"granted {agent}: {path} for {hours}h (issue #{issue})")
+PY
+    ;;
+
+  grants)
+    python3 - "$RUNTIME/grants.json" <<'PY'
+import json, sys, time, pathlib
+f = pathlib.Path(sys.argv[1])
+data = json.loads(f.read_text()) if f.exists() else {}
+now, found = time.time(), False
+for agent, gs in data.items():
+    for g in gs:
+        if g["until"] > now:
+            found = True
+            print(f"{agent}: {g['path']}  (issue #{g['issue']}, until {time.strftime('%H:%M', time.localtime(g['until']))})")
+if not found:
+    print("no active grants")
+PY
+    ;;
+
+  revoke)
+    [ -z "${KRV_AGENT:-}" ] || [ "$KRV_AGENT" = "orchestrator" ] || { echo "refused: only the orchestrator revokes" >&2; exit 1; }
+    a="${1:?agent}"; path="${2:-}"
+    python3 - "$RUNTIME/grants.json" "$a" "$path" <<'PY'
+import json, re, sys, pathlib
+f, agent, path = sys.argv[1:]
+f = pathlib.Path(f)
+data = json.loads(f.read_text()) if f.exists() else {}
+data[agent] = [g for g in data.get(agent, []) if path and g["path"] != re.sub(r"^(\./)+", "", path)]
+f.write_text(json.dumps(data, indent=2))
+print(f"revoked {agent}: {path or 'all grants'}")
+PY
+    ;;
+
+  unguard)
+    owner_only unguard
+    a="${1:?agent}"; mins="${2:-60}"
+    is_agent "$a" || { echo "unknown agent: $a" >&2; exit 1; }
+    echo $(( $(date +%s) + mins * 60 )) > "$STATE/unguard-$a"
+    echo "guards lifted for $a for $mins minutes (until $(date -d "+$mins min" +%H:%M)). 'team guard $a' restores them now."
+    ;;
+
+  guard)
+    owner_only guard
+    a="${1:?agent}"
+    rm -f "$STATE/unguard-$a"
+    echo "guards restored for $a"
+    ;;
+
+  *)
+    sed -n '2,18p' "$0"; exit 1 ;;
+esac
