@@ -8,7 +8,10 @@
 # - Model policy (roster.json "models"): Sonnet by default; Opus for hard tasks.
 #   Pick the model at task start: a different model on resume discards the prompt cache once.
 # - Appends the agent persona to Claude Code's default system prompt (does not replace it).
-# - Permission mode defaults to `default`; set KRV_AGENT_PERMISSION_MODE=auto (or acceptEdits) to opt in.
+# - Permission mode defaults to `acceptEdits`: edits and common file commands need no prompt, because the
+#   ownership hooks (guard_edits/guard_bash) are what actually bound an agent, not a dialog. Everything else
+#   (arbitrary shell, network) still prompts unless listed in .claude/settings.json permissions.allow.
+#   Set KRV_AGENT_PERMISSION_MODE=default for the strictest mode. Never `bypassPermissions`.
 # - Disables auto memory for agents: shared knowledge lives in git (kb/), not per-machine memory.
 # - Accepts messages from other local sessions without an approval dialog (crossSessionInbound=accept):
 #   otherwise a message from a session in a different permission mode is held, and unattended agents stall.
@@ -39,7 +42,7 @@ BRANCH="agent/$AGENT"
 WT="$ROOT/.claude/worktrees/$AGENT"
 PERSONA="$ROOT/.claude/team/personas/$AGENT.md"
 MARKER="$STATE/session-$AGENT"
-MODE="${KRV_AGENT_PERMISSION_MODE:-default}"
+MODE="${KRV_AGENT_PERMISSION_MODE:-acceptEdits}"
 mkdir -p "$STATE"
 
 # A launch from inside another Claude session (e.g. the orchestrator running `team up`) must not leak that
@@ -58,6 +61,13 @@ if [ ! -d "$WT" ]; then
   else
     git -C "$ROOT" worktree add "$WT" -b "$BRANCH" origin/main
   fi
+fi
+
+# A worktree has no untracked, gitignored dependencies. Without these links every `.venv/bin/python` in a Verify
+# section fails inside an agent. Symlinks, not copies: one environment, nothing duplicated.
+[ -e "$WT/.venv" ] || { [ -d "$ROOT/.venv" ] && ln -s "$ROOT/.venv" "$WT/.venv"; }
+if [ "$AGENT" = "web" ] && [ ! -e "$WT/web/node_modules" ] && [ -d "$ROOT/web/node_modules" ]; then
+  ln -s "$ROOT/web/node_modules" "$WT/web/node_modules"
 fi
 
 cd "$ROOT"

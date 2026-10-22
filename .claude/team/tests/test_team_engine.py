@@ -273,7 +273,9 @@ for f in sorted(p for p in BIN.iterdir() if p.is_file()):
     expect(f"no --dangerously-skip-permissions in {f.name}", "dangerously-skip-permissions" not in txt, True)
     expect(f"no account switching in {f.name}", "CLAUDE_CONFIG_DIR" not in txt and "ACCOUNT2" not in txt, True)
 expect("account.sh is gone", (BIN / "account.sh").exists(), False)
-expect("start-agent.sh defaults to permission mode default", "KRV_AGENT_PERMISSION_MODE:-default" in (BIN / "start-agent.sh").read_text(), True)
+sa = (BIN / "start-agent.sh").read_text()
+expect("start-agent.sh defaults to acceptEdits", "KRV_AGENT_PERMISSION_MODE:-acceptEdits" in sa, True)
+expect("start-agent.sh links .venv into the worktree", 'ln -s "$ROOT/.venv"' in sa, True)
 expect("no SSW leftovers in bin", any("SSW_" in f.read_text() for f in BIN.iterdir() if f.is_file()), False)
 
 shutil.rmtree(T, ignore_errors=True)
