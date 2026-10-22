@@ -25,7 +25,7 @@ def get_volume() -> str:
 
 @skill(category="settings", danger=Danger.MODERATE)
 def set_volume(percent: int) -> str:
-    """Set the output volume.
+    """Set this computer's output volume. For the phone use phone_set_volume.
 
     Args:
         percent: Target volume, 0-100.

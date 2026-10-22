@@ -12,8 +12,8 @@ def more_tools(categories_wanted: list[str], _context=None) -> str:
     Only the skills for the topics you were shown are loaded. If the task needs
     something that is not among them, ask for that topic here instead of
     guessing or giving up. Topics: apps, browser, documents, files, games,
-    interact, llm, media, memory, notify, power, routines, schedule, settings,
-    shell, system, terminal, web, windows.
+    interact, llm, media, memory, notify, phone, power, routines, schedule,
+    settings, shell, system, terminal, web, windows.
 
     Args:
         categories_wanted: Topic names to add, from the list above.

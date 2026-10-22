@@ -85,6 +85,9 @@ CATEGORY_HINTS: dict[str, tuple[str, ...]] = {
         "lock", "log out", "logout", "battery", "power",
     ),
     "games": ("game", "steam", "play ", "launch", "gaming"),
+    # "battery" also routes to power (this computer's battery_status); a
+    # question about either battery should see both.
+    "phone": ("phone", "mobile", "flashlight", "torch", "battery"),
     "llm": (
         "model", "provider", "llm", "failover", "gemini", "cline",
         "openrouter", "novarouter",

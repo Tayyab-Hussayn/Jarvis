@@ -109,7 +109,7 @@ def fetch_page(url: str, max_chars: int = 4000) -> str:
 
 @skill(category="web", danger=Danger.MODERATE)
 def open_url(url: str, browser: str = "") -> str:
-    """Open a URL in the browser.
+    """Open a URL in the browser on this computer. For the phone use phone_open_url.
 
     Args:
         url: Where to go.
