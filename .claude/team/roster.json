@@ -93,10 +93,21 @@
         "requirements-linux.txt",
         "kb/modules/qa.md"
       ]
+    },
+    "android": {
+      "branch": "agent/android",
+      "persona": ".claude/team/personas/android.md",
+      "label": "agent:android",
+      "summary": "Kravein's Android companion app (Kotlin, Compose): toolchain, pairing, device commands, phone-side tests",
+      "owns": [
+        "brahma-connect-android/",
+        "android/",
+        "kb/modules/android.md"
+      ]
     }
   },
   "frozen": {
-    "_comment": "Nobody edits these (Windows-original tree, and the Android app until a task unfreezes it). Enforced by guard_edits.py.",
+    "_comment": "Nobody edits these (the Windows-original tree). Enforced by guard_edits.py and guard_bash.py.",
     "paths": [
       "main.py",
       "ui.py",
@@ -106,7 +117,6 @@
       "kravein_connect/",
       "dashboard/",
       "extra/",
-      "brahma-connect-android/",
       "core/",
       "auth/",
       "config/",
@@ -121,7 +131,7 @@
     ]
   },
   "models": {
-    "_comment": "Agents run Sonnet by default; mark a task 'Model: opus' when it touches safety.py, webauth.py, confirmation flow, concurrency, or a bug that already failed on Sonnet. Choose at task start (fresh session); never switch mid-task.",
+    "_comment": "Agents run Sonnet by default; mark a task 'Model: opus' when it touches safety.py, webauth.py, confirmation flow, concurrency, or a bug that already failed on Sonnet. Choose at task start (fresh session); never switch mid-task. The android agent may need Opus for the AGP 9 toolchain migration if Sonnet fails twice.",
     "orchestrator": "opus",
     "agent_default": "sonnet"
   }

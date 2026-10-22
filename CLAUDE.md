@@ -7,28 +7,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Renamed from **Brahma / Brahma-Echo** on 2026-08-24. Any surviving `brahma` name, import, path or
 string is a leftover, not a decision — replace it with `kravein` on sight rather than working
 around it. The `brahma-echo` XDG directories were migrated, and `config.py` still falls back to
-them; delete that fallback and the old paths once nothing is using them. The one deliberate
-exception is `brahma-connect-android/`, left untouched because its Java package move cannot be
-build-tested here.
+them; delete that fallback and the old paths once nothing is using them. The Android app
+(`brahma-connect-android/`, moving to `android/`) is renamed by the **android** agent now that it
+can be built here.
 
 ## How we work
 
 The owner writes Roman Urdu — reply in simple Roman Urdu with a clear recommendation. Code, docs,
 issues, PRs and commits are in English.
 
-**The team.** One **orchestrator** session (main checkout, `main`) and four module agents —
-**engine**, **skills**, **web**, **qa** — each its own Claude Code session in its own worktree
+**The team.** One **orchestrator** session (main checkout, `main`) and five module agents —
+**engine**, **skills**, **web**, **qa**, **android** — each its own Claude Code session in its own worktree
 (`.claude/worktrees/<name>` on `agent/<name>`). An agent edits only the paths it owns
 (`.claude/team/roster.json`, enforced by hooks) and reaches `main` only through a reviewed,
-squash-merged PR on the private GitHub remote. The Windows-original tree and
-`brahma-connect-android/` are **frozen** — nobody edits them until the roster unfreezes them.
+squash-merged PR on the private GitHub remote. The Windows-original tree is
+**frozen** — nobody edits it until the roster unfreezes it.
 Your SessionStart briefing says which role you are. Protocol: `.claude/rules/team-protocol.md`;
 overview: `kb/how-the-team-works.md`.
 
 **If you are the orchestrator:** your persona (`.claude/team/personas/orchestrator.md`) governs.
-Talk to the owner; for anything non-trivial brainstorm and plan with them (plan mode), then turn the
-plan into task packets (`/assign-task`). Review (`/review-pr`) and merge (`/merge-pr`); do not write
-module feature code. Run `/orient` at session start.
+Talk to the owner and take the product/architecture decisions with them; turn those into task
+packets (`/assign-task`: goal, acceptance criteria, constraints — not the implementation plan).
+Agents plan, code and test; you review (`/review-pr`), return findings, merge (`/merge-pr`) and
+improve the team system. Do not write module code, plans or tests for an agent. Run `/orient` at session start.
 
 **If you are a module agent:** the task packet *is* the approved plan — do not enter plan mode and do
 not wait for an owner "nod". Follow `/task-start` → work → `/verify` → `/ship-pr`. When the packet is

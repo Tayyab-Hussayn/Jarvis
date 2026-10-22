@@ -50,7 +50,7 @@ for name in [".claude", "kb", "CLAUDE.md", ".gitignore"]:
         shutil.copy(s, R / name)
 for f, c in {"kravein/agent.py": "x", "kravein/skills/a.py": "y", "docs/spec.md": "z", "src/main.kt": "m",
              "kb/state/project-state.md": "# v1\n", "kb/modules/engine.md": "e", "kb/modules/skills.md": "s",
-             "main.py": "win", "actions/a.py": "win", "brahma-connect-android/A.java": "j"}.items():
+             "main.py": "win", "actions/a.py": "win", "extra/A.java": "j"}.items():
     (R / f).parent.mkdir(parents=True, exist_ok=True)
     (R / f).write_text(c)
 sh(["git", "add", "-A"], R)
@@ -249,7 +249,7 @@ expect("unlisted path belongs to orchestrator", owner("docs/spec.md"), "orchestr
 
 print("== frozen paths ==")
 for name, path in [("main.py", "main.py"), ("actions/ prefix", "actions/a.py"),
-                   ("android dir", "brahma-connect-android/A.java")]:
+                   ("extra dir", "extra/A.java")]:
     c, o = edit(WT / path, agent="engine")
     expect(f"frozen: agent blocked on {name}", c == 2 and "frozen" in o and "roster.json" in o, True, o)
     c, o = edit(R / path, cwd=R)
@@ -271,7 +271,7 @@ expect("frozen: state dir still blocked for orchestrator", c, 2, o)
 print("== frozen paths via bash ==")
 for cmd, want in [
     ("sed -i 's/a/b/' main.py", 2), ("rm -f actions/a.py", 2), ("echo x > main.py", 2), ("echo x >>main.py", 2),
-    ("cp kravein/agent.py brahma-connect-android/A.java", 2), ("git rm actions/a.py", 2), ("mv main.py old.py", 2),
+    ("cp kravein/agent.py extra/A.java", 2), ("git rm actions/a.py", 2), ("mv main.py old.py", 2),
     ("cat main.py", 0), ("grep -n x actions/a.py", 0), ("cp main.py /tmp/x.py", 0), ("sed -n 1,5p main.py", 0),
     ("sed -i 's/a/b/' kravein/agent.py", 0), ("echo x > /tmp/main.py", 0), ("rm -f kravein/agent.pyc", 0),
 ]:

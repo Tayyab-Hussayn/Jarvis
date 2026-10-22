@@ -17,11 +17,11 @@ updated: 2026-10-22
 ## Next (see `pending.md`)
 - Run `tools/eval_models.py` off-vs-auto for tool routing; flip default if parity (needs live provider calls).
 - Claude provider; verify NovaRouter tool calling with the real schema.
-- Kravein Connect + `brahma-connect-android/` (frozen): secure the gateway, one capability vocabulary, first build (Android SDK/JDK 21 exist on this machine).
+- Android app (owner-approved 2026-10-22, agent `android`): 1) shared toolchain + rename + first build, 2) phone channel on `kravein serve --lan` (web; the old `kravein_connect` gateway is not revived), 3) app on the new protocol + one vocabulary + tests, 4) `phone_*` skills (skills).
 - Rename leftovers: `brahma` strings, XDG fallback in `config.py`.
 
 ## Open owner decisions
-- Flip `llm.tool_routing` to `auto`? Unfreeze Android? Both wait on evidence/owner call.
+- Flip `llm.tool_routing` to `auto`? Both wait on evidence/owner call.
 
 ## Blockers
 - None.

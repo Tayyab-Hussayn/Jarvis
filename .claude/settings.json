@@ -93,7 +93,9 @@
       "Bash(cut *)",
       "Bash(diff *)",
       "Bash(.venv/bin/python -m pyflakes*)",
-      "Bash(.venv/bin/python -m pytest --collect-only*)"
+      "Bash(.venv/bin/python -m pytest --collect-only*)",
+      "Bash(brahma-connect-android/gradlew *)",
+      "Bash(android/gradlew *)"
     ],
     "deny": [
       "Bash(git push --force*)",
