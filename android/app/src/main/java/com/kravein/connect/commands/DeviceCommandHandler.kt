@@ -3,68 +3,60 @@ package com.kravein.connect.commands
 import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ResolveInfo
+import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import androidx.core.content.ContextCompat
-import com.kravein.connect.core.KraveinConnectCapabilities
-import com.kravein.connect.core.CommandResult
 import com.kravein.connect.device.AndroidDeviceInfoProvider
+import com.kravein.connect.network.HelloInfo
+import com.kravein.connect.protocol.CommandResult
+import com.kravein.connect.protocol.ErrorCode
+import org.json.JSONObject
 
-class DeviceCommandHandler(private val context: Context) {
+/** Android glue for the phone commands. [CommandRouter] has already validated names and arguments. */
+class DeviceCommandHandler(private val context: Context) : DeviceBackend {
     private val infoProvider = AndroidDeviceInfoProvider(context)
 
-    fun handle(action: String, parameters: Map<String, Any?>): CommandResult {
-        return when (DeviceAction.fromWire(action)) {
-            DeviceAction.GET_DEVICE_INFO -> getDeviceInfo()
-            DeviceAction.GET_BATTERY -> getBattery()
-            DeviceAction.FLASHLIGHT_ON -> flashlight(true)
-            DeviceAction.FLASHLIGHT_OFF -> flashlight(false)
-            DeviceAction.LAUNCH_APP -> launchApp(parameters)
-            DeviceAction.OPEN_URL -> openUrl(parameters)
-            DeviceAction.VOLUME_GET -> volumeGet()
-            DeviceAction.VOLUME_SET -> volumeSet(parameters)
-            null -> CommandResult(false, errorCode = "UNKNOWN_COMMAND", error = "Unsupported command: $action")
-        }
+    fun helloInfo(deviceName: String) = HelloInfo(deviceName, Build.VERSION.RELEASE ?: "", appVersion())
+
+    private fun appVersion(): String = runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+    }.getOrNull().orEmpty()
+
+    override fun execute(action: DeviceAction, args: JSONObject): CommandResult = when (action) {
+        DeviceAction.GET_DEVICE_INFO -> getDeviceInfo()
+        DeviceAction.GET_BATTERY -> getBattery()
+        DeviceAction.FLASHLIGHT_ON -> flashlight(true)
+        DeviceAction.FLASHLIGHT_OFF -> flashlight(false)
+        DeviceAction.VOLUME_GET -> volumeGet()
+        DeviceAction.VOLUME_SET -> volumeSet(args.getInt("percent"))
+        DeviceAction.LAUNCH_APP -> launchApp(args.getString("app"))
+        DeviceAction.OPEN_URL -> openUrl(args.getString("url"))
     }
 
-    private fun getDeviceInfo(): CommandResult {
-        val battery = infoProvider.batterySnapshot()
-        return CommandResult(
-            success = true,
-            data = mapOf(
-                "device_id" to null,
-                "device_name" to (Build.MODEL ?: "Android"),
-                "platform" to "android",
-                "android_version" to (Build.VERSION.RELEASE ?: "Unknown"),
-                "agent_version" to "1.0.0",
-                "model" to (Build.MODEL ?: "Android"),
-                "battery" to battery.first,
-                "charging" to battery.second,
-                "wifi_state" to if (infoProvider.wifiEnabled()) "connected" else "disconnected",
-                "capabilities" to KraveinConnectCapabilities.INITIAL,
-            ),
-        )
-    }
+    private fun getDeviceInfo() = CommandResult(
+        true,
+        mapOf(
+            "model" to (Build.MODEL ?: "Android"),
+            "os_version" to (Build.VERSION.RELEASE ?: "Unknown"),
+            "app_version" to appVersion(),
+        ),
+    )
 
     private fun getBattery(): CommandResult {
-        val battery = infoProvider.batterySnapshot()
-        return CommandResult(true, data = mapOf("percentage" to battery.first, "charging" to battery.second))
+        val (percent, charging) = infoProvider.batterySnapshot()
+        return CommandResult(true, mapOf("percent" to percent, "charging" to charging))
     }
 
     private fun flashlight(enabled: Boolean): CommandResult {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            return CommandResult(
-                false,
-                errorCode = "CAMERA_PERMISSION_REQUIRED",
-                error = "Camera permission is required to control the flashlight.",
-            )
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            return CommandResult.failure(ErrorCode.PERMISSION_DENIED, "Camera permission is required to control the flashlight.")
         }
         val manager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
-            ?: return CommandResult(false, errorCode = "FLASHLIGHT_UNAVAILABLE", error = "Camera service unavailable.")
+            ?: return CommandResult.failure(ErrorCode.UNAVAILABLE, "Camera service unavailable.")
         val cameraId = manager.cameraIdList.firstOrNull { id ->
             runCatching {
                 val chars = manager.getCameraCharacteristics(id)
@@ -72,7 +64,7 @@ class DeviceCommandHandler(private val context: Context) {
                 val facing = chars.get(CameraCharacteristics.LENS_FACING)
                 flash && (facing == CameraCharacteristics.LENS_FACING_BACK || facing == CameraCharacteristics.LENS_FACING_EXTERNAL)
             }.getOrDefault(false)
-        } ?: return CommandResult(false, errorCode = "FLASHLIGHT_UNAVAILABLE", error = "No flashlight on this device.")
+        } ?: return CommandResult.failure(ErrorCode.UNAVAILABLE, "No flashlight on this device.")
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val maxStrength = runCatching {
@@ -86,101 +78,61 @@ class DeviceCommandHandler(private val context: Context) {
             } else {
                 manager.setTorchMode(cameraId, enabled)
             }
-            CommandResult(true, data = mapOf("flashlight" to if (enabled) "on" else "off"))
+            CommandResult(true, mapOf("flashlight" to if (enabled) "on" else "off"))
         } catch (security: SecurityException) {
-            CommandResult(false, errorCode = "FLASHLIGHT_UNAVAILABLE", error = security.message ?: "Flashlight permission denied.")
+            CommandResult.failure(ErrorCode.PERMISSION_DENIED, security.message ?: "Flashlight permission denied.")
         } catch (exc: Exception) {
-            CommandResult(false, errorCode = "FLASHLIGHT_UNAVAILABLE", error = exc.message ?: "Flashlight unavailable.")
+            CommandResult.failure(ErrorCode.UNAVAILABLE, exc.message ?: "Flashlight unavailable.")
         }
     }
 
-    private fun launchApp(parameters: Map<String, Any?>): CommandResult {
-        val requested = requestedApp(parameters)
-        if (requested.isBlank()) {
-            return CommandResult(false, errorCode = "INVALID_ARGUMENT", error = "App name or package name is required.")
+    private fun launchApp(requested: String): CommandResult {
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = runCatching { context.packageManager.queryIntentActivities(launcherIntent, 0) }
+            .getOrDefault(emptyList())
+            .map { AppEntry(it.loadLabel(context.packageManager)?.toString().orEmpty(), it.activityInfo.packageName) }
+
+        val packageName = when (val match = resolveApp(requested, apps)) {
+            is AppMatch.Found -> match.packageName
+            is AppMatch.Ambiguous -> {
+                val names = match.candidates.take(5).joinToString(", ") { "${it.label} (${it.packageName})" }
+                return CommandResult.failure(ErrorCode.INVALID_ARGS, "More than one app matches '$requested': $names. Use the package name.")
+            }
+            AppMatch.NotFound -> requested.takeIf { context.packageManager.getLaunchIntentForPackage(it) != null }
+                ?: return CommandResult.failure(ErrorCode.FAILED, "No installed app matches: $requested")
         }
-
-        val packageName = resolveLaunchablePackage(requested)
-            ?: requested.takeIf { context.packageManager.getLaunchIntentForPackage(it) != null }
-            ?: return CommandResult(false, errorCode = "APP_NOT_FOUND", error = "Package not found: $requested")
-
         val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-            ?: return CommandResult(false, errorCode = "APP_NOT_FOUND", error = "Package not found: $packageName")
+            ?: return CommandResult.failure(ErrorCode.FAILED, "Package not launchable: $packageName")
         return try {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
-            CommandResult(true, data = mapOf("package" to packageName, "app_name" to requested))
+            CommandResult(true, mapOf("package" to packageName))
         } catch (exc: Exception) {
-            CommandResult(false, errorCode = "APP_NOT_FOUND", error = exc.message ?: "Unable to launch app.")
+            CommandResult.failure(ErrorCode.FAILED, exc.message ?: "Unable to launch app.")
         }
     }
 
-    private fun resolveLaunchablePackage(requested: String): String? {
-        val normalizedRequested = normalizeAppQuery(requested)
-        if (normalizedRequested.isBlank()) return null
-
-        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val launchableApps = runCatching {
-            context.packageManager.queryIntentActivities(launcherIntent, 0)
-        }.getOrDefault(emptyList())
-
-        fun labelOf(info: ResolveInfo): String {
-            return info.loadLabel(context.packageManager)?.toString().orEmpty()
-        }
-
-        val exactMatch = launchableApps.firstOrNull { info ->
-            val label = normalizeAppQuery(labelOf(info))
-            val packageId = normalizeAppQuery(info.activityInfo.packageName)
-            normalizedRequested == label || normalizedRequested == packageId
-        }
-        if (exactMatch != null) return exactMatch.activityInfo.packageName
-
-        val containsMatch = launchableApps.firstOrNull { info ->
-            val label = normalizeAppQuery(labelOf(info))
-            val packageId = normalizeAppQuery(info.activityInfo.packageName)
-            label.contains(normalizedRequested) ||
-                normalizedRequested.contains(label) ||
-                packageId.contains(normalizedRequested) ||
-                normalizedRequested.contains(packageId)
-        }
-        return containsMatch?.activityInfo?.packageName
+    private fun openUrl(url: String): CommandResult = try {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        CommandResult(true, mapOf("url" to url))
+    } catch (exc: Exception) {
+        CommandResult.failure(ErrorCode.FAILED, exc.message ?: "Unable to open URL.")
     }
 
-    private fun openUrl(parameters: Map<String, Any?>): CommandResult {
-        val url = (parameters["url"] ?: parameters["link"])?.toString()?.trim().orEmpty()
-        if (url.isBlank()) {
-            return CommandResult(false, errorCode = "INVALID_ARGUMENT", error = "URL is required.")
-        }
-        return try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            CommandResult(true, data = mapOf("url" to url))
-        } catch (exc: Exception) {
-            CommandResult(false, errorCode = "OPEN_URL_FAILED", error = exc.message ?: "Unable to open URL.")
-        }
-    }
+    private fun audio() = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
     private fun volumeGet(): CommandResult {
-        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            ?: return CommandResult(false, errorCode = "AUDIO_UNAVAILABLE", error = "Audio service unavailable.")
+        val audio = audio() ?: return CommandResult.failure(ErrorCode.UNAVAILABLE, "Audio service unavailable.")
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val current = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-        val percentage = ((current * 100f) / max).toInt().coerceIn(0, 100)
-        return CommandResult(true, data = mapOf("stream" to "music", "percentage" to percentage, "current" to current, "max" to max))
+        return CommandResult(true, mapOf("percent" to ((current * 100f) / max).toInt().coerceIn(0, 100)))
     }
 
-    private fun volumeSet(parameters: Map<String, Any?>): CommandResult {
-        val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            ?: return CommandResult(false, errorCode = "AUDIO_UNAVAILABLE", error = "Audio service unavailable.")
-        if (parameters["value"] == null && parameters["percentage"] == null) {
-            return CommandResult(false, errorCode = "INVALID_ARGUMENT", error = "Volume value is required.")
-        }
-        val target = parseVolumeTarget(parameters)
-            ?: return CommandResult(false, errorCode = "INVALID_ARGUMENT", error = "Volume value must be numeric.")
+    private fun volumeSet(percent: Int): CommandResult {
+        val audio = audio() ?: return CommandResult.failure(ErrorCode.UNAVAILABLE, "Audio service unavailable.")
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        val clamped = target.coerceIn(0, 100)
-        val level = volumeLevel(clamped, max)
-        audio.setStreamVolume(AudioManager.STREAM_MUSIC, level, 0)
-        return CommandResult(true, data = mapOf("stream" to "music", "percentage" to clamped, "current" to level, "max" to max))
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, volumeLevel(percent, max), 0)
+        return CommandResult(true, mapOf("percent" to percent))
     }
 }

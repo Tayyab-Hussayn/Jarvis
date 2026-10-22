@@ -1,175 +1,93 @@
 package com.kravein.connect.core
 
-import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.time.Instant
-import java.util.UUID
 
 enum class ConnectionState {
     CONNECTING,
     CONNECTED,
     DISCONNECTED,
     RECONNECTING,
+
+    /** The server refused the stored credential (revoked or unknown). Reconnecting cannot fix it. */
+    NEEDS_PAIRING,
 }
 
-data class GatewayEndpoint(
-    val name: String,
-    val host: String,
-    val port: Int,
-    val online: Boolean = true,
-)
-
+/** What `POST /api/phone/offer` puts in the QR code. The code is single-use and expires, so it is never stored. */
 data class PairingOffer(
-    val service: String,
     val host: String,
     val port: Int,
-    val pairingToken: String,
-    val pairingCode: String,
-    val expiresInSeconds: Int,
-    val createdAt: String,
+    val code: String,
+    val expiresAt: Long,
 ) {
-    companion object {
-        fun fromJson(json: JSONObject): PairingOffer {
-            return PairingOffer(
-                service = json.optString("service"),
-                host = json.optString("host"),
-                port = json.optInt("port"),
-                pairingToken = json.optString("pairing_token"),
-                pairingCode = json.optString("pairing_code"),
-                expiresInSeconds = json.optInt("expires"),
-                createdAt = json.optString("created_at"),
-            )
-        }
+    // The code authorises pairing: keep it out of logs and crash reports.
+    override fun toString() = "PairingOffer(host=$host, port=$port, code=<redacted>, expiresAt=$expiresAt)"
+}
+
+sealed interface OfferParse {
+    data class Ok(val offer: PairingOffer) : OfferParse
+    data class Rejected(val reason: String) : OfferParse
+}
+
+object PairingOfferParser {
+    private const val SERVICE = "kravein"
+    private const val OFFER_VERSION = 1
+    private val HOST = Regex("^[A-Za-z0-9._-]{1,253}$")
+    private val IPV6 = Regex("^[0-9A-Fa-f:]{2,45}$")
+
+    /** The manual-entry form: same rules as a scanned code, so the host is checked the same way. */
+    fun fromParts(host: String, port: String, code: String, nowEpochSeconds: Long): OfferParse {
+        val number = port.trim().toIntOrNull() ?: return OfferParse.Rejected("The port must be a number.")
+        val raw = JSONObject()
+            .put("service", SERVICE).put("v", OFFER_VERSION)
+            .put("host", host.trim()).put("port", number).put("code", code.trim())
+            .put("expires_at", nowEpochSeconds + 120)
+            .toString()
+        return parse(raw, nowEpochSeconds)
     }
 
-    fun toJson(): JSONObject = JSONObject()
-        .put("service", service)
-        .put("host", host)
-        .put("port", port)
-        .put("pairing_token", pairingToken)
-        .put("pairing_code", pairingCode)
-        .put("expires", expiresInSeconds)
-        .put("created_at", createdAt)
+    /** Every field is required; an unusable QR code is rejected here with a reason the screen can show. */
+    fun parse(raw: String, nowEpochSeconds: Long): OfferParse {
+        if (raw.isBlank() || raw.length > 2048) return OfferParse.Rejected("That QR code is not a Kravein pairing code.")
+        val json = try {
+            JSONObject(raw)
+        } catch (_: JSONException) {
+            return OfferParse.Rejected("That QR code is not a Kravein pairing code.")
+        }
+        if (json.opt("service") != SERVICE) return OfferParse.Rejected("That QR code is not a Kravein pairing code.")
+        if (json.opt("v") != OFFER_VERSION) return OfferParse.Rejected("This pairing code is from a different Kravein version.")
+        val host = json.opt("host") as? String
+        // The host goes into a URL: refuse anything that could change where the request really goes.
+        if (host == null || !(HOST.matches(host) || IPV6.matches(host))) {
+            return OfferParse.Rejected("The pairing code has no usable PC address.")
+        }
+        val port = (json.opt("port") as? Int)?.takeIf { it in 1..65535 }
+            ?: return OfferParse.Rejected("The pairing code has no usable port.")
+        val code = (json.opt("code") as? String)?.takeIf { it.isNotBlank() && it.length <= 128 }
+            ?: return OfferParse.Rejected("The pairing code is incomplete.")
+        val expiresAt = when (val value = json.opt("expires_at")) {
+            is Int -> value.toLong()
+            is Long -> value
+            else -> return OfferParse.Rejected("The pairing code is incomplete.")
+        }
+        if (expiresAt <= nowEpochSeconds) {
+            return OfferParse.Rejected("This pairing code has expired. Show a new QR code on your PC and scan it again.")
+        }
+        return OfferParse.Ok(PairingOffer(host, port, code, expiresAt))
+    }
 }
 
 data class DeviceCredential(
     val deviceId: String,
     val deviceSecret: String,
     val deviceName: String,
-    val gatewayHost: String,
-    val gatewayPort: Int,
+    val host: String,
+    val port: Int,
     val pairedAt: String = Instant.now().toString(),
-)
-
-data class DeviceSnapshot(
-    val deviceId: String?,
-    val deviceName: String,
-    val platform: String = "android",
-    val androidVersion: String,
-    val agentVersion: String,
-    val batteryPercentage: Int,
-    val charging: Boolean,
-    val wifiEnabled: Boolean,
-    val capabilities: List<String>,
-    val permissions: List<String> = emptyList(),
-    val metadata: Map<String, Any?> = emptyMap(),
 ) {
-    fun toJson(): JSONObject = JSONObject()
-        .put("device_id", deviceId ?: JSONObject.NULL)
-        .put("device_name", deviceName)
-        .put("platform", platform)
-        .put("os_version", androidVersion)
-        .put("agent_version", agentVersion)
-        .put("battery", batteryPercentage)
-        .put("charging", charging)
-        .put("wifi_state", if (wifiEnabled) "connected" else "disconnected")
-        .put("capabilities", JSONArray(capabilities))
-        .put("permissions", JSONArray(permissions))
-        .put("metadata", JSONObject(metadata))
-}
+    /** The only place the secret is placed in a header. */
+    fun authorization(): String = "Device $deviceId:$deviceSecret"
 
-data class ChatMessage(
-    val id: String,
-    val role: String,
-    val text: String,
-    val timestamp: Long,
-    val status: String
-)
-
-data class CommandResult(
-    val success: Boolean,
-    val data: Map<String, Any?> = emptyMap(),
-    val errorCode: String? = null,
-    val error: String? = null,
-) {
-    fun toJson(): JSONObject {
-        val json = JSONObject()
-            .put("success", success)
-        if (data.isNotEmpty()) {
-            json.put("data", toJsonValue(data))
-        }
-        if (!errorCode.isNullOrBlank()) {
-            json.put("error_code", errorCode)
-        }
-        if (!error.isNullOrBlank()) {
-            json.put("error", error)
-        }
-        return json
-    }
-}
-
-object KraveinProtocol {
-    const val HELLO = "hello"
-    const val PAIR_REQUEST = "pair_request"
-    const val PAIR_APPROVED = "pair_approved"
-    const val AUTHENTICATE = "authenticate"
-    const val DEVICE_ONLINE = "device_online"
-    const val DEVICE_OFFLINE = "device_offline"
-    const val CAPABILITIES = "capabilities"
-    const val EXECUTE = "execute"
-    const val RESULT = "result"
-    const val EVENT = "event"
-    const val ERROR = "error"
-    const val PING = "ping"
-    const val PONG = "pong"
-    const val CHAT_MESSAGE = "chat_message"
-
-    fun envelope(type: String, payload: JSONObject = JSONObject(), requestId: String = UUID.randomUUID().toString().replace("-", "")): JSONObject {
-        return JSONObject()
-            .put("type", type)
-            .put("request_id", requestId)
-            .put("timestamp", Instant.now().toString())
-            .put("payload", payload)
-    }
-
-    fun hello(snapshot: DeviceSnapshot): JSONObject = envelope(
-        HELLO,
-        snapshot.toJson()
-    )
-
-    fun authenticate(credential: DeviceCredential): JSONObject = envelope(
-        AUTHENTICATE,
-        JSONObject()
-            .put("device_id", credential.deviceId)
-            .put("device_secret", credential.deviceSecret)
-    )
-
-    fun ping(): JSONObject = envelope(PING)
-
-    fun chatMessage(text: String): JSONObject = envelope(
-        CHAT_MESSAGE,
-        JSONObject().put("text", text)
-    )
-}
-
-fun toJsonValue(value: Any?): Any? {
-    return when (value) {
-        null -> JSONObject.NULL
-        is JSONObject -> value
-        is JSONArray -> value
-        is Map<*, *> -> JSONObject(value.entries.associate { (k, v) -> k.toString() to toJsonValue(v) })
-        is Iterable<*> -> JSONArray(value.map { toJsonValue(it) })
-        is Boolean, is Int, is Long, is Float, is Double, is String -> value
-        else -> value.toString()
-    }
+    override fun toString() = "DeviceCredential(deviceId=$deviceId, deviceName=$deviceName, host=$host, port=$port, secret=<redacted>)"
 }

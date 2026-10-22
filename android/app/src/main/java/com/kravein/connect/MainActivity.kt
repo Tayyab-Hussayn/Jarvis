@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
         if (granted || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             if (pendingServiceStart) {
                 pendingServiceStart = false
-                startGatewayService()
+                startPhoneService()
             }
         } else {
             pendingServiceStart = false
@@ -39,16 +39,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         storage = PairingStorage(this)
         AgentStateStore.setCredential(storage.loadCredential())
-        storage.loadGatewayHint()?.let {
-            AgentStateStore.setPairingOffer(it)
-            AgentStateStore.setGateway(
-                com.kravein.connect.core.GatewayEndpoint(
-                    name = "Kravein PC",
-                    host = it.host,
-                    port = it.port,
-                )
-            )
-        }
         maybeStartService()
         ensureCameraPermission()
         setContent {
@@ -67,8 +57,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun maybeStartService() {
-        val endpoint = AgentStateStore.gateway.value
-        if (endpoint != null || AgentStateStore.credential.value != null) {
+        if (AgentStateStore.credential.value != null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             ) {
@@ -76,7 +65,7 @@ class MainActivity : ComponentActivity() {
                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                 return
             }
-            startGatewayService()
+            startPhoneService()
         }
     }
 
@@ -86,9 +75,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startGatewayService() {
-        val endpoint = AgentStateStore.gateway.value
-        if (endpoint != null || AgentStateStore.credential.value != null) {
+    private fun startPhoneService() {
+        if (AgentStateStore.credential.value != null) {
             val intent = Intent(this, KraveinConnectForegroundService::class.java)
             ContextCompat.startForegroundService(this, intent)
         }

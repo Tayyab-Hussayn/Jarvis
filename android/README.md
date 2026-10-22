@@ -1,27 +1,10 @@
 # Kravein Connect Android
 
-Android agent for Kravein Connect.
+Companion app for Kravein: it pairs with `kravein serve --lan` by QR code and then answers the phone commands
+defined in `kravein/phone_protocol.json` (battery, flashlight, volume, launch app, open URL, device info).
 
-What this project is:
-- Native Android agent
-- WebSocket client for the existing Kravein Gateway
-- Minimal pairing and reconnect flow
-- First command set only
+- Pairing: `POST /phone/pair` with the code from the QR offer; the device credential is kept only in encrypted storage.
+- Connection: `WS /phone/ws` with `Authorization: Device <id>:<secret>`; reconnects with backoff, asks to pair again if refused.
+- One vocabulary: the app's command table is checked against the JSON by a unit test.
 
-What this project is not:
-- Not an AI assistant
-- Not a second dashboard
-- Not a cloud service
-- Not a Windows or Companion build
-
-Build requirements:
-- Android Studio or Android Gradle Plugin toolchain
-- JDK 17
-- Android SDK 35
-
-Phase scope:
-- Gateway discovery
-- QR pairing
-- Secure credential storage
-- Persistent WebSocket connection
-- Battery, flashlight, launch app, open URL, and volume commands
+Build and test: see `kb/modules/android.md` (Verify). JDK 21, Android SDK 36/37.

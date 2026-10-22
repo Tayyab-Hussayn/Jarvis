@@ -13,7 +13,8 @@ import androidx.core.app.NotificationCompat
 import com.kravein.connect.commands.DeviceCommandHandler
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
-import com.kravein.connect.network.KraveinWebSocketClient
+import com.kravein.connect.commands.CommandRouter
+import com.kravein.connect.network.PhoneClient
 import com.kravein.connect.pairing.PairingStorage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,13 +25,13 @@ import kotlinx.coroutines.flow.collect
 class KraveinConnectForegroundService : Service() {
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private lateinit var storage: PairingStorage
-    private lateinit var client: KraveinWebSocketClient
-    private var started = false
+    private lateinit var client: PhoneClient
 
     override fun onCreate() {
         super.onCreate()
         storage = PairingStorage(this)
-        client = KraveinWebSocketClient(this, storage, DeviceCommandHandler(this))
+        val handler = DeviceCommandHandler(this)
+        client = PhoneClient(CommandRouter(handler)) { handler.helloInfo(it.deviceName) }
         createNotificationChannel()
         try {
             val notification = buildNotification("Kravein Connect", "Starting connection")
@@ -61,27 +62,19 @@ class KraveinConnectForegroundService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
-            ACTION_SEND_CHAT -> {
-                val text = intent.getStringExtra(EXTRA_CHAT_TEXT)
-                if (!text.isNullOrBlank()) {
-                    client.sendChatMessage(text)
-                }
-                return START_STICKY
-            }
         }
         connectIfPossible()
         return START_STICKY
     }
 
     private fun connectIfPossible() {
-        val endpoint = AgentStateStore.gateway.value ?: return
         val credential = storage.loadCredential()
-        val offer = AgentStateStore.pairingOffer.value ?: storage.loadGatewayHint()
-        if (!started) {
-            started = true
+        if (credential == null) {
+            stopSelf()
+            return
         }
-        client.connect(endpoint, credential, offer)
-        AgentStateStore.setConnectionState(ConnectionState.CONNECTING)
+        AgentStateStore.setCredential(credential)
+        client.connect(credential)
     }
 
     private fun updateNotification() {
@@ -91,6 +84,7 @@ class KraveinConnectForegroundService : Service() {
             ConnectionState.CONNECTING -> "Connecting to Kravein"
             ConnectionState.RECONNECTING -> "Reconnecting"
             ConnectionState.DISCONNECTED -> "Disconnected"
+            ConnectionState.NEEDS_PAIRING -> "Pairing required"
         }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildNotification("Kravein Connect", text))
@@ -122,8 +116,6 @@ class KraveinConnectForegroundService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.kravein.connect.action.STOP"
-        const val ACTION_SEND_CHAT = "com.kravein.connect.action.SEND_CHAT"
-        const val EXTRA_CHAT_TEXT = "com.kravein.connect.extra.CHAT_TEXT"
         private const val CHANNEL_ID = "kravein_connect"
         private const val NOTIFICATION_ID = 4201
     }
