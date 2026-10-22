@@ -11,7 +11,7 @@ Precondition: `/verify` passed on the current HEAD and all work is committed.
 2. **Guard check.** `python3 .claude/team/bin/check_branch.py`
    - `ownership:` problem → you changed a file you do not own. Revert that change, then `/conflict-report` if you really need it.
    - `overlap:` problem → another open PR touches the same file. **Stop.** Run `/conflict-report`; do not push.
-3. **Push your branch only.** `git push -u origin agent/<you>` (never force).
+3. **Push your branch only.** `git push -u origin agent/<you>` (never force) — as its **own Bash call, with no pipe, `2>&1` or `&&`**. In auto mode each piece of a compound command must match an allow rule on its own; `| tail -1` matches none, so the whole push falls to the classifier, which denies it as publication. Same for `gh pr create` below.
 4. **Open the PR** against `main`, filling every section of `.github/pull_request_template.md`:
    ```bash
    gh pr create --base main --head agent/<you> --title "<module>: <outcome>" --body-file <tmpfile>

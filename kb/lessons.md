@@ -17,4 +17,5 @@ Corrections made during review. When the same lesson appears twice, turn it into
 | 2026-10-22 | #8 | qa | an empty `tests/web/` is not in git, so a Verify command naming it errors on a clean checkout | review fix |
 | 2026-10-22 | #8 | process | a session started as plain `claude` (no `crossSessionInbound: accept`) holds agent messages for approval; start the orchestrator with `start-lead.sh` | handoff note |
 | 2026-10-22 | #8 | process | owner: review fixes always go back to the delivering agent; the orchestrator never commits on an agent PR | yes — persona, `review-pr` |
+| 2026-10-22 | #13 | process | auto mode denied `git push … 2>&1 \| tail -1 && gh pr create` as publication: every subcommand of a compound must match an allow rule; run publishing commands alone | yes — `ship-pr`, team-protocol |
 | 2026-10-22 | — | process | (inherited) a guard checks before the command runs: commit and push in separate Bash calls | handoff note |
