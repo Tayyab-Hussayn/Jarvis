@@ -9,10 +9,10 @@ updated: 2026-10-22
 ## Done
 - Linux port `kravein/`: 161 skills, web UI (`kravein serve`), voice (local + Gemini Live), jobs/routines on a systemd tick, WhatsApp confirmation channel, LAN access, stop button.
 - 2026-10-19: opt-in tool routing (`llm.tool_routing`, default `off`) and `skill.unenforced` audit tripwire.
-- 2026-10-22: multi-agent workflow installed (engine, skills, web, qa).
+- 2026-10-22: multi-agent workflow installed (engine, skills, web, qa); agents default to acceptEdits; trial task #2 -> PR #4 merged (tests/engine/test_tool_routing.py).
 
 ## In flight
-- Nothing assigned yet. First trial task pending.
+- Nothing assigned. Engine idle after PR #4 (needs /sync-after-merge).
 
 ## Next (see `pending.md`)
 - Run `tools/eval_models.py` off-vs-auto for tool routing; flip default if parity (needs live provider calls).
