@@ -11,6 +11,12 @@ updated: 2026-10-22
 - Owner reads little: keep summaries short. Correct a bad request before implementing it.
 - Solo, local-first project; GitHub is a **private** remote (`Tayyab-Hussayn/Jarvis`). Confirm before the first push of a session.
 
+## Starting the orchestrator
+- Always start as the orchestrator with `.claude/team/bin/start-lead.sh` (persona appended, session named `orchestrator`, resumes `runtime/orchestrator-session`). A plain `claude` session has no persona and agents cannot reach it by name.
+
+## Approvals
+- The owner delegated routine agent approvals to the orchestrator (2026-10-22): read the pane, then `tmux send-keys -t kravein-team:<agent> 1`. Refuse list is in the persona.
+
 ## Routines
 - Review each PR in a separate worktree: `git fetch origin pull/N/head:review/pr-N && git worktree add .claude/worktrees/review-N review/pr-N`; run the module's Verify; clean up with `git worktree remove` + `git branch -D`.
 - Merge a local agent's PR with `gh pr merge N --squash` then `git push origin --delete agent/X`. **Never `--delete-branch`** (it removed a worktree under a running agent in the project this workflow came from).

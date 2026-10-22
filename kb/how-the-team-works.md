@@ -18,7 +18,7 @@ updated: 2026-10-22
 ## Everyday use (owner)
 | What | Command (run in the repository root) |
 |---|---|
-| Start/resume the orchestrator in foot | `.claude/team/bin/start-lead.sh` |
+| Start/resume the orchestrator | `.claude/team/bin/start-lead.sh` — always this, never plain `claude`: otherwise the persona and the `orchestrator` name are missing |
 | Start/resume agents (the orchestrator normally does this) | `.claude/team/bin/team up engine` · all: `team up` · stop one: `team stop engine` |
 | Look at the agents | `.claude/team/bin/team attach` — `Ctrl-b 1..4` switch window, `Ctrl-b d` detach |
 | Talk to one agent directly | `team attach engine`, then type |

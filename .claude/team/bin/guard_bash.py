@@ -11,7 +11,8 @@ import re
 import shlex
 import sys
 
-from team_lib import PROTECTED_STATE_MARKER, RUNTIME_MARKER, current_branch, git, load_roster, log_block, resolve_identity, unguard_until
+from team_lib import (PROTECTED_STATE_MARKER, RUNTIME_MARKER, current_branch, frozen_match, git, load_roster, log_block,
+                      resolve_identity, to_repo_relative, unguard_until)
 
 SEPARATORS = {";", "&&", "||", "|", "&", "(", ")", ";;"}
 VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}      # git global options taking a value
@@ -72,6 +73,41 @@ def targets_dir(tokens: list[str], marker: str) -> bool:
     return redirect or prog in WRITE_CAPABLE
 
 
+# Programs whose path arguments are all write targets, and those that write only to their last argument.
+WRITES_ALL_ARGS = {"rm", "mv", "touch", "tee", "truncate", "chmod", "chown", "unlink", "shred"}
+WRITES_LAST_ARG = {"cp", "install", "ln", "rsync"}
+
+
+def frozen_write_target(tokens: list[str], cwd: str) -> str | None:
+    """The first frozen roster path this simple command would write, if any.
+
+    Edit/Write are stopped by guard_edits.py; this closes the shell route (`sed -i`, `rm`, `> file`,
+    `cp x frozen/`, `git rm`). Reads of frozen files (cat, grep, cp *from* a frozen path) stay allowed.
+    """
+    targets: list[str] = []
+    for i, t in enumerate(tokens):                                   # redirections: `> f`, `>>f`, `2> f`
+        m = re.fullmatch(r"\d*>>?|&>>?", t)
+        if m and i + 1 < len(tokens):
+            targets.append(tokens[i + 1])
+        elif re.match(r"^(\d*>>?|&>>?)\S", t):
+            targets.append(re.sub(r"^(\d*>>?|&>>?)", "", t))
+    args = [t for t in without_redirects(tokens)[1:] if not t.startswith("-")]
+    prog = tokens[0].rsplit("/", 1)[-1] if tokens else ""
+    if prog in WRITES_ALL_ARGS:
+        targets += args
+    elif prog in WRITES_LAST_ARG and args:
+        targets.append(args[-1])
+    elif prog == "sed" and any(t.startswith("-i") or t == "--in-place" for t in tokens):
+        targets += args[1:]                                          # first non-option arg is the script
+    elif prog == "git" and git_subcommand(tokens)[0] in ("rm", "mv", "restore", "checkout", "clean"):
+        targets += [a for a in git_subcommand(tokens)[1] if not a.startswith("-")]
+    for t in targets:
+        rel = to_repo_relative(t, cwd)
+        if rel is not None and rel not in ("", ".") and frozen_match(rel):
+            return rel
+    return None
+
+
 def without_redirects(tokens: list[str]) -> list[str]:
     """Drop shell redirections (`> f`, `2>/dev/null`, `&>f`, `< f`) so they are never read as git arguments."""
     out, skip = [], False
@@ -125,6 +161,10 @@ def main() -> None:
             block(".claude/team/state/ is owner-only runtime state; only the owner changes it from a terminal.")
         if tokens and me != "orchestrator" and targets_dir(tokens, RUNTIME_MARKER):
             block("grants are written only by the orchestrator (`team grant`). Ask for one with /conflict-report.")
+        hit = frozen_write_target(tokens, cwd) if tokens else None
+        if hit:
+            block(f"'{hit}' is frozen (roster.json \"frozen\"): nobody writes it, orchestrator included. "
+                  "Edit roster.json to unfreeze it for a task.")
         names = [t.rsplit("/", 1)[-1] for t in tokens]
         if me != "orchestrator" and any(n == "team" and nxt in ("grant", "revoke") for n, nxt in zip(names, names[1:])):
             block("`team grant/revoke` is for the orchestrator. Ask for a grant with /conflict-report.")
@@ -139,6 +179,10 @@ def main() -> None:
     own_branch = roster["agents"][me]["branch"] if me != "orchestrator" else None
 
     for tokens in simple_commands(cmd):
+        hit = frozen_write_target(tokens, cwd) if tokens else None
+        if hit:
+            block(f"'{hit}' is frozen (roster.json \"frozen\"): nobody writes it, orchestrator included. "
+                  "Edit roster.json to unfreeze it for a task.")
         names = [t.rsplit("/", 1)[-1] for t in tokens]
         if any(n == "team" and nxt in ("unguard", "guard") for n, nxt in zip(names, names[1:])):
             block("`team unguard/guard` is owner-only; ask the owner to run it in a plain terminal.")

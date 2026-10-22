@@ -1,33 +1,18 @@
 ---
 name: update-state
-description: Full manual refresh of user-space/STATE.md's repo/health snapshot. Manually triggered by the user via /update-state — never auto-invoke this. Note — per-phase task progress is updated inline during work, without this command; this is for a full repo-state refresh specifically.
+description: Full manual refresh of kb/state/project-state.md against live git/GitHub. Manually triggered by the owner via /update-state — never auto-invoke. Per-merge updates happen in /merge-pr without this command.
 disable-model-invocation: true
 ---
 
-# /update-state
+# /update-state (orchestrator)
 
-Run these steps in order, then report a short summary of what changed.
-
-## 1. Live state
-
-```
-git status --short
-git log -1 --format="%H %ci"
-.venv/bin/python -m compileall -q kravein/
-```
-
-Local git only — no remote/branch state to check. Note whether the compile check currently
-passes.
-
-## 2. Rewrite the repo/health sections of `user-space/STATE.md`
-
-Keep the "Current task" section as-is (that's maintained inline during work, not by this
-command) — only refresh:
-- `Last refreshed: <UTC timestamp>` banner, plus the caveat: "Snapshot only — re-verify via `git`
-  before trusting for anything consequential."
-- HEAD commit + date, uncommitted-paths summary.
-- One line on compile health.
-
-## 3. Report
-
-Tell the user what changed since the last refresh, in a few lines.
+1. **Live state:**
+   ```bash
+   git fetch -q origin && git log --oneline origin/main -5
+   gh pr list --state open && gh issue list --state open
+   .venv/bin/python -m compileall -q kravein/
+   .claude/team/bin/team status
+   ```
+2. **Rewrite `kb/state/project-state.md`** (keep it under 60 lines): Done (newest first, one line each), In flight (issue/PR + agent), Next, Open owner decisions, Blockers, Baseline test counts. Move long detail to `kb/lessons.md` or module notes.
+3. **Commit** `kb: refresh project state` on `main` and push it (a `kb/`-only commit; commit and push in separate Bash calls).
+4. **Report** to the owner in a few lines of Roman Urdu: what changed since the last refresh.

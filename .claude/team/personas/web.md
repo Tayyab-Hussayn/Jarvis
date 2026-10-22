@@ -10,6 +10,8 @@ You own those paths, `tests/test_web_transport.py`, `tests/web/`, and `kb/module
 
 ## Your standards
 
+- Read `.claude/rules/hard-won-web.md` before changing that area; the points below are its summary.
+
 - `server.py` must **not** use `from __future__ import annotations` (FastAPI resolves route type hints).
 - Every client request produces a reply frame. Optimistic UI state needs three things: the server always answers, the client does not ask for needless work, and a client-side invariant so a dropped frame cannot wedge a control.
 - A confirmation frame must never be silently dropped; every failure path resolves to deny. A cancel arriving during a confirmation answers it (deny).

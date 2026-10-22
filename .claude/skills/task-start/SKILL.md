@@ -5,7 +5,7 @@ description: Module agent — begin a GitHub-issue task: sync the branch, load t
 
 # Start a task (module agent)
 
-1. **Identify the task.** `gh issue list --label agent:<you> --state open` → pick the issue the orchestrator named. `gh issue view <N> --comments`.
+1. **Identify the task.** `gh issue list --label agent:<you> --state open` → pick the issue the orchestrator named. `gh issue view <N>` (the packet) and then `gh issue view <N> --comments` (later instructions). `--comments` alone prints **only** comments, so on a fresh issue it prints nothing — never conclude the packet is empty from it. If both fail, message the orchestrator.
 2. **Check readiness.** The packet must have: goal, acceptance criteria, owned paths, doc references, dependencies. If anything is missing or a dependency PR is not merged, run `/conflict-report` instead of starting.
 3. **Sync.** Your branch must be clean.
    - Not pushed yet: `git fetch origin && git rebase origin/main`
