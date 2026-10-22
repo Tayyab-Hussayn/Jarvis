@@ -95,7 +95,10 @@
       "Bash(.venv/bin/python -m pyflakes*)",
       "Bash(.venv/bin/python -m pytest --collect-only*)",
       "Bash(brahma-connect-android/gradlew *)",
-      "Bash(android/gradlew *)"
+      "Bash(android/gradlew *)",
+      "Read(~/code/smart-sticky-wallpaper/**)",
+      "Read(~/Android/Sdk/**)",
+      "Read(~/.gradle/**)"
     ],
     "deny": [
       "Bash(git push --force*)",
