@@ -5,7 +5,7 @@ description: Orchestrator — squash-merge a reviewed, verified PR, notify its a
 
 # Merge a pull request (orchestrator)
 
-Precondition: `/review-pr` passed; CI (when present) is green; the PR's files are all owned by its agent.
+Precondition: `/review-pr` passed on the **latest** commit; the PR does not carry `status:changes-requested`; CI (when present) is green; the PR's files are all owned by its agent.
 
 1. Merge: `gh pr merge <n> --squash` (subject `<module>: <outcome> (#<n>)`), then `git push origin --delete agent/<name>`. Do **not** pass `--delete-branch`: it removes the local branch and the worktree under a running agent.
 2. Notify the author: `SendMessage` to the agent: `PR #<n> merged. Run /sync-after-merge, then /task-start for #<next>` (or "no new task yet").

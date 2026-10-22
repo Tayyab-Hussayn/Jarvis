@@ -18,4 +18,4 @@ Precondition: `/verify` passed on the current HEAD and all work is committed.
    ```
    Write the body to a temp file first. It is your report: what changed and why, verification evidence, tests added, doc references, risks, follow-ups. Include `Closes #<issue>`.
 5. **Notify.** `SendMessage` to `orchestrator`: `PR #<n> ready for review: <title> (closes #<issue>)`.
-6. **Wait.** Answer review questions; push fixes as new commits (no force). Do not start code for the next task until the orchestrator confirms the merge.
+6. **Wait.** Answer review questions. If the orchestrator returns findings (PR comment + label `status:changes-requested`): fix every numbered finding on your branch as new commits (no force), run `/verify`, push, `gh pr edit <n> --remove-label status:changes-requested`, and `SendMessage` the orchestrator `PR #<n> fixed: <findings addressed>` with the new verification counts. Do not start code for the next task until the orchestrator confirms the merge.
