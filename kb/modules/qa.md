@@ -11,7 +11,7 @@ updated: 2026-10-22
 
 ## Verify
 ```bash
-.venv/bin/python -m pytest tests/engine tests/skills tests/web tests/test_web_transport.py -q   # 428
+.venv/bin/python -m pytest tests/engine tests/skills tests/test_web_transport.py -q   # 428 (add tests/web once it has a file)
 bash -n install-linux.sh
 ```
 
