@@ -13,8 +13,7 @@ updated: 2026-10-22
 ## Verify
 ```bash
 .venv/bin/python -m compileall -q kravein/
-.venv/bin/python -m pytest tests/engine -q          # your new tests
-.venv/bin/python -m pytest tests/test_linux_port.py -q   # legacy suite, must stay green (314)
+.venv/bin/python -m pytest tests/engine -q          # 248: safety, registry, llm, agent loop, cline, novarouter, voice, jobs, routines, whatsapp, audit, routing
 ```
 
 ## Gotchas

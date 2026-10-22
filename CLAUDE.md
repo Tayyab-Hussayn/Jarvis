@@ -65,9 +65,8 @@ Everything runs from the venv; there is no global install.
 
 ```bash
 ./install-linux.sh                          # venv + native tool check + optional systemd unit
-.venv/bin/python -m pytest tests/test_linux_port.py -q     # the legacy suite (314 tests)
-.venv/bin/python -m pytest tests/test_linux_port.py::test_name -q   # single test
-.venv/bin/python -m pytest tests/engine tests/skills tests/web -q   # per-module suites
+.venv/bin/python -m pytest tests/engine tests/skills tests/test_web_transport.py -q   # main suite (428 tests)
+.venv/bin/python -m pytest tests/engine/test_safety.py::test_name -q   # single test
 python3 .claude/team/tests/test_team_engine.py   # team guards (122)
 .claude/team/bin/team status                 # agents, worktrees, guard blocks
 .venv/bin/python -m compileall -q kravein/   # fast syntax check
