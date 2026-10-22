@@ -72,8 +72,15 @@ fi
 # A worktree has no untracked, gitignored dependencies. Without these links every `.venv/bin/python` in a Verify
 # section fails inside an agent. Symlinks, not copies: one environment, nothing duplicated.
 [ -e "$WT/.venv" ] || { [ -d "$ROOT/.venv" ] && ln -s "$ROOT/.venv" "$WT/.venv"; }
-if [ "$AGENT" = "web" ] && [ ! -e "$WT/web/node_modules" ] && [ -d "$ROOT/web/node_modules" ]; then
-  ln -s "$ROOT/web/node_modules" "$WT/web/node_modules"
+# web gets its own node_modules, not a link: Turbopack refuses a node_modules that resolves outside the
+# project root, so `npm run build` failed in the web worktree (PR #20). `npm ci --prefer-offline` installs
+# from the lockfile out of the shared ~/.npm cache; an older symlink is replaced (unlink touches only the link).
+if [ "$AGENT" = "web" ] && [ -f "$WT/web/package-lock.json" ]; then
+  [ -L "$WT/web/node_modules" ] && unlink "$WT/web/node_modules"
+  if [ ! -d "$WT/web/node_modules" ]; then
+    ( cd "$WT/web" && npm ci --prefer-offline --no-audit --no-fund --loglevel=error ) \
+      || echo "warning: npm ci failed in $WT/web; run it there by hand" >&2
+  fi
 fi
 
 cd "$ROOT"
