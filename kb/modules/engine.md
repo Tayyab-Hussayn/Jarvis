@@ -19,3 +19,4 @@ updated: 2026-10-22
 ## Gotchas
 - Tests stub all three providers; breaker tests monkeypatch `config.STATE_DIR`. See `CLAUDE.md` "Testing conventions".
 - Tool routing is pinned by `tests/engine/test_tool_routing.py` (default off, only `auto` enables, fail-open, `more_tools` edge cases, byte-stable tool list between rounds).
+- `serve --lan` address choice is `cli._pick_lan_host`: explicit `--host` must be a held private address; several candidates and no `--host` → refuse and list (never `addresses[0]`). Pinned by `tests/engine/test_serve_lan_host.py`.
