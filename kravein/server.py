@@ -34,7 +34,7 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from . import audit, config, events, registry, webauth
+from . import audit, config, events, phone, registry, webauth
 from .agent import Agent
 from .platform import detect
 from .safety import confirmer_scope
@@ -49,6 +49,14 @@ WEB_DIST = Path(__file__).resolve().parent / "web-dist"
 # The Next dev server, allowed as an Origin so `npm run dev` can talk to a
 # locally running backend without disabling the check outright.
 DEV_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
+
+
+def _is_phone_path(path: str) -> bool:
+    return path == "/phone" or path.startswith("/phone/")
+
+
+def _is_loopback(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1") or host.startswith("127.")
 
 
 def _unauthorized(detail: str = "Invalid or missing token"):
@@ -70,6 +78,10 @@ def create_app(token: str | None = None) -> Any:
     expected = token or webauth.issue_token()
     app = FastAPI(title="Kravein", docs_url=None, redoc_url=None)
     app.state.token = expected
+    # The address a phone should dial, set by `serve()`. Unset under tests and
+    # behind the dev server, where the request's own Host is used instead.
+    app.state.public_host = None
+    app.state.public_port = None
 
     # -- guards ----------------------------------------------------------
 
@@ -79,6 +91,11 @@ def create_app(token: str | None = None) -> Any:
             return JSONResponse({"detail": "Bad Host"}, status_code=400)
         if not webauth.origin_allowed(request.headers.get("origin"), DEV_ORIGINS):
             return JSONResponse({"detail": "Bad Origin"}, status_code=403)
+        if _is_phone_path(request.url.path) and request.headers.get("origin"):
+            # Phones never send Origin; browsers always do on cross-site POSTs
+            # and on every websocket handshake. Refusing any Origin here means
+            # no web page, not even our own, can drive the phone endpoints.
+            return JSONResponse({"detail": "Phone endpoints refuse browsers"}, status_code=403)
         return await call_next(request)
 
     def require_token(request: Request) -> None:
@@ -223,6 +240,94 @@ def create_app(token: str | None = None) -> Any:
         config.save_settings(merged)
         audit.record("web.settings_updated", keys=sorted(patch.keys()))
         return {"settings": _redacted_settings()}
+
+    # -- phone channel: owner-side management (browser token) -------------
+
+    @app.post("/api/phone/offer", dependencies=auth)
+    def api_phone_offer(request: Request) -> dict[str, Any]:
+        host = app.state.public_host or (request.url.hostname or "127.0.0.1")
+        port = app.state.public_port or (request.url.port or DEFAULT_PORT)
+        offer = phone.create_offer(host, port)
+        # A phone cannot reach a loopback address. Say so instead of handing
+        # out a QR that can never work.
+        return {"offer": offer, "reachable_from_lan": not _is_loopback(host)}
+
+    @app.get("/api/phones", dependencies=auth)
+    def api_phones() -> dict[str, Any]:
+        return {"devices": phone.list_devices()}
+
+    @app.delete("/api/phones/{device_id}", dependencies=auth)
+    def api_phone_revoke(device_id: str) -> dict[str, Any]:
+        if not phone.revoke(device_id):
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Unknown device")
+        return {"revoked": device_id}
+
+    # -- phone channel: the phone's side (device credential, never the token)
+
+    @app.post("/phone/pair")
+    async def phone_pair(request: Request) -> Any:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            return JSONResponse({"detail": "Expected a JSON object"}, status_code=400)
+        try:
+            credential = phone.redeem_offer(body.get("code"), body.get("device_name"))
+        except phone.PhoneError as exc:
+            return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=403)
+        return credential
+
+    @app.websocket("/phone/ws")
+    async def phone_ws(socket: WebSocket) -> None:
+        headers = socket.headers
+        # The HTTP middleware does not see websocket handshakes, so the same
+        # checks are repeated here, all before accept().
+        if not webauth.host_allowed(headers.get("host")) or headers.get("origin"):
+            await socket.close(code=1008)
+            return
+        device = phone.authenticate(headers.get("authorization"))
+        if device is None:
+            await socket.close(code=1008)
+            return
+
+        await socket.accept()
+        link = phone.PhoneLink(device, asyncio.get_running_loop())
+        phone.attach(link)
+
+        async def pump() -> None:
+            while True:
+                payload = await link.next_frame()
+                if payload is None:
+                    # Revoked, replaced, protocol mismatch or oversized frame.
+                    with contextlib.suppress(Exception):
+                        await socket.close(code=1008)
+                    return
+                await socket.send_text(json.dumps(payload))
+
+        pump_task = asyncio.create_task(pump())
+        reason = "disconnected"
+        try:
+            while not link.closed:
+                message = await socket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+                text = message.get("text")
+                if text is None:
+                    text = (message.get("bytes") or b"").decode("utf-8", "replace")
+                link.handle_text(text)
+        except Exception as exc:  # a broken socket must still fail pending calls
+            reason = f"socket error: {type(exc).__name__}"
+        finally:
+            phone.detach(link, reason)
+            # Let the pump deliver the final error frame and close, then stop it.
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(pump_task, timeout=1.0)
+            pump_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await pump_task
 
     # -- websocket -------------------------------------------------------
 
@@ -1073,6 +1178,8 @@ def serve(
     # first request that asks.
     prime_cpu_counters()
     app = create_app(token)
+    app.state.public_host = reachable
+    app.state.public_port = port
 
     print(f"Kravein web UI on {url}")
     print(f"Token stored at {webauth.token_path()}")

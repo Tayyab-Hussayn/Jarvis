@@ -1,0 +1,121 @@
+{
+  "protocol": 1,
+  "about": "The single definition of the Kravein phone channel. kravein/phone.py validates every frame against this file; the Android app implements exactly this. A capability name IS a command name - there is no second vocabulary.",
+  "max_frame_bytes": 65536,
+  "envelope": {
+    "type": {"type": "string", "required": true},
+    "request_id": {"type": "string", "required": true, "max_length": 64},
+    "payload": {"type": "object", "required": true}
+  },
+  "frames": {
+    "hello": {
+      "direction": "phone_to_server",
+      "about": "First frame after the socket opens. Answered by welcome or error.",
+      "payload": {
+        "protocol": {"type": "integer", "required": true},
+        "capabilities": {"type": "list_of_commands", "required": true},
+        "device_name": {"type": "string", "required": false, "max_length": 80},
+        "os_version": {"type": "string", "required": false, "max_length": 40},
+        "app_version": {"type": "string", "required": false, "max_length": 40}
+      }
+    },
+    "welcome": {
+      "direction": "server_to_phone",
+      "about": "Reply to hello. request_id echoes the hello.",
+      "payload": {
+        "protocol": {"type": "integer", "required": true},
+        "device_id": {"type": "string", "required": true},
+        "server_name": {"type": "string", "required": true}
+      }
+    },
+    "execute": {
+      "direction": "server_to_phone",
+      "about": "Run one command. The phone must answer with result carrying the same request_id.",
+      "payload": {
+        "command": {"type": "command", "required": true},
+        "args": {"type": "object", "required": true}
+      }
+    },
+    "result": {
+      "direction": "phone_to_server",
+      "about": "Answer to execute. ok=false carries error_code and error.",
+      "payload": {
+        "ok": {"type": "boolean", "required": true},
+        "data": {"type": "object", "required": false},
+        "error_code": {"type": "error_code", "required": false},
+        "error": {"type": "string", "required": false, "max_length": 500}
+      }
+    },
+    "ping": {
+      "direction": "both",
+      "about": "Liveness. Always answered by pong with the same request_id.",
+      "payload": {}
+    },
+    "pong": {
+      "direction": "both",
+      "payload": {}
+    },
+    "error": {
+      "direction": "both",
+      "about": "Reply to a frame that could not be accepted. request_id echoes it when known.",
+      "payload": {
+        "code": {"type": "error_code", "required": true},
+        "message": {"type": "string", "required": true, "max_length": 500}
+      }
+    }
+  },
+  "error_codes": [
+    "malformed_frame",
+    "unknown_frame",
+    "unknown_command",
+    "unknown_capability",
+    "invalid_args",
+    "protocol_mismatch",
+    "not_ready",
+    "unknown_request",
+    "frame_too_large",
+    "permission_denied",
+    "unavailable",
+    "failed"
+  ],
+  "commands": {
+    "get_device_info": {
+      "about": "Model, OS version, app version.",
+      "args": {}
+    },
+    "get_battery": {
+      "about": "Battery percentage and charging state.",
+      "args": {}
+    },
+    "flashlight_on": {
+      "about": "Turn the torch on.",
+      "args": {}
+    },
+    "flashlight_off": {
+      "about": "Turn the torch off.",
+      "args": {}
+    },
+    "volume_get": {
+      "about": "Media volume as a percentage.",
+      "args": {}
+    },
+    "volume_set": {
+      "about": "Set media volume.",
+      "args": {
+        "percent": {"type": "integer", "required": true, "min": 0, "max": 100}
+      }
+    },
+    "launch_app": {
+      "about": "Open an installed app by package name or label.",
+      "args": {
+        "app": {"type": "string", "required": true, "max_length": 200}
+      }
+    },
+    "open_url": {
+      "about": "Open an http(s) URL in the phone's browser.",
+      "args": {
+        "url": {"type": "url", "required": true, "max_length": 2000}
+      }
+    }
+  }
+}
