@@ -81,27 +81,48 @@
   "commands": {
     "get_device_info": {
       "about": "Model, OS version, app version.",
-      "args": {}
+      "args": {},
+      "result": {
+        "model": {"type": "string", "required": true, "max_length": 100},
+        "os_version": {"type": "string", "required": true, "max_length": 40},
+        "app_version": {"type": "string", "required": true, "max_length": 40}
+      }
     },
     "get_battery": {
       "about": "Battery percentage and charging state.",
-      "args": {}
+      "args": {},
+      "result": {
+        "percent": {"type": "integer", "required": true, "min": 0, "max": 100},
+        "charging": {"type": "boolean", "required": true}
+      }
     },
     "flashlight_on": {
       "about": "Turn the torch on.",
-      "args": {}
+      "args": {},
+      "result": {
+        "flashlight": {"type": "string", "required": true, "values": ["on", "off"]}
+      }
     },
     "flashlight_off": {
       "about": "Turn the torch off.",
-      "args": {}
+      "args": {},
+      "result": {
+        "flashlight": {"type": "string", "required": true, "values": ["on", "off"]}
+      }
     },
     "volume_get": {
       "about": "Media volume as a percentage.",
-      "args": {}
+      "args": {},
+      "result": {
+        "percent": {"type": "integer", "required": true, "min": 0, "max": 100}
+      }
     },
     "volume_set": {
       "about": "Set media volume.",
       "args": {
+        "percent": {"type": "integer", "required": true, "min": 0, "max": 100}
+      },
+      "result": {
         "percent": {"type": "integer", "required": true, "min": 0, "max": 100}
       }
     },
@@ -109,11 +130,17 @@
       "about": "Open an installed app by package name or label.",
       "args": {
         "app": {"type": "string", "required": true, "max_length": 200}
+      },
+      "result": {
+        "package": {"type": "string", "required": true, "max_length": 200}
       }
     },
     "open_url": {
       "about": "Open an http(s) URL in the phone's browser.",
       "args": {
+        "url": {"type": "url", "required": true, "max_length": 2000}
+      },
+      "result": {
         "url": {"type": "url", "required": true, "max_length": 2000}
       }
     }

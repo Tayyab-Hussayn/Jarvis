@@ -12,7 +12,7 @@ updated: 2026-10-22
 
 ## Verify
 ```bash
-.venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 42 + 87
+.venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 74 + 87
 cd web && npm run build
 .venv/bin/python tools/check_layout.py     # only when the UI changed
 ```
@@ -26,6 +26,7 @@ The Android app is a device Kravein controls. It connects to the same server and
 - **Connect:** `WS /phone/ws` with `Authorization: Device <id>:<secret>`, checked before `accept()`. The browser `Bearer` token is refused there, and a device credential is refused on `/ws` and `/api/*`.
 - **Instead of Origin:** any `/phone/*` request that **carries** `Origin` is refused (403, or the websocket closes). Browsers always send it on websocket handshakes and cross-site POSTs, and phones never do.
 - **Frames:** phone `hello{protocol, capabilities}` → `welcome` · server `execute{command,args}` → phone `result{ok,data | error_code,error}` (or `error`) · `ping`→`pong` · bad frame → `error{code,message}`. A frame over 64 KiB → error, then close. A late or invented `result` gets `error unknown_request`.
+- **Result shapes:** every command declares `result` (the fields of `data`, same field specs as `args`, plus `values` for a fixed set) in the JSON. On `ok:true` the server checks `data` strictly (missing, wrong type, out of range, unexpected field) and a mismatch raises `PhoneBadResult` (`code="bad_result"`, audited as `phone.bad_result` with the reason only, never the data). The socket stays up. A failed result (`ok:false`) is not checked against it. A new command must add its `result`, or `test_protocol_file_is_self_consistent` fails. The app's `PhoneProtocolJsonTest` only reads `args`, so it does not compare `result` yet.
 - **API:** `phone.call(command, args, device=None, timeout=15)` blocks and returns `data` or raises a `PhoneError` subclass: not connected, ambiguous (several phones and no name: it refuses and lists them, never picks the first), rejected, timeout, disconnected, or failed. A drop, revoke or replacing connection fails pending calls at once. It only works inside the `kravein serve` process. Calling it on the event-loop thread raises. State-changing commands still need `safety.enforce()` in the calling skill.
 - **No TLS** (risk accepted for now): the secret crosses the LAN in plain text on every connect, the same exposure as the browser token under `--lan`. WPA home network only. Follow-up: a self-signed cert with its fingerprint pinned in the QR.
 
