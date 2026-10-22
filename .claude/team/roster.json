@@ -68,13 +68,15 @@
       "branch": "agent/web",
       "persona": ".claude/team/personas/web.md",
       "label": "agent:web",
-      "summary": "Next.js frontend and the web transport (FastAPI server, websocket events, token/Origin/Host auth)",
+      "summary": "Next.js frontend and the web transport (FastAPI server, websocket events, token/Origin/Host auth), and the phone channel (pairing, device frames) the Android app connects to",
       "owns": [
         "web/",
         "kravein/web-dist/",
         "kravein/server.py",
         "kravein/events.py",
         "kravein/webauth.py",
+        "kravein/phone_protocol.json",
+        "kravein/phone.py",
         "tests/test_web_transport.py",
         "tests/web/",
         "kb/modules/web.md"
