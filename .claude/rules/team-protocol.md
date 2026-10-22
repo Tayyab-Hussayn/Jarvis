@@ -51,6 +51,11 @@ Guards exist to prevent mistakes, not to stop correct work. If a guard blocks yo
 
 When the orchestrator announces a shutdown: finish the current tool call, commit work-in-progress locally on your branch with a `wip:` message (do not push unfinished work), reply `ready`, and stop. Your conversation, worktree, and branch are kept; `team up` resumes you.
 
+## Tools and approvals
+
+- Create and change files with the **Write/Edit tools**, never with shell heredocs or `echo >` — hooks and the permission system see them as edits and approve them cleanly, and a heredoc trips "expansion obfuscation" prompts.
+- If a permission prompt appears, wait: the orchestrator is delegated by the owner to approve routine prompts inside your ownership. Do not ask the owner and do not retry variations.
+
 ## Communication
 
 - Formal record lives on GitHub: task = issue, report = PR description, conflict = `type:conflict` issue.

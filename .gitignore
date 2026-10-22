@@ -57,3 +57,10 @@ web/.next/
 web/out/
 # Built static export, produced by `npm run build` in web/
 kravein/web-dist/
+
+# Agent team: per-machine state (worktrees, runtime, guard log, local settings)
+.claude/worktrees/
+.claude/team/runtime/
+.claude/team/state/
+.claude/settings.local.json
+.claude/agent-memory-local/
