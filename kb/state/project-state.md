@@ -13,7 +13,7 @@ updated: 2026-10-22
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
-- Phone channel merged #20. Open: #21 engine `serve --lan --host` first-match bug; #22 TLS follow-up (after the app works end to end).
+- #24 android: app on the new phone channel + one vocabulary. #21 engine: `serve --lan --host` first-match bug. #22 TLS follow-up (later). web/qa/skills stopped.
 
 ## Next (see `pending.md`)
 - Run `tools/eval_models.py` off-vs-auto for tool routing; flip default if parity (needs live provider calls).
