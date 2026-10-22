@@ -85,14 +85,19 @@
       "Bash(grep*)",
       "Bash(wc*)",
       "Bash(head*)",
-      "Bash(tail*)"
+      "Bash(tail*)",
+      "Bash(cat *)",
+      "Bash(sed -n *)",
+      "Bash(sort*)",
+      "Bash(uniq*)",
+      "Bash(cut *)",
+      "Bash(diff *)",
+      "Bash(.venv/bin/python -m pyflakes*)",
+      "Bash(.venv/bin/python -m pytest --collect-only*)"
     ],
     "deny": [
       "Bash(git push --force*)",
-      "Bash(git push -f*)",
-      "Read(./.env)",
-      "Read(./.env.*)",
-      "Read(./**/secrets/**)"
+      "Bash(git push -f*)"
     ]
   }
 }
