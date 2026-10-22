@@ -14,5 +14,5 @@ description: Orchestrator — create a complete task packet as a GitHub issue fo
    The packet must contain: goal, acceptance criteria (checklist), owned paths the work touches, read-only inputs (docs with section names), dependencies (issue/PR numbers), out of scope, verification expected.
 4. **Choose the model** and write it in the packet: `sonnet` by default; `opus` for `safety.py`, `webauth.py`, the confirmation flow, concurrency/threading, or a task that already failed on Sonnet. Start the agent for this task in a fresh session with that model: `team stop <agent>` (if running), then `team up --fresh --model <m> <agent>`. Only one or two agents should be active at once.
 5. **Grant cross-module paths up front** if the task needs them and no other agent's open work touches them: `.claude/team/bin/team grant <agent> <path> <hours> <issue>`. List the grant in the task packet.
-6. **Notify:** `SendMessage` to the agent's session name: `New task #<n>: <title>. Run /task-start.`
+6. **Notify:** start the agent with the task already in hand — `team up [--fresh] [--model m] --task <n> <agent>` — so nothing waits on the session to come up. If the agent is already running, `SendMessage` it: `New task #<n>: <title>. Run /task-start.`
 7. **Record** the assignment in the "In flight" list of `kb/state/project-state.md`.
