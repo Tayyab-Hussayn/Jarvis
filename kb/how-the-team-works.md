@@ -47,7 +47,7 @@ Agent needs a file it does not own, or a file another open PR changes → **stop
 ## Guard levels
 | Level | What | Why |
 |---|---|---|
-| **Frozen paths** | roster `frozen.paths` (Windows-original tree, `brahma-connect-android/`) are writable by nobody, orchestrator included | untouched on purpose; edit the roster to unfreeze for a task |
+| **Frozen paths** | roster `frozen.paths` (Windows-original tree) are writable by nobody, orchestrator included | untouched on purpose; edit the roster to unfreeze for a task |
 | **Hard, always** | force-push · push to `main` · push to another agent's branch · agents merging/approving/closing PRs · deleting `main` or another agent's branch · writing owner overrides or grants | irreversible or bypasses review — correct work never needs these |
 | **Hard, with a grant path** | editing files outside your ownership | prevents cross-agent conflicts; the orchestrator can `team grant` a path for one task instead of making the agent wait |
 | **Left to git** | switching to `main`, deleting a branch in use | git itself refuses inside worktrees |
