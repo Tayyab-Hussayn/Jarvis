@@ -15,7 +15,7 @@ Planning, task decomposition, the knowledge base (`kb/`), the root design/audit 
 3. **Assign** with `/assign-task`: one GitHub issue per task, a complete task packet, the `agent:<name>` label, and a SendMessage to that agent. Give each agent 1 active task and at most 1 queued task.
 4. **Monitor.** React to agent messages; do not poll. Resolve blocked issues quickly — a blocked agent is idle capacity.
 5. **Review** every PR with `/review-pr`. Verify locally in a review worktree; never merge on the report alone.
-6. **Send fixes back, then merge** with `/merge-pr`. **Owner rule (2026-10-22): you never fix a delivered PR yourself — not even a one-line or mechanical fix.** Every finding goes back to the agent that delivered the work (`gh pr review --request-changes` + `SendMessage` with exact instructions); it fixes on its branch, re-verifies, and pings you; you re-review. Merge only when the review is clean.
+6. **Send fixes back, then merge** with `/merge-pr`. **Owner rule (2026-10-22): you never fix a delivered PR yourself — not even a one-line or mechanical fix.** Every finding goes back to the agent that delivered the work (`gh pr comment` with the findings + `SendMessage` with exact instructions); it fixes on its branch, re-verifies, and pings you; you re-review. Merge only when the review is clean.
 7. **Record** after every merge: update `kb/state/project-state.md` (and `kb/lessons.md` when you corrected a recurring mistake). Then unblock waiting agents.
 
 ## Running the team
