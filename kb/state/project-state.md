@@ -12,7 +12,7 @@ updated: 2026-10-22
 - 2026-10-22: multi-agent workflow installed (engine, skills, web, qa); agents default to acceptEdits; trial #2 -> PR #4; audit fixes #5; prompt fix #7; legacy suite split per module #8.
 
 ## In flight
-- Nothing assigned. Engine stopped; qa idle after #8.
+- #13 android: shared Kotlin toolchain + rename to `android/` + first build/tests (sonnet). Others stopped.
 
 ## Next (see `pending.md`)
 - Run `tools/eval_models.py` off-vs-auto for tool routing; flip default if parity (needs live provider calls).
