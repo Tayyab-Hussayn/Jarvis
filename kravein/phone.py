@@ -94,6 +94,13 @@ class PhoneCommandFailed(PhoneError):
     """The phone ran the command and reported a failure."""
 
 
+class PhoneBadResult(PhoneError):
+    """The phone said ``ok`` but its ``data`` does not match the command's
+    ``result`` spec. Callers never see data the protocol does not describe."""
+
+    code = "bad_result"
+
+
 class ProtocolError(Exception):
     """An inbound frame that cannot be accepted. Answered with an ``error`` frame."""
 
@@ -166,6 +173,8 @@ def _check_value(name: str, spec: dict[str, Any], value: Any, code: str) -> None
         raise ProtocolError(code, f"{name} must be {kind}")
     if isinstance(value, str) and "max_length" in spec and len(value) > spec["max_length"]:
         raise ProtocolError(code, f"{name} is longer than {spec['max_length']}")
+    if "values" in spec and value not in spec["values"]:
+        raise ProtocolError(code, f"{name} must be one of {spec['values']}")
     if kind == "integer":
         if "min" in spec and value < spec["min"]:
             raise ProtocolError(code, f"{name} is below {spec['min']}")
@@ -201,6 +210,20 @@ def validate_command(command: str, args: dict[str, Any] | None) -> dict[str, Any
     except ProtocolError as exc:
         raise PhoneCommandRejected(str(exc), code=exc.code) from None
     return args
+
+
+def validate_result(command: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Check a phone's ``result.data`` against the command's ``result`` spec.
+
+    Strict like every other frame: a missing field, a wrong type, an out of
+    range value or an unexpected field is a :class:`PhoneBadResult`.
+    """
+    spec = protocol()["commands"][command]["result"]
+    try:
+        _check_fields(f"{command} result", spec, data, "bad_result")
+    except ProtocolError as exc:
+        raise PhoneBadResult(f"phone returned a malformed {command} result: {exc}") from None
+    return data
 
 
 def parse_frame(text: str, *, inbound: bool = True) -> tuple[str, str, dict[str, Any]]:
@@ -586,7 +609,20 @@ class PhoneLink:
             if frame_type == "error":
                 pending.error = PhoneCommandFailed(payload["message"], code=payload["code"])
             elif payload["ok"]:
-                pending.result = payload.get("data") or {}
+                data = payload.get("data") or {}
+                try:
+                    validate_result(pending.command, data)
+                except PhoneBadResult as exc:
+                    # Fail the caller, not the socket: one bad answer does not
+                    # make the phone untrustworthy for other commands, but its
+                    # data must never reach a skill unchecked.
+                    audit.record(
+                        "phone.bad_result", device_id=self.device_id,
+                        command=pending.command, reason=str(exc)[:200],
+                    )
+                    pending.error = exc
+                else:
+                    pending.result = data
             else:
                 pending.error = PhoneCommandFailed(
                     payload.get("error") or f"{pending.command} failed on the phone",

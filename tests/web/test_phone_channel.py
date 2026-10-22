@@ -130,6 +130,10 @@ def test_protocol_file_is_self_consistent():
     for name, spec in proto["commands"].items():
         for arg, f in spec["args"].items():
             assert f["type"] in known_types, (name, arg)
+        # Every command pins what it returns, so no skill sees unchecked data.
+        assert "result" in spec, f"{name} has no result spec"
+        for field, f in spec["result"].items():
+            assert f["type"] in known_types, (name, field)
     # One vocabulary: the old category names are not commands.
     for category in ("battery", "flashlight", "volume", "media", "apps", "wifi_state"):
         assert category not in proto["commands"]
@@ -539,9 +543,10 @@ def test_two_phones_without_a_name_is_ambiguous(client):
 
         caller = _Caller("get_battery", device="galaxy", timeout=5)
         execute = _recv(wb)
-        _send(wb, "result", execute["request_id"], ok=True, data={"percent": 80})
+        _send(wb, "result", execute["request_id"], ok=True,
+              data={"percent": 80, "charging": False})
         caller.join()
-        assert caller.result == {"percent": 80}
+        assert caller.result == {"percent": 80, "charging": False}
 
 
 def test_call_from_the_event_loop_thread_raises_instead_of_deadlocking():
@@ -553,3 +558,113 @@ def test_call_from_the_event_loop_thread_raises_instead_of_deadlocking():
             link.request("get_battery", {}, timeout=5)
 
     asyncio.run(inside_loop())
+
+
+# ---------------------------------------------------------------------------
+# Result shapes
+# ---------------------------------------------------------------------------
+
+# One valid answer per command, exactly what the app returns today.
+VALID_RESULTS = {
+    "get_device_info": {"model": "Pixel 9", "os_version": "15", "app_version": "1.0.0"},
+    "get_battery": {"percent": 55, "charging": True},
+    "flashlight_on": {"flashlight": "on"},
+    "flashlight_off": {"flashlight": "off"},
+    "volume_get": {"percent": 40},
+    "volume_set": {"percent": 30},
+    "launch_app": {"package": "org.mozilla.firefox"},
+    "open_url": {"url": "https://example.com"},
+}
+CALL_ARGS = {
+    "volume_set": {"percent": 30},
+    "launch_app": {"app": "firefox"},
+    "open_url": {"url": "https://example.com"},
+}
+
+
+def _answer(client, command, data, expect_error=False):
+    """Connect a phone, call `command`, answer with `data`; return the caller."""
+    cred = _pair(client)
+    with client.websocket_connect("/phone/ws", headers=_device_headers(cred)) as ws:
+        _hello(ws)
+        caller = _Caller(command, CALL_ARGS.get(command), timeout=5)
+        execute = _recv(ws)
+        _send(ws, "result", execute["request_id"], ok=True, data=data)
+        caller.join()
+        if expect_error:
+            # The socket survives a bad answer; only that call fails.
+            _send(ws, "ping", "p1")
+            assert _recv(ws)["type"] == "pong"
+    return caller
+
+
+def test_every_command_has_a_valid_example():
+    assert set(VALID_RESULTS) == set(phone.command_names())
+
+
+@pytest.mark.parametrize("command", sorted(VALID_RESULTS))
+def test_valid_result_is_returned(client, command):
+    caller = _answer(client, command, VALID_RESULTS[command])
+    assert caller.error is None and caller.result == VALID_RESULTS[command]
+
+
+@pytest.mark.parametrize("command", sorted(VALID_RESULTS))
+def test_empty_result_is_a_bad_result(client, command):
+    caller = _answer(client, command, {}, expect_error=True)
+    assert isinstance(caller.error, phone.PhoneBadResult), caller.error
+    assert caller.result is None
+    assert caller.error.code == "bad_result"
+    assert "missing" in str(caller.error)
+
+
+def test_missing_field_is_a_bad_result(client, isolated):
+    caller = _answer(client, "get_battery", {"percent": 55}, expect_error=True)
+    assert isinstance(caller.error, phone.PhoneBadResult)
+    assert "charging" in str(caller.error)
+    assert any(e == "phone.bad_result" for e, _ in isolated)
+    # The caller never sees the half answer.
+    assert caller.result is None
+
+
+@pytest.mark.parametrize("command, data", [
+    ("get_battery", {"percent": "55", "charging": True}),          # string for int
+    ("get_battery", {"percent": 55, "charging": "yes"}),           # string for bool
+    ("get_battery", {"percent": True, "charging": True}),          # bool is not an int
+    ("get_battery", {"percent": 101, "charging": True}),           # out of range
+    ("get_battery", {"percent": -1, "charging": True}),
+    ("volume_get", {"percent": 40.5}),                             # float
+    ("flashlight_on", {"flashlight": "blinking"}),                 # not an allowed value
+    ("flashlight_off", {"flashlight": True}),
+    ("get_device_info", {"model": 1, "os_version": "15", "app_version": "1"}),
+    ("launch_app", {"package": "x" * 201}),                        # too long
+    ("open_url", {"url": "javascript:alert(1)"}),                  # not http(s)
+])
+def test_wrong_type_or_range_is_a_bad_result(client, command, data):
+    caller = _answer(client, command, data, expect_error=True)
+    assert isinstance(caller.error, phone.PhoneBadResult), (command, data, caller.error)
+    assert caller.result is None
+
+
+def test_unexpected_extra_field_is_a_bad_result(client):
+    caller = _answer(client, "volume_get", {"percent": 40, "muted": False}, expect_error=True)
+    assert isinstance(caller.error, phone.PhoneBadResult)
+    assert "muted" in str(caller.error)
+
+
+def test_failure_result_is_not_checked_against_the_success_shape(client):
+    cred = _pair(client)
+    with client.websocket_connect("/phone/ws", headers=_device_headers(cred)) as ws:
+        _hello(ws)
+        caller = _Caller("get_battery", timeout=5)
+        execute = _recv(ws)
+        _send(ws, "result", execute["request_id"], ok=False,
+              error_code="unavailable", error="no battery service")
+        caller.join()
+    assert isinstance(caller.error, phone.PhoneCommandFailed)
+    assert caller.error.code == "unavailable"
+
+
+def test_bad_result_does_not_leak_the_data_into_the_audit_log(client, isolated):
+    _answer(client, "launch_app", {"package": "x" * 201, "secret_note": "hunter2"},
+            expect_error=True)
+    assert "hunter2" not in json.dumps(isolated)
