@@ -17,8 +17,8 @@ updated: 2026-10-22
 ## Review fixes
 - **Owner rule (2026-10-22): never fix a delivered PR yourself.** Every review finding, however small, goes back to the delivering agent: `gh pr comment` + label `status:changes-requested` + SendMessage; it fixes, removes the label, pings; re-review. Out-of-scope problems become new issues. `gh pr list --label status:changes-requested` shows what is back with agents. (PR #8 had an orchestrator `review:` commit — that is no longer allowed.)
 
-## Approvals
-- The owner delegated routine agent approvals to the orchestrator (2026-10-22): read the pane, then `tmux send-keys -t kravein-team:<agent> 1`. Refuse list is in the persona.
+## Approvals and monitoring
+- Agents run in `auto` mode (2026-10-22). Owner: **do not poll/watch panes with shell loops — it wastes tokens.** Wait for agent messages / idle notices.
 
 ## Routines
 - Review each PR in a separate worktree: `git fetch origin pull/N/head:review/pr-N && git worktree add .claude/worktrees/review-N review/pr-N`; run the module's Verify; clean up with `git worktree remove` + `git branch -D`.

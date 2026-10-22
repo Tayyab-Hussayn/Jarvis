@@ -8,10 +8,10 @@
 # - Model policy (roster.json "models"): Sonnet by default; Opus for hard tasks.
 #   Pick the model at task start: a different model on resume discards the prompt cache once.
 # - Appends the agent persona to Claude Code's default system prompt (does not replace it).
-# - Permission mode defaults to `acceptEdits`: edits and common file commands need no prompt, because the
-#   ownership hooks (guard_edits/guard_bash) are what actually bound an agent, not a dialog. Everything else
-#   (arbitrary shell, network) still prompts unless listed in .claude/settings.json permissions.allow.
-#   Set KRV_AGENT_PERMISSION_MODE=default for the strictest mode. Never `bypassPermissions`.
+# - Permission mode defaults to `auto`: a classifier approves routine commands and blocks risky ones, so an
+#   unattended agent does not stall on a prompt nobody is watching (acceptEdits stalled on every read-only
+#   compound and the orchestrator had to babysit panes, burning tokens). The ownership/frozen/git hooks still
+#   run on every call. Set KRV_AGENT_PERMISSION_MODE=acceptEdits or default to be stricter. Never `bypassPermissions`.
 # - Disables auto memory for agents: shared knowledge lives in git (kb/), not per-machine memory.
 # - Accepts messages from other local sessions without an approval dialog (crossSessionInbound=accept):
 #   otherwise a message from a session in a different permission mode is held, and unattended agents stall.
@@ -42,7 +42,7 @@ BRANCH="agent/$AGENT"
 WT="$ROOT/.claude/worktrees/$AGENT"
 PERSONA="$ROOT/.claude/team/personas/$AGENT.md"
 MARKER="$STATE/session-$AGENT"
-MODE="${KRV_AGENT_PERMISSION_MODE:-acceptEdits}"
+MODE="${KRV_AGENT_PERMISSION_MODE:-auto}"
 mkdir -p "$STATE"
 
 # A launch from inside another Claude session (e.g. the orchestrator running `team up`) must not leak that
