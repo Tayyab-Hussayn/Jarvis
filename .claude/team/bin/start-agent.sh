@@ -29,12 +29,13 @@ if ! python3 -c "import json,sys; sys.exit(0 if sys.argv[1] in json.load(open(sy
   exit 1
 fi
 
-FRESH=0; MODEL="$(cfg agent_default sonnet)"; ACCOUNT=""
+FRESH=0; MODEL="$(cfg agent_default sonnet)"; ACCOUNT=""; TASK=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --fresh) FRESH=1; shift ;;
     --model) MODEL="$2"; shift 2 ;;
     --account) ACCOUNT="${2:?--account needs a value}"; shift 2 ;;
+    --task) TASK="${2:?--task needs an issue number}"; shift 2 ;;
     *) break ;;
   esac
 done
@@ -83,6 +84,16 @@ if [ "$AGENT" = "web" ] && [ -f "$WT/web/package-lock.json" ]; then
   fi
 fi
 
+# The Android build reads the SDK from local.properties or ANDROID_HOME. This machine exports
+# ANDROID_HOME/ANDROID_SDK_ROOT as /opt/android-sdk, which holds only sdkmanager, so a fresh worktree
+# could not build until someone wrote local.properties by hand. Point both at the shared SDK.
+if [ "$AGENT" = "android" ] && [ -d "$HOME/Android/Sdk" ]; then
+  export ANDROID_HOME="$HOME/Android/Sdk" ANDROID_SDK_ROOT="$HOME/Android/Sdk"
+  if [ -d "$WT/android" ] && [ ! -e "$WT/android/local.properties" ]; then
+    echo "sdk.dir=$HOME/Android/Sdk" > "$WT/android/local.properties"
+  fi
+fi
+
 cd "$ROOT"
 export KRV_AGENT="$AGENT"
 COMMON=(--worktree "$AGENT" --append-system-prompt-file "$PERSONA" --permission-mode "$MODE"
@@ -96,6 +107,13 @@ try_launch() {
   if [ $rc -ne 0 ] && [ $(( $(date +%s) - start )) -lt 10 ]; then return 10; fi
   return $rc
 }
+
+# --task N starts the agent already holding its assignment. A SendMessage sent right after `team up`
+# found no session yet (it was still starting, e.g. during npm ci) and the orchestrator had to wait.
+if [ -n "$TASK" ]; then
+  case "$TASK" in *[!0-9]*) echo "--task needs an issue number" >&2; exit 1 ;; esac
+  set -- "$@" "New task #$TASK assigned by the orchestrator. Run /sync-after-merge if your branch is behind origin/main, then /task-start for #$TASK. SendMessage the orchestrator when the PR is up, when blocked, or after 3 failed attempts."
+fi
 
 if [ "$FRESH" = 0 ] && [ -f "$MARKER" ]; then
   try_launch "${COMMON[@]}" --resume "$AGENT" --name "$AGENT" "$@" && exit 0 || rc=$?

@@ -13,7 +13,7 @@ updated: 2026-10-22
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
-- #27 web: pin result shapes in `phone_protocol.json` (needed before `phone_*` skills). #22 TLS later. Others stopped.
+- Result shapes pinned #28. Next: `phone_*` skills (skills). #22 TLS later.
 
 ## Next (see `pending.md`)
 - Run `tools/eval_models.py` off-vs-auto for tool routing; flip default if parity (needs live provider calls).
