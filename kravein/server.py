@@ -34,7 +34,7 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from . import audit, config, events, phone, registry, webauth
+from . import audit, config, events, phone, registry, safety, webauth
 from .agent import Agent
 from .platform import detect
 from .safety import confirmer_scope
@@ -57,6 +57,9 @@ def _is_phone_path(path: str) -> bool:
 
 def _is_loopback(host: str) -> bool:
     return host in ("127.0.0.1", "localhost", "::1") or host.startswith("127.")
+
+
+_POLICY_KEYS = frozenset({"confirmation_mode", "allow_destructive"})
 
 
 def _unauthorized(detail: str = "Invalid or missing token"):
@@ -235,11 +238,49 @@ def create_app(token: str | None = None) -> Any:
         patch = await request.json()
         if not isinstance(patch, dict):
             raise _unauthorized("Expected a JSON object")
+        # The confirmation policy has exactly one write path
+        # (/api/safety/policy), which goes through safety.set_confirmation_mode.
+        # A generic write here would skip that, and a non-object `safety` would
+        # replace the whole section and silently drop a "decline".
+        if "safety" in patch:
+            section = patch["safety"]
+            if not isinstance(section, dict) or _POLICY_KEYS & set(section):
+                return JSONResponse(
+                    {"detail": "The confirmation policy is changed with /api/safety/policy"},
+                    status_code=400,
+                )
         current = config.load_settings()
         merged = _deep_merge(current, patch)
         config.save_settings(merged)
         audit.record("web.settings_updated", keys=sorted(patch.keys()))
         return {"settings": _redacted_settings()}
+
+    # -- confirmation policy (ask / decline / auto-approve) -----------------
+
+    @app.get("/api/safety/policy", dependencies=auth)
+    def api_policy() -> dict[str, Any]:
+        return safety.confirmation_policy()
+
+    @app.post("/api/safety/policy", dependencies=auth)
+    async def api_policy_set(request: Request) -> Any:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            return JSONResponse({"detail": "Expected a JSON object"}, status_code=400)
+        seconds = body.get("seconds")
+        # bool is an int in Python; "seconds": true must not mean one second.
+        if seconds is not None and (isinstance(seconds, bool) or not isinstance(seconds, int)):
+            return JSONResponse({"detail": "seconds must be a whole number"}, status_code=400)
+        try:
+            return safety.set_confirmation_mode(body.get("mode"), seconds, by="web")
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    @app.post("/api/safety/auto/off", dependencies=auth)
+    def api_policy_auto_off() -> dict[str, Any]:
+        return safety.disable_auto_approve(by="web")
 
     # -- phone channel: owner-side management (browser token) -------------
 

@@ -22,6 +22,7 @@ import { AppsView } from "@/components/AppsView";
 import { BrainView } from "@/components/BrainView";
 import { Console } from "@/components/Console";
 import { ControlView } from "@/components/ControlView";
+import { AutoBanner } from "@/components/AutoBanner";
 import { FilesView } from "@/components/FilesView";
 import { HabitsView } from "@/components/HabitsView";
 import { JobsView } from "@/components/JobsView";
@@ -41,6 +42,7 @@ import { WindowsView } from "@/components/WindowsView";
 import type { SkillInfo, StateSnapshot, SystemSnapshot } from "@/lib/protocol";
 import { isVoiceLive } from "@/lib/protocol";
 import { useResource } from "@/lib/useApi";
+import { usePolicy } from "@/lib/usePolicy";
 import { useKravein } from "@/lib/useKravein";
 
 const IDS = new Set<string>(VIEWS.map((view) => view.id));
@@ -102,6 +104,7 @@ export default function Page() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railExpanded, setRailExpanded] = useState(false);
 
+  const policy = usePolicy();
   const skills = useResource<{ skills: SkillInfo[] }>("/api/skills");
   const state = useResource<StateSnapshot>("/api/state");
   // Polled once here and shared with the top bar, so every screen shows the
@@ -194,6 +197,8 @@ export default function Page() {
           onToggleVoice={() => (isVoiceLive(voicePhase) ? stopVoice() : selectVoice())}
         />
 
+        <AutoBanner policy={policy} />
+
         <div className="flex min-h-0 flex-1 overflow-hidden">
         <main className="min-h-0 flex-1 overflow-hidden">
           <div
@@ -254,7 +259,7 @@ export default function Page() {
             {view === "screen" && <ScreenView run={run} />}
             {view === "activity" && <ActivityView />}
             {view === "brain" && <BrainView run={run} />}
-            {view === "settings" && <SettingsView />}
+            {view === "settings" && <SettingsView policy={policy} />}
           </div>
         </main>
 
