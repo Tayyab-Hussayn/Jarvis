@@ -27,6 +27,7 @@ import { HabitsView } from "@/components/HabitsView";
 import { JobsView } from "@/components/JobsView";
 import { Palette } from "@/components/Palette";
 import { ScreenView } from "@/components/ScreenView";
+import { PhonesView } from "@/components/PhonesView";
 import { SettingsView } from "@/components/SettingsView";
 import {
   ConfirmOverlay,
@@ -249,6 +250,7 @@ export default function Page() {
             {view === "files" && <FilesView run={run} />}
             {view === "apps" && <AppsView run={run} />}
             {view === "control" && <ControlView run={run} system={system.data} />}
+            {view === "phones" && <PhonesView />}
             {view === "screen" && <ScreenView run={run} />}
             {view === "activity" && <ActivityView />}
             {view === "brain" && <BrainView run={run} />}

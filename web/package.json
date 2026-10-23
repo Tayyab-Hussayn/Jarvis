@@ -7,10 +7,12 @@
     "build": "next build && rm -rf ../kravein/web-dist && cp -r out ../kravein/web-dist",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --test lib/",
     "build:only": "next build"
   },
   "dependencies": {
     "next": "16.3.2",
+    "qrcode-generator": "^2.0.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-markdown": "^10.1.0",

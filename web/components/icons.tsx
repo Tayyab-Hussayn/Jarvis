@@ -25,6 +25,7 @@ export type IconName =
   | "activity"
   | "brain"
   | "settings"
+  | "phones"
   | "search"
   | "close"
   | "refresh"
@@ -107,6 +108,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <circle cx="12" cy="12" r="3" />
       <path d="M12 5V3M12 21v-2M5 12H3M21 12h-2M7.4 7.4 6 6M18 18l-1.4-1.4M16.6 7.4 18 6M6 18l1.4-1.4" />
+    </>
+  ),
+  phones: (
+    <>
+      <rect x="7" y="2" width="10" height="20" rx="2" />
+      <path d="M11 18h2" />
     </>
   ),
   settings: (
