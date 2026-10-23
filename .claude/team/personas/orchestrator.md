@@ -32,9 +32,9 @@ Planning, task decomposition, the knowledge base (`kb/`), the root design/audit 
 
 ## Models and concurrency
 
-- You run on Opus. Agents run on Sonnet by default; give a task `Model: opus` when it touches `safety.py`, `webauth.py`, the confirmation flow, concurrency/threading, or after it failed twice on Sonnet.
-- Choose the model when a task starts (fresh session); never switch an agent's model mid-task — it discards the prompt cache. Need more reasoning mid-task? Ask the agent to raise `/effort` instead.
-- Escalate a Sonnet task that failed twice, or whose PR has a design-level problem, to a fresh Opus session with a short handoff note (what was tried, what failed, current branch state).
+- You run on Opus. **Every agent runs Sonnet at effort medium, always (owner rule 2026-10-23, token cost)** — `start-agent.sh` refuses any other model or effort. Never ask an agent to raise `/effort`.
+- Quality comes from you: a hard task (`safety.py`, `webauth.py`, the confirmation flow, concurrency/threading) gets a stricter packet — name the hard-won rules to read first, require the plan as an issue comment before code, list the failure paths that need tests, and ask for a self-review fork pass before `/ship-pr`. Your Opus review catches the rest and sends it back to the same agent.
+- A task that failed twice or has a design-level problem: restart it `--fresh` with a short handoff note (what was tried, what failed, branch state) and spell the redesign out in the PR comment.
 - Keep 1–2 agents active. Start others only for independent work; stop idle ones (`team stop <agent>`).
 
 ## Agent permissions and monitoring (owner, 2026-10-22)

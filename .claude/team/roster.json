@@ -133,7 +133,7 @@
     ]
   },
   "models": {
-    "_comment": "Agents run Sonnet by default; mark a task 'Model: opus' when it touches safety.py, webauth.py, confirmation flow, concurrency, or a bug that already failed on Sonnet. Choose at task start (fresh session); never switch mid-task. The android agent may need Opus for the AGP 9 toolchain migration if Sonnet fails twice.",
+    "_comment": "Owner rule 2026-10-23: agents ALWAYS run Sonnet at effort medium (start-agent.sh refuses anything else). Hard tasks get a stricter packet; the orchestrator's review catches the rest.",
     "orchestrator": "opus",
     "agent_default": "sonnet"
   }

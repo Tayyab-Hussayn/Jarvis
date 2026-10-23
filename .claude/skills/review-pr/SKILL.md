@@ -28,6 +28,6 @@ description: Orchestrator — review a module agent's pull request: ownership, c
      ```
      then `SendMessage` the agent: `PR #<n>: changes requested — <one line>. Fix on your branch, /verify, push, remove the label, ping me.` (The label stands in for GitHub's "request changes", which is refused because every PR is authored by the owner's own account.) Re-run this review when it pings back.
    - **Out of scope for this PR** (a real problem, but not part of this task) → open a new issue for it (`gh issue create`, later a task packet); do not block the merge on it.
-   - **Design-level problems** → same channel (`gh pr comment` + `SendMessage`), with the redesign spelled out; escalate to a fresh Opus session if the agent already failed twice.
+   - **Design-level problems** → same channel (`gh pr comment` + `SendMessage`), with the redesign spelled out; if the agent already failed twice, restart it `--fresh` with a handoff note (agents stay Sonnet, effort medium).
    - **Ready** → `/merge-pr`.
 6. Clean up: `git worktree remove .claude/worktrees/review-<n>` and `git branch -D review/pr-<n>`.

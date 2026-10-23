@@ -13,7 +13,7 @@ updated: 2026-10-23
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
-- #35 engine (opus): confirmation policy ask/decline/auto-approve with guardrails. Queued after merge: web settings selector + red banner/countdown/turn-off.
+- #35 engine (sonnet, medium): confirmation policy ask/decline/auto-approve with guardrails. Queued after merge: web settings selector + red banner/countdown/turn-off.
 - Owner: live pairing via the Phones view. Then: app result-shape test (android); #22 TLS. `kravein/web-dist/` is gitignored: run `cd web && npm run build` after a web merge.
 
 ## Next (see `pending.md`)
@@ -28,5 +28,8 @@ updated: 2026-10-23
 
 ## Blockers
 - None.
+
+## Known team bug
+- `team up <agent>` (resume) can hang on Claude's "Resume session" picker when `--resume <name>` matches nothing, so the fallback to a fresh session never fires and messages go nowhere (engine, 2026-10-23). Workaround: `team up --fresh`. Fix in `start-agent.sh` (resume by stored session id) via lead/batch.
 
 Baseline (2026-10-23, after #32): `.venv/bin/python -m pytest tests/engine tests/skills tests/web tests/test_web_transport.py -q` → 547 pass. Expected failures: `test_screen_processor.py`, `test_gesture_utils.py`, `test_kravein_connect*.py`.
