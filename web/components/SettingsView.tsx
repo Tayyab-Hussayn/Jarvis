@@ -17,6 +17,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/session";
 import { Button, Chip, Empty, Input, Panel, SectionTitle } from "./ui";
+import type { PolicyState } from "@/lib/usePolicy";
+import { PolicyPanel } from "./PolicyPanel";
 import { Screen } from "./Shell";
 
 type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
@@ -139,6 +141,9 @@ function ChoiceRow({
 
 /** Flatten to editable leaves, keeping the path so a patch can be rebuilt. */
 function leaves(value: Json, path: string[] = []): Row[] {
+  // These two are owned by PolicyPanel; the generic write refuses them.
+  const dotted = path.join(".");
+  if (dotted === "safety.confirmation_mode" || dotted === "safety.allow_destructive") return [];
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     return Object.entries(value).flatMap(([k, v]) => leaves(v, [...path, k]));
   }
@@ -267,7 +272,7 @@ function EditableRow({
   );
 }
 
-export function SettingsView() {
+export function SettingsView({ policy }: { policy: PolicyState }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -390,6 +395,10 @@ export function SettingsView() {
             {error}
           </div>
         )}
+
+        <div className="mb-4">
+          <PolicyPanel policy={policy} />
+        </div>
 
         {groups.length === 0 ? (
           <Empty>Nothing matches “{search}”.</Empty>

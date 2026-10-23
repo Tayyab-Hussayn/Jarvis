@@ -61,7 +61,16 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!response.ok) {
-    throw new Error(`${path} failed: ${response.status}`);
+    // The server explains a 400 ("seconds must be a whole number"); show that
+    // rather than a bare status code.
+    let detail = "";
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* no JSON body */
+    }
+    throw new Error(detail || `${path} failed: ${response.status}`);
   }
   return (await response.json()) as T;
 }
