@@ -190,7 +190,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "safety": {
         # When false, destructive skills refuse outright instead of prompting.
+        # Kept for old settings files: false still means "decline" below.
         "allow_destructive": True,
+        # How DESTRUCTIVE/CRITICAL actions are confirmed: "ask" or "decline".
+        # "auto" is deliberately never read from here — auto-approve lives
+        # only in the running process and expires (safety.set_confirmation_mode),
+        # so a restart, or anything that writes this file, can never switch
+        # it on. A stored "auto" is read as "ask".
+        "confirmation_mode": "ask",
         # Paths the assistant must never modify, even with confirmation.
         "protected_paths": [
             "/boot", "/efi", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
