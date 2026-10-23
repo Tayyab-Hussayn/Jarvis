@@ -352,6 +352,12 @@ def _spellings(path: Path) -> list[str]:
         f"python3 -c \"open('{p}','w').write('{{}}')\"",
         f"cd {path.parent} && echo '{{}}' > settings.json",
         f"echo '{{}}' > \"{p}\"",
+        f"sed -i s/true/false/ {path.parent}/*.json",
+        f"sed -i s/true/false/ {path.parent}/settings.js*",
+        f"cd {path.parent} && sed -i s/true/false/ *",
+        f"cp -r /tmp/evil/. {path.parent}/",
+        f"cp -r /tmp/evil/. {path.parent}",
+        f"rsync -a /tmp/evil/ {path.parent}/./",
     ]
 
 
@@ -389,3 +395,24 @@ def test_shell_may_still_read_settings_and_write_other_settings_files():
     other = "echo '{}' > /tmp/some/other/settings.json"
     assert not safety.classify_command(other).blocked
     assert not safety.classify_command("echo x > /tmp/mysettings.json").blocked
+
+
+def test_shell_may_still_list_and_read_the_settings_directory():
+    d = config.settings_path().parent
+    assert not safety.classify_command(f"ls {d}/").blocked
+    assert not safety.classify_command(f"cat {d}/*.json").blocked
+    assert not safety.classify_command(f"cd {d} && ls").blocked
+
+
+def test_shell_glob_and_dir_spellings_with_home_and_env(monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_DIR", Path.home() / ".config" / "kravein")
+    for cmd in (
+        "sed -i s/true/false/ ~/.config/kravein/*.json",
+        "sed -i s/true/false/ ~/.config/kravein/settings.js*",
+        "cd ~/.config/kravein && sed -i s/true/false/ *",
+        "cp -r /tmp/evil/. ~/.config/kravein/",
+        "cp -r /tmp/evil/. $HOME/.config/kravein",
+    ):
+        assert safety.classify_command(cmd).blocked, cmd
+    assert not safety.classify_command("cat ~/.config/kravein/*.json").blocked
+    assert not safety.classify_command("ls ~/.config/kravein/").blocked

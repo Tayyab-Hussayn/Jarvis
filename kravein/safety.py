@@ -14,6 +14,7 @@ like shell commands and filesystem paths.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import shlex
@@ -266,7 +267,7 @@ _MODERATE_PATTERNS = [
 # above classify, or any visible "write" at all (`vim`, `python -c`, `ln -sf`).
 _REWRITER = re.compile(
     r"\b(python3?|perl|ruby|node|php|lua|awk|gawk|vi|vim|nvim|nano|emacs|ed|ex|"
-    r"ln|patch|install|dd|eval|source)\b",
+    r"ln|patch|install|dd|eval|source|rsync|scp|tar|unzip|cpio|curl|wget)\b",
     re.IGNORECASE,
 )
 
@@ -279,6 +280,7 @@ def _mentions_settings_file(command: str) -> bool:
     scored DESTRUCTIVE, which the owner can approve - and auto-approve (#35)
     would do so unasked. So the shell path gets the same hard refusal.
 
+    A glob that matches the file, or the file's directory, counts too.
     Text matching cannot see a path assembled at run time (`f=sett; ${f}ings.json`);
     this closes the ordinary spellings, not a model set on obfuscation. A bare
     `settings.json` is treated as ours because the working directory is not
@@ -294,11 +296,26 @@ def _mentions_settings_file(command: str) -> bool:
     for token in list(candidates):
         candidates += [t for t in re.split(r"[;&|<>()=,:'\"]", token) if t]
     for token in candidates:
-        if not token.endswith(target.name):
-            continue
         if token == target.name:
             return True
-        if resolve_target(token) == target:
+        expanded = os.path.expandvars(token)
+        if expanded.startswith("~"):
+            expanded = os.path.expanduser(expanded)
+        if any(c in expanded for c in "*?["):
+            # `~/.config/kravein/*.json` names the file without spelling it.
+            # Only a glob with a directory part can be placed without knowing
+            # the working directory.
+            if "/" in expanded and fnmatch.fnmatchcase(
+                str(target), os.path.normpath(expanded)
+            ):
+                return True
+            continue
+        if not expanded.startswith(("/", ".")) and "/" not in expanded:
+            continue
+        resolved = resolve_target(expanded)
+        # The directory itself: `cp -r x dir/`, `rsync x dir/`, or
+        # `cd dir && sed -i … *` all rewrite the file without naming it.
+        if resolved == target or resolved == target.parent:
             return True
     return False
 
