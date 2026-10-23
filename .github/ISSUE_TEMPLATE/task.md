@@ -4,8 +4,8 @@ about: One unit of work for one module agent (created by the orchestrator)
 labels: type:task
 ---
 
-## Model
-<!-- sonnet (default) | opus (safety.py, webauth.py, confirmation flow, concurrency, or a task that already failed on Sonnet) — and one line why -->
+## Effort
+<!-- Agents always run Sonnet (never Opus). default | high/xhigh (safety.py, webauth.py, confirmation flow, concurrency) | max (failed twice) — and one line why -->
 
 ## Goal
 <!-- One sentence: the observable outcome. -->
