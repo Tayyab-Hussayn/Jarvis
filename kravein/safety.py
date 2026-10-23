@@ -18,6 +18,7 @@ import os
 import re
 import shlex
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -150,6 +151,18 @@ def check_path(raw: str | os.PathLike, write: bool = True) -> Verdict:
         verdict.blocked = True
         verdict.danger = Danger.CRITICAL
         verdict.block_reason = f"{target} is never allowed as a bulk target"
+        return verdict
+
+    # The settings file holds the safety policy itself (protected paths, the
+    # confirmation mode). A plain file write is only MODERATE, so without this
+    # the model could loosen its own guardrails with one unconfirmed write_file.
+    if target == resolve_target(config.settings_path()):
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = (
+            f"{target} is Kravein's own settings file; the assistant may not "
+            "change its own safety settings"
+        )
         return verdict
 
     return verdict
@@ -485,6 +498,129 @@ def describe_targets(*parts: str) -> list[str]:
     return [p.strip().lower() for p in parts if p and p.strip()]
 
 
+# ---------------------------------------------------------------------------
+# Confirmation policy: ask / decline / auto
+# ---------------------------------------------------------------------------
+#
+# The owner's guardrails for "auto" (decided 2026-10-23) are all enforced
+# here, in code, at decision time:
+#   1. only requests the owner is making live (AUTO_SOURCES) — never a job,
+#      WhatsApp, or a source this list does not name;
+#   2. DESTRUCTIVE only — CRITICAL always asks;
+#   3. hard refusals and the per-turn denial memory run first, unchanged;
+#   4. it expires, and it exists only in this process's memory, so a restart
+#      is always back to "ask";
+#   5. every auto-approval is audited.
+#
+# Nothing in kravein/skills may call the setters below: the model must never
+# be able to approve its own actions. tests/engine/test_confirmation_policy.py
+# pins that.
+
+CONFIRMATION_MODES = ("ask", "decline", "auto")
+AUTO_DEFAULT_SECONDS = 3600
+AUTO_MAX_SECONDS = 4 * 3600
+
+# Sources where a human is driving the request right now. Anything else —
+# "daemon-run", "whatsapp", "cli-run", "local", a job — keeps asking (and so,
+# with no confirmer, keeps refusing).
+AUTO_SOURCES = frozenset({"web", "web-panel", "voice", "voice-live", "cli", "cli-ask"})
+
+_policy_lock = threading.Lock()
+# time.monotonic() deadline while auto-approve is on, else None. Monotonic so
+# a wall-clock jump (NTP, suspend/resume) cannot stretch it.
+_auto_until: float | None = None
+
+
+def _persisted_mode() -> str:
+    """The mode stored in settings: only ever "ask" or "decline"."""
+    if not config.get("safety.allow_destructive", True):
+        return "decline"
+    raw = str(config.get("safety.confirmation_mode", "ask") or "ask").strip().lower()
+    return "decline" if raw == "decline" else "ask"
+
+
+def _auto_seconds_left() -> float:
+    """Seconds of auto-approve left; clears and audits a stale deadline."""
+    global _auto_until
+    with _policy_lock:
+        if _auto_until is None:
+            return 0.0
+        left = _auto_until - time.monotonic()
+        if left > 0:
+            return left
+        _auto_until = None
+    audit.record("safety.auto_expired")
+    return 0.0
+
+
+def confirmation_policy() -> dict:
+    """Current confirmation mode, for the web settings view.
+
+    Returns ``{"mode": "ask"|"decline"|"auto", "seconds_left": int,
+    "default_seconds": int, "max_seconds": int}``. ``seconds_left`` is 0
+    unless the mode is "auto". "decline" in settings wins over a running
+    auto-approve.
+    """
+    persisted = _persisted_mode()
+    left = 0.0 if persisted == "decline" else _auto_seconds_left()
+    return {
+        "mode": "auto" if left > 0 else persisted,
+        "seconds_left": int(left + 0.999) if left > 0 else 0,
+        "default_seconds": AUTO_DEFAULT_SECONDS,
+        "max_seconds": AUTO_MAX_SECONDS,
+    }
+
+
+def _persist_mode(mode: str) -> None:
+    settings = config.load_settings()
+    section = settings.setdefault("safety", {})
+    section["confirmation_mode"] = mode
+    # Keep the legacy switch coherent, or picking "ask" in the UI would stay
+    # "decline" forever for a file that still says allow_destructive: false.
+    section["allow_destructive"] = mode != "decline"
+    config.save_settings(settings)
+
+
+def set_confirmation_mode(mode: str, seconds: int | None = None, *, by: str = "") -> dict:
+    """Set the confirmation mode. Owner-facing callers only — never a skill.
+
+    ``mode`` is "ask", "decline" or "auto". For "auto", ``seconds`` is how
+    long it stays on (default :data:`AUTO_DEFAULT_SECONDS`, clamped to
+    :data:`AUTO_MAX_SECONDS`); afterwards the mode is "ask". "auto" is kept
+    in memory only and stores "ask" in settings. ``by`` names the caller for
+    the audit log (e.g. "web"). Returns :func:`confirmation_policy`.
+    Raises ``ValueError`` for an unknown mode or a non-positive duration.
+    """
+    global _auto_until
+    mode = str(mode or "").strip().lower()
+    if mode not in CONFIRMATION_MODES:
+        raise ValueError(f"unknown confirmation mode {mode!r}; use one of {CONFIRMATION_MODES}")
+
+    duration = 0
+    if mode == "auto":
+        duration = AUTO_DEFAULT_SECONDS if seconds is None else int(seconds)
+        if duration <= 0:
+            raise ValueError("auto-approve needs a positive duration in seconds")
+        duration = min(duration, AUTO_MAX_SECONDS)
+
+    _persist_mode("decline" if mode == "decline" else "ask")
+    with _policy_lock:
+        _auto_until = time.monotonic() + duration if mode == "auto" else None
+    audit.record("safety.mode_changed", mode=mode, seconds=duration, by=by)
+    return confirmation_policy()
+
+
+def disable_auto_approve(*, by: str = "") -> dict:
+    """Turn auto-approve off now (mode becomes "ask"). Safe to call when off."""
+    global _auto_until
+    with _policy_lock:
+        was_on = _auto_until is not None
+        _auto_until = None
+    if was_on:
+        audit.record("safety.mode_changed", mode="ask", seconds=0, by=by)
+    return confirmation_policy()
+
+
 def enforce(
     verdict: Verdict,
     action_desc: str,
@@ -517,14 +653,17 @@ def enforce(
     if not verdict.needs_confirmation:
         return
 
-    if not config.get("safety.allow_destructive", True):
+    policy = confirmation_policy()
+    if policy["mode"] == "decline":
         audit.record(
             "safety.denied_by_policy",
-            skill=skill, source=source, action=action_desc,
+            skill=skill, source=source, action=action_desc, policy="decline",
         )
         raise SafetyError(
-            f"Refused: {action_desc}. Destructive actions are disabled "
-            "in settings (safety.allow_destructive)."
+            f"Refused: {action_desc}. The confirmation policy is \"decline\": "
+            "destructive and critical actions are refused without asking. Tell "
+            "the user; only they can change the policy in settings — do not "
+            "retry it another way."
         )
 
     if pre_confirmed:
@@ -558,6 +697,25 @@ def enforce(
 
     confirmer = get_confirmer()
     detail = verdict.summary()
+
+    # Auto-approve: after the hard refusals and the denial memory, never for
+    # CRITICAL, only for a live owner source, and only where a human could
+    # have been asked — a session with no confirmer is unattended whatever
+    # its source says, and unattended must keep refusing.
+    if (
+        policy["mode"] == "auto"
+        and verdict.danger == Danger.DESTRUCTIVE
+        and source in AUTO_SOURCES
+        and confirmer is not _deny
+        and _auto_seconds_left() > 0
+    ):
+        audit.record(
+            "safety.auto_approved",
+            skill=skill, source=source, action=action_desc,
+            danger=DANGER_LABELS[verdict.danger], detail=detail,
+        )
+        return
+
     audit.record(
         "safety.confirm_requested",
         skill=skill, source=source, action=action_desc,
