@@ -1,7 +1,7 @@
 ---
 type: module
 owner: engine
-updated: 2026-10-22
+updated: 2026-10-23
 ---
 
 # engine
@@ -15,6 +15,9 @@ updated: 2026-10-22
 .venv/bin/python -m compileall -q kravein/
 .venv/bin/python -m pytest tests/engine -q          # 248: safety, registry, llm, agent loop, cline, novarouter, voice, jobs, routines, whatsapp, audit, routing
 ```
+
+## Public interfaces
+- Confirmation policy (`safety.py`, #35): `confirmation_policy() -> {"mode": "ask"|"decline"|"auto", "seconds_left", "default_seconds", "max_seconds"}`; `set_confirmation_mode(mode, seconds=None, *, by="")` (`auto` in memory only, default 1 h, capped 4 h, raises `ValueError` on bad input; `ask`/`decline` persist as `safety.confirmation_mode`); `disable_auto_approve(*, by="")`. `auto` covers DESTRUCTIVE from `safety.AUTO_SOURCES` (web, web-panel, voice, voice-live, cli, cli-ask) only, with a real confirmer; CRITICAL, hard refusals and the denial memory are unchanged. `allow_destructive: false` = `decline`. Audit: `safety.auto_approved`, `safety.mode_changed`, `safety.auto_expired`. `check_path` refuses writes to `settings.json`. Skills must never call the setters (pinned by `tests/engine/test_confirmation_policy.py`).
 
 ## Gotchas
 - Tests stub all three providers; breaker tests monkeypatch `config.STATE_DIR`. See `CLAUDE.md` "Testing conventions".
