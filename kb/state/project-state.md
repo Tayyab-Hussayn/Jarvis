@@ -29,4 +29,7 @@ updated: 2026-10-23
 ## Blockers
 - None.
 
+## Known team bug
+- `team up <agent>` (resume) can hang on Claude's "Resume session" picker when `--resume <name>` matches nothing, so the fallback to a fresh session never fires and messages go nowhere (engine, 2026-10-23). Workaround: `team up --fresh`. Fix in `start-agent.sh` (resume by stored session id) via lead/batch.
+
 Baseline (2026-10-23, after #32): `.venv/bin/python -m pytest tests/engine tests/skills tests/web tests/test_web_transport.py -q` → 547 pass. Expected failures: `test_screen_processor.py`, `test_gesture_utils.py`, `test_kravein_connect*.py`.
