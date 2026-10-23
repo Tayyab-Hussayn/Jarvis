@@ -31,10 +31,10 @@ updated: 2026-10-22
 | Who | Model | Note |
 |---|---|---|
 | Orchestrator | Opus | planning, review, merges |
-| Agent, routine task | Sonnet | default |
-| Agent, hard task | Opus | `safety.py`, `webauth.py`, confirmation flow, concurrency, escalations |
+| Agent, routine task | Sonnet | default effort |
+| Agent, hard task | Sonnet | `--effort high/xhigh/max` + stricter packet; **never Opus** (owner rule 2026-10-23, enforced in `start-agent.sh`) |
 
-Pick the model at task start (`team up --fresh --model opus engine`); never switch mid-task. One or two agents active at a time.
+Pick effort at task start (`team up --effort high engine`). One or two agents active at a time.
 
 ## Lifecycle of a task
 1. Orchestrator: `/assign-task` → GitHub issue (task packet) + message.
