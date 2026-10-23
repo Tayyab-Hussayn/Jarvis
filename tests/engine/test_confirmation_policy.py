@@ -332,3 +332,87 @@ def test_phone_open_url_auto_from_web_asks_from_whatsapp_refused_unattended(monk
         with pytest.raises(safety.ConfirmationRequired):
             ps.phone_open_url(url="https://example.com", _source="daemon-run")
     assert calls == ["open_url", "open_url"]
+
+
+# -- shell cannot rewrite the settings file either (#40) ----------------------
+
+def _spellings(path: Path) -> list[str]:
+    p = str(path)
+    return [
+        f"sed -i 's/true/false/' {p}",
+        f"echo '{{}}' > {p}",
+        f"echo '{{}}' >{p}",
+        f"cp /tmp/x.json {p}",
+        f"mv /tmp/x.json {p}",
+        f"cat /tmp/x.json | tee {p}",
+        f"tee -a {p} < /tmp/x.json",
+        f"dd if=/tmp/x.json of={p}",
+        f"ln -sf /tmp/x.json {p}",
+        f"vim {p}",
+        f"python3 -c \"open('{p}','w').write('{{}}')\"",
+        f"cd {path.parent} && echo '{{}}' > settings.json",
+        f"echo '{{}}' > \"{p}\"",
+        f"sed -i s/true/false/ {path.parent}/*.json",
+        f"sed -i s/true/false/ {path.parent}/settings.js*",
+        f"cd {path.parent} && sed -i s/true/false/ *",
+        f"cp -r /tmp/evil/. {path.parent}/",
+        f"cp -r /tmp/evil/. {path.parent}",
+        f"rsync -a /tmp/evil/ {path.parent}/./",
+    ]
+
+
+def test_shell_writes_to_settings_are_blocked(tmp_path):
+    for cmd in _spellings(config.settings_path()):
+        v = safety.classify_command(cmd)
+        assert v.blocked, cmd
+        assert "settings file" in v.block_reason
+
+
+def test_shell_settings_block_survives_auto_and_confirmation():
+    safety.set_confirmation_mode("auto")
+    cmd = f"sed -i 's/a/b/' {config.settings_path()}"
+    with safety.confirmer_scope(lambda *a: True):
+        with pytest.raises(safety.SafetyError, match="settings file"):
+            safety.enforce(safety.classify_command(cmd), f"run `{cmd}`",
+                           source="web", pre_confirmed=True)
+
+
+def test_shell_settings_block_handles_home_and_env_spellings(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "CONFIG_DIR", Path.home() / ".config" / "kravein")
+    assert safety.classify_command("echo x > ~/.config/kravein/settings.json").blocked
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(Path.home() / ".config"))
+    assert safety.classify_command(
+        "echo x > $XDG_CONFIG_HOME/kravein/settings.json").blocked
+    assert safety.classify_command(
+        "echo x > ${HOME}/.config/kravein/./settings.json").blocked
+
+
+def test_shell_may_still_read_settings_and_write_other_settings_files():
+    path = config.settings_path()
+    assert not safety.classify_command(f"cat {path}").blocked
+    assert not safety.classify_command(f"grep protected {path} | head").blocked
+    assert not safety.classify_command("jq . settings.json").blocked
+    other = "echo '{}' > /tmp/some/other/settings.json"
+    assert not safety.classify_command(other).blocked
+    assert not safety.classify_command("echo x > /tmp/mysettings.json").blocked
+
+
+def test_shell_may_still_list_and_read_the_settings_directory():
+    d = config.settings_path().parent
+    assert not safety.classify_command(f"ls {d}/").blocked
+    assert not safety.classify_command(f"cat {d}/*.json").blocked
+    assert not safety.classify_command(f"cd {d} && ls").blocked
+
+
+def test_shell_glob_and_dir_spellings_with_home_and_env(monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_DIR", Path.home() / ".config" / "kravein")
+    for cmd in (
+        "sed -i s/true/false/ ~/.config/kravein/*.json",
+        "sed -i s/true/false/ ~/.config/kravein/settings.js*",
+        "cd ~/.config/kravein && sed -i s/true/false/ *",
+        "cp -r /tmp/evil/. ~/.config/kravein/",
+        "cp -r /tmp/evil/. $HOME/.config/kravein",
+    ):
+        assert safety.classify_command(cmd).blocked, cmd
+    assert not safety.classify_command("cat ~/.config/kravein/*.json").blocked
+    assert not safety.classify_command("ls ~/.config/kravein/").blocked
