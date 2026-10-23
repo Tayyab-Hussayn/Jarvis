@@ -262,6 +262,60 @@ _MODERATE_PATTERNS = [
 ]
 
 
+# Words that can rewrite a file without a redirect, a verb the pattern lists
+# above classify, or any visible "write" at all (`vim`, `python -c`, `ln -sf`).
+_REWRITER = re.compile(
+    r"\b(python3?|perl|ruby|node|php|lua|awk|gawk|vi|vim|nvim|nano|emacs|ed|ex|"
+    r"ln|patch|install|dd|eval|source)\b",
+    re.IGNORECASE,
+)
+
+
+def _mentions_settings_file(command: str) -> bool:
+    """Does a shell command name Kravein's own settings file?
+
+    check_path() already refuses write_file/copy/move onto it, but the same
+    write through `run_command` ("sed -i", "> file", "cp x file", "tee") only
+    scored DESTRUCTIVE, which the owner can approve - and auto-approve (#35)
+    would do so unasked. So the shell path gets the same hard refusal.
+
+    Text matching cannot see a path assembled at run time (`f=sett; ${f}ings.json`);
+    this closes the ordinary spellings, not a model set on obfuscation. A bare
+    `settings.json` is treated as ours because the working directory is not
+    known here and the safe error is to refuse.
+    """
+    target = resolve_target(config.settings_path())
+    candidates: list[str] = []
+    try:
+        candidates += shlex.split(command, comments=True)
+    except ValueError:
+        candidates += command.split()
+    # Redirects and operators glue paths to tokens: `>~/x`, `of=/x`, `cmd;/x`.
+    for token in list(candidates):
+        candidates += [t for t in re.split(r"[;&|<>()=,:'\"]", token) if t]
+    for token in candidates:
+        if not token.endswith(target.name):
+            continue
+        if token == target.name:
+            return True
+        if resolve_target(token) == target:
+            return True
+    return False
+
+
+def _classify_level(text: str) -> Danger:
+    """Highest pattern level a command matches (no path checks)."""
+    level = Danger.SAFE
+    for lvl, patterns in (
+        (Danger.CRITICAL, _CRITICAL_PATTERNS),
+        (Danger.DESTRUCTIVE, _DESTRUCTIVE_PATTERNS),
+        (Danger.MODERATE, _MODERATE_PATTERNS),
+    ):
+        if any(re.search(p, text, re.IGNORECASE) for p, _ in patterns):
+            level = max(level, lvl)
+    return level
+
+
 def classify_command(command: str) -> Verdict:
     """Classify a free-form shell command string."""
     text = (command or "").strip()
@@ -275,6 +329,19 @@ def classify_command(command: str) -> Verdict:
             verdict.danger = Danger.CRITICAL
             verdict.block_reason = why
             return verdict
+
+    # Writing Kravein's own settings through the shell is refused outright, as
+    # check_path() does for file skills. Reading it (cat, grep) stays allowed.
+    if _mentions_settings_file(text) and (
+        _classify_level(text) >= Danger.MODERATE or _REWRITER.search(text)
+    ):
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = (
+            f"{config.settings_path()} is Kravein's own settings file; the "
+            "assistant may not change its own safety settings"
+        )
+        return verdict
 
     matched: list[tuple[Danger, str]] = []
     for level, patterns in (
