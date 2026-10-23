@@ -39,6 +39,7 @@ export type ViewId =
   | "files"
   | "apps"
   | "control"
+  | "phones"
   | "screen"
   | "activity"
   | "brain"
@@ -66,6 +67,7 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { id: "files", label: "Files", icon: "files" },
       { id: "apps", label: "Apps", icon: "apps" },
       { id: "control", label: "Control", icon: "control" },
+      { id: "phones", label: "Phones", icon: "phones" },
       { id: "screen", label: "Screen", icon: "screen" },
     ],
   },

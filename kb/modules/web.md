@@ -10,9 +10,12 @@ updated: 2026-10-22
 - `web/` Next.js app (screens, `TurnGraph`, `Screen`) → `npm run build` → `kravein/web-dist/` · `kravein/server.py` FastAPI + ws · `events.py` Session frames · `webauth.py` token/Origin/Host
 - `kravein/phone.py` phone channel: offers, device store, `PhoneLink`, `call()` · `kravein/phone_protocol.json` the phone vocabulary · tests in `tests/web/test_phone_channel.py`
 
+- Phones panel: `web/components/PhonesView.tsx` (pair + paired list) · pure logic in `web/lib/phones.ts`, QR matrix in `web/lib/qr.ts` (`qrcode-generator`, offline) · tests `web/lib/phones.test.ts`
+
 ## Verify
 ```bash
 .venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 74 + 87
+cd web && npm test          # node --test lib/: payload, expiry, unreachable, QR matrix
 cd web && npm run build
 .venv/bin/python tools/check_layout.py     # only when the UI changed
 ```
@@ -22,6 +25,7 @@ The Android app is a device Kravein controls. It connects to the same server and
 
 - **Vocabulary:** `kravein/phone_protocol.json` is the only definition of frames, commands and arguments. Envelope `{type, request_id, payload}`. A capability name **is** a command name (`get_battery`, not `battery`). The server validates every inbound frame and every outbound `execute`, and the app implements exactly this file.
 - **Pair:** the owner calls `POST /api/phone/offer` (browser token) and gets `{v, service, host, port, code, expires_at}`, shown as a QR. The phone calls `POST /phone/pair {code, device_name}` and gets `{device_id, device_secret}`, once. Each offer is single-use and lasts 120 s (`phone.offer_ttl_seconds`). A new offer replaces the old one. A wrong code doesn't burn the offer, so nobody can cancel someone else's pairing. Offers live only in memory.
+- **Pair UI:** the Phones view draws the QR from the offer object verbatim (`JSON.stringify(offer)`, no field added or dropped). `reachable_from_lan:false` shows the `--lan --host` instruction and never a QR. The countdown uses the offer's `expires_at`, so a browser clock far from the server's shows it early or late; the server still enforces the real expiry.
 - **Store:** `DATA_DIR/phones.json` (0600) keeps only the SHA-256 of each secret. `GET /api/phones` lists devices; `DELETE /api/phones/{id}` revokes one and drops its live socket.
 - **Connect:** `WS /phone/ws` with `Authorization: Device <id>:<secret>`, checked before `accept()`. The browser `Bearer` token is refused there, and a device credential is refused on `/ws` and `/api/*`.
 - **Instead of Origin:** any `/phone/*` request that **carries** `Origin` is refused (403, or the websocket closes). Browsers always send it on websocket handshakes and cross-site POSTs, and phones never do.
