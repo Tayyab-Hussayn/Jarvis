@@ -31,10 +31,7 @@ updated: 2026-10-22
 | Who | Model | Note |
 |---|---|---|
 | Orchestrator | Opus | planning, review, merges |
-| Agent, routine task | Sonnet | default effort |
-| Agent, hard task | Sonnet | `--effort high/xhigh/max` + stricter packet; **never Opus** (owner rule 2026-10-23, enforced in `start-agent.sh`) |
-
-Pick effort at task start (`team up --effort high engine`). One or two agents active at a time.
+| Agent, any task | Sonnet, effort medium | always — owner rule 2026-10-23 (token cost), enforced in `start-agent.sh`; hard tasks get a stricter packet, and the orchestrator's review sends mistakes back | One or two agents active at a time.
 
 ## Lifecycle of a task
 1. Orchestrator: `/assign-task` → GitHub issue (task packet) + message.
