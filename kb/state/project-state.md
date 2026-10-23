@@ -9,12 +9,12 @@ updated: 2026-10-23
 ## Done
 - Linux port `kravein/`: 161 skills, web UI (`kravein serve`), voice (local + Gemini Live), jobs/routines on a systemd tick, WhatsApp confirmation channel, LAN access, stop button.
 - 2026-10-19: opt-in tool routing (`llm.tool_routing`, default `off`) and `skill.unenforced` audit tripwire.
-- 2026-10-22: multi-agent workflow installed (engine, skills, web, qa); agents default to acceptEdits; trial #2 -> PR #4; audit fixes #5; prompt fix #7; legacy suite split per module #8; agents in auto mode #14; account switching #15; phone channel #20; `serve --lan --host` fix #25; app on the phone channel #26 (56 JVM tests); result shapes #28; `phone_*` skills #32; Phones view with pairing QR #34 (2026-10-23); confirmation policy ask/decline/auto in safety.py #38.
+- 2026-10-22: multi-agent workflow installed (engine, skills, web, qa); agents default to acceptEdits; trial #2 -> PR #4; audit fixes #5; prompt fix #7; legacy suite split per module #8; agents in auto mode #14; account switching #15; phone channel #20; `serve --lan --host` fix #25; app on the phone channel #26 (56 JVM tests); result shapes #28; `phone_*` skills #32; Phones view with pairing QR #34 (2026-10-23); confirmation policy ask/decline/auto in safety.py #38; shell writes to settings.json refused #41.
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
 - #39 web: confirmation policy selector + red auto-approve banner (on engine API from #38).
-- #40 engine: refuse shell commands that write settings.json (auto-approve could approve them).
+
 - Owner: live pairing via the Phones view. Then: app result-shape test (android); #22 TLS. `kravein/web-dist/` is gitignored: run `cd web && npm run build` after a web merge.
 
 ## Next (see `pending.md`)
