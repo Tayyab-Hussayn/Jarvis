@@ -13,7 +13,7 @@ updated: 2026-10-23
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
-- Nothing assigned. Next: app result-shape test (android, small); #22 TLS; first live pairing with a real phone (owner).
+- #33 web: pair a phone from the web UI with a QR (web, sonnet). Owner installed the APK; live pairing waits on #33. Then: app result-shape test (android); #22 TLS.
 
 ## Next (see `pending.md`)
 - Run `tools/eval_models.py` off-vs-auto for tool routing; flip default if parity (needs live provider calls).
