@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Team control for the Kravein agent team.
 #
-#   team up [--fresh] [--model m] [--effort e] [--account 1|2|dir] [--task N] [agent...]   (--task: start already assigned to issue N)
+#   team up [--fresh] [--account 1|2|dir] [--task N] [agent...]   (--task: start already assigned to issue N)
 #                                    start agents in tmux session "kravein-team"; resumes previous conversations
 #                                    unless --fresh. Default: all agents, models per roster "models".
 #   team account [1|2|dir|clear]    show / set the Claude account for agents and start-lead.sh (machine-local;

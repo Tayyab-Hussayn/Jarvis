@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Start (or resume) one module agent as its own Claude Code session.
-#   .claude/team/bin/start-agent.sh <agent> [--fresh] [--model sonnet --effort <high|xhigh|max>] [claude flags]
+#   .claude/team/bin/start-agent.sh <agent> [--fresh] [--task N] [claude flags]   (always Sonnet, effort medium)
 # Normally launched by `team up` inside tmux.
 # - Ensures a git worktree at .claude/worktrees/<agent> on branch agent/<agent>.
 # - Resumes the agent's previous conversation (survives reboots) unless --fresh is given.
 #   `--worktree <agent> --resume <agent>` restores both the conversation and the worktree.
-# - Model policy (owner, 2026-10-23): agents NEVER run on Opus. Sonnet always; a hard task gets
-#   --effort high|xhigh|max and a stricter packet instead. Enforced below, not only in docs.
+# - Model policy (owner, 2026-10-23): agents ALWAYS run Sonnet at effort medium, to keep token cost down.
+#   Quality comes from the orchestrator's review: a bad PR goes back to the same Sonnet/medium agent.
+#   Enforced below, not only in docs.
 #   Pick the model at task start: a different model on resume discards the prompt cache once.
 # - Appends the agent persona to Claude Code's default system prompt (does not replace it).
 # - Permission mode defaults to `auto`: a classifier approves routine commands and blocks risky ones, so an
@@ -30,7 +31,7 @@ if ! python3 -c "import json,sys; sys.exit(0 if sys.argv[1] in json.load(open(sy
   exit 1
 fi
 
-FRESH=0; MODEL="$(cfg agent_default sonnet)"; ACCOUNT=""; TASK=""; EFFORT=""
+FRESH=0; MODEL="$(cfg agent_default sonnet)"; ACCOUNT=""; TASK=""; EFFORT="medium"
 while [ $# -gt 0 ]; do
   case "$1" in
     --fresh) FRESH=1; shift ;;
@@ -44,11 +45,13 @@ done
 
 # Owner rule (2026-10-23): no agent runs on Opus, whatever a packet or flag says.
 case "$(printf '%s' "$MODEL" | tr '[:upper:]' '[:lower:]')" in
-  *opus*) echo "refused: agents never run on Opus (owner rule 2026-10-23). Use --model sonnet with --effort high|xhigh|max." >&2; exit 2 ;;
+  *sonnet*) ;;
+  *) echo "refused: agents always run Sonnet (owner rule 2026-10-23), not '$MODEL'." >&2; exit 2 ;;
 esac
+[ "$EFFORT" = medium ] || { echo "refused: agents always run at effort medium (owner rule 2026-10-23), not '$EFFORT'." >&2; exit 2; }
 for a in "$@"; do
   case "$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')" in
-    *opus*) echo "refused: agents never run on Opus (owner rule 2026-10-23)." >&2; exit 2 ;;
+    *opus*|*haiku*|--effort*|--model*) echo "refused: agents always run Sonnet at effort medium (owner rule 2026-10-23)." >&2; exit 2 ;;
   esac
 done
 
@@ -109,8 +112,8 @@ fi
 cd "$ROOT"
 export KRV_AGENT="$AGENT"
 COMMON=(--worktree "$AGENT" --append-system-prompt-file "$PERSONA" --permission-mode "$MODE"
-        --model "$MODEL" ${EFFORT:+--effort "$EFFORT"} --settings '{"autoMemoryEnabled": false, "crossSessionInbound": "accept"}')
-echo "[$AGENT] account=$(krv_account_label) model=$MODEL effort=${EFFORT:-default} mode=$MODE $( [ $FRESH = 1 ] && echo fresh || echo resume-if-possible )"
+        --model "$MODEL" --effort "$EFFORT" --settings '{"autoMemoryEnabled": false, "crossSessionInbound": "accept"}')
+echo "[$AGENT] account=$(krv_account_label) model=$MODEL effort=$EFFORT mode=$MODE $( [ $FRESH = 1 ] && echo fresh || echo resume-if-possible )"
 
 # Run claude; if it exits within a few seconds with an error (e.g. nothing to resume), report failure so the caller can fall back.
 try_launch() {

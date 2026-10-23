@@ -133,7 +133,7 @@
     ]
   },
   "models": {
-    "_comment": "Owner rule 2026-10-23: agents NEVER run on Opus (start-agent.sh refuses it). Hard tasks get --effort high|xhigh|max and a stricter packet instead.",
+    "_comment": "Owner rule 2026-10-23: agents ALWAYS run Sonnet at effort medium (start-agent.sh refuses anything else). Hard tasks get a stricter packet; the orchestrator's review catches the rest.",
     "orchestrator": "opus",
     "agent_default": "sonnet"
   }
