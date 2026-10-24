@@ -9,6 +9,8 @@
  * confusing 401 later.
  */
 
+import { extractAsk } from "./ask.ts";
+
 const TOKEN_KEY = "kravein.token";
 
 /**
@@ -30,6 +32,23 @@ export function captureToken(): string {
     return fromUrl;
   }
   return sessionStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+let pendingAsk = "";
+
+/**
+ * Read `?ask=` once and strip it from the address bar. The value is kept in
+ * memory so a React strict-mode double mount (whose second pass finds the URL
+ * already clean) still sees it.
+ */
+export function captureAsk(): string {
+  if (typeof window === "undefined") return "";
+  const url = new URL(window.location.href);
+  const text = extractAsk(url);
+  if (text === null) return pendingAsk;
+  window.history.replaceState({}, "", url.toString());
+  pendingAsk = text;
+  return pendingAsk;
 }
 
 export function getToken(): string {

@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Message, VoicePhase } from "@/lib/protocol";
 import type { Connection } from "@/lib/useKravein";
 import { isVoiceLive } from "@/lib/protocol";
+import { captureAsk } from "@/lib/session";
 import { Icon } from "./icons";
 import { ModeToggle } from "./ModeToggle";
 import { TurnGraph } from "./TurnGraph";
@@ -134,6 +135,14 @@ export function Console({
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+
+  // `/?ask=` (shared from the phone) pre-fills the composer. Done in an effect,
+  // not the useState initializer, so the static prerender and first client
+  // render match. Never sent; an already-typed draft wins.
+  useEffect(() => {
+    const ask = captureAsk();
+    if (ask) setDraft((current) => current || ask);
+  }, []);
 
   // Follow the stream, but only when already at the bottom — yanking the view
   // down while the user reads an earlier tool result is the classic annoyance.
