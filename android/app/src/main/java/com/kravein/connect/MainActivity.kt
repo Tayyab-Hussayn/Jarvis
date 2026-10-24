@@ -1,6 +1,7 @@
 package com.kravein.connect
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -47,9 +48,23 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var web: KraveinWebController
 
+    /** The page asked for the microphone: say why before the system prompt. "Not now" leaves the page with a clean error. */
+    private fun askPagePermissions(permissions: Array<String>) {
+        if (Manifest.permission.RECORD_AUDIO !in permissions) {
+            pagePermissions.launch(permissions)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.mic_rationale_title)
+            .setMessage(R.string.mic_rationale_body)
+            .setPositiveButton(R.string.mic_rationale_continue) { _, _ -> pagePermissions.launch(permissions) }
+            .setNegativeButton(R.string.mic_rationale_not_now, null)
+            .show()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        web = KraveinWebController(applicationContext, requestRuntimePermissions = { pagePermissions.launch(it) })
+        web = KraveinWebController(applicationContext, requestRuntimePermissions = ::askPagePermissions)
         storage = PairingStorage(this)
         uiPrefs = UiPrefs(this)
         AgentStateStore.setCredential(storage.loadCredential())
