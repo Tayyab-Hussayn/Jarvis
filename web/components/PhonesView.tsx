@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { formatCountdown, offerPayload, offerState, secondsLeft, type PhoneDevice, type PhoneOffer } from "@/lib/phones";
+import { formatCountdown, offerPayload, offerState, secondsLeft, shortFingerprint, type PhoneDevice, type PhoneOffer } from "@/lib/phones";
 import { qrMatrix } from "@/lib/qr";
 import { api } from "@/lib/session";
 import { useResource } from "@/lib/useApi";
@@ -157,6 +157,9 @@ export function PhonesView() {
                 <Field label="Host" value={offer.host} />
                 <Field label="Port" value={String(offer.port)} />
                 <Field label="Code" value={offer.code} />
+                {offer.cert_sha256 && (
+                  <Field label="Certificate" value={shortFingerprint(offer.cert_sha256)} />
+                )}
                 <Field
                   label="Expires in"
                   value={state === "live" ? formatCountdown(secondsLeft(offer.expires_at, now)) : "expired"}

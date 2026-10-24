@@ -318,3 +318,100 @@ def origin_allowed(origin: str | None, extra: tuple[str, ...] = ()) -> bool:
     if origin in extra:
         return True
     return _hostname_of(origin) in allowed_hostnames()
+
+
+# -- TLS for LAN mode (#65) ----------------------------------------------
+#
+# A phone pins this certificate's fingerprint (it arrives in the pairing QR),
+# so the certificate is self-signed and long-lived: there is no CA to trust
+# and no hostname to check, because the server is an IP literal.
+
+TLS_VALID_DAYS = 3650
+TLS_RENEW_BEFORE_DAYS = 30
+
+
+def tls_dir() -> Path:
+    return config.DATA_DIR / "tls"
+
+
+def cert_fingerprint(cert_pem: bytes) -> str:
+    """SHA-256 of the certificate's DER, lowercase hex — what the app pins."""
+    import hashlib
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    cert = x509.load_pem_x509_certificate(cert_pem)
+    return hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()
+
+
+def _cert_usable_for(cert_pem: bytes, ip: str) -> bool:
+    import datetime as dt
+
+    from cryptography import x509
+
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem)
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        have = {str(a) for a in san.get_values_for_type(x509.IPAddress)}
+        expiry = cert.not_valid_after_utc
+    except Exception:
+        return False
+    soon = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=TLS_RENEW_BEFORE_DAYS)
+    return str(ipaddress.ip_address(ip)) in have and expiry > soon
+
+
+def ensure_tls_cert(ip: str) -> tuple[Path, Path, str, bool]:
+    """Return (cert_path, key_path, fingerprint, regenerated) for serving `ip`.
+
+    Generated once and reused, so phones keep their pin across restarts. It is
+    regenerated only when the bound address is not in its SAN (the LAN address
+    changed) or it is about to expire — and then the fingerprint changes, so
+    every paired phone has to pair again.
+    """
+    import datetime as dt
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    directory = tls_dir()
+    cert_path, key_path = directory / "cert.pem", directory / "key.pem"
+    if cert_path.is_file() and key_path.is_file():
+        pem = cert_path.read_bytes()
+        if _cert_usable_for(pem, ip):
+            return cert_path, key_path, cert_fingerprint(pem), False
+
+    directory.mkdir(parents=True, exist_ok=True)
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Kravein")])
+    now = dt.datetime.now(dt.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(minutes=5))
+        .not_valid_after(now + dt.timedelta(days=TLS_VALID_DAYS))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(ip))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+    # The key is written 0600 from the first byte, never chmod-ed afterwards.
+    # It goes first: a crash between the two leaves a key with no cert, which
+    # the check above treats as "regenerate", never a cert with no key.
+    fd = os.open(key_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(key_pem)
+    cert_path.write_bytes(cert_pem)
+    return cert_path, key_path, cert_fingerprint(cert_pem), True

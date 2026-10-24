@@ -607,7 +607,10 @@ def build_parser() -> argparse.ArgumentParser:
                             "private addresses this machine holds are allowed")
     serve.add_argument("--lan", action="store_true",
                        help="bind this machine's private LAN address so a phone "
-                            "on the same network can reach it (plain HTTP)")
+                            "on the same network can reach it (HTTPS with a "
+                            "self-signed certificate unless --no-tls)")
+    serve.add_argument("--no-tls", action="store_true",
+                       help="with --lan, serve plain HTTP instead of HTTPS")
     serve.add_argument("--port", type=int, default=8787)
     serve.add_argument("--no-open", action="store_true",
                        help="do not open a browser tab")
@@ -776,7 +779,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
 
         return serve_web(
-            host=host, port=args.port, open_browser=not args.no_open
+            host=host, port=args.port, open_browser=not args.no_open,
+            tls=not getattr(args, "no_tls", False),
         )
 
     parser.print_help()

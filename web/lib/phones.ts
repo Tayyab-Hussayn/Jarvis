@@ -11,6 +11,15 @@ export interface PhoneOffer {
   port: number;
   code: string;
   expires_at: number;
+  /** "https" under `serve --lan` TLS; absent from older servers. */
+  scheme?: "http" | "https";
+  /** SHA-256 of the server certificate (64 lowercase hex); https only. */
+  cert_sha256?: string;
+}
+
+/** `ab12 cd34 … 9f0e`: enough to compare by eye against the app, never the full pin. */
+export function shortFingerprint(hex: string): string {
+  return hex.length < 16 ? hex : `${hex.slice(0, 8).match(/.{4}/g)!.join(" ")} … ${hex.slice(-4)}`;
 }
 
 export interface PhoneDevice {
