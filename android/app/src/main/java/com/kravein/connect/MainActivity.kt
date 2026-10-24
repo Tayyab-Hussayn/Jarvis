@@ -13,6 +13,7 @@ import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.pairing.PairingStorage
 import com.kravein.connect.ui.KraveinConnectApp
 import com.kravein.connect.ui.theme.KraveinConnectTheme
+import com.kravein.connect.web.KraveinWebController
 
 class MainActivity : ComponentActivity() {
     private lateinit var storage: PairingStorage
@@ -35,8 +36,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val pagePermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        // The page asks again on its next attempt; nothing to do with the answer here.
+    }
+
+    private lateinit var web: KraveinWebController
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        web = KraveinWebController(applicationContext, requestRuntimePermissions = { pagePermissions.launch(it) })
         storage = PairingStorage(this)
         AgentStateStore.setCredential(storage.loadCredential())
         maybeStartService()
@@ -51,9 +59,26 @@ class MainActivity : ComponentActivity() {
                         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                     },
                     onStartService = { maybeStartService() },
+                    web = web,
                 )
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        web.onStart()
+    }
+
+    override fun onStop() {
+        web.onStop()
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        // Config changes are handled in the manifest, so this is a real exit and the WebView must not leak.
+        if (isFinishing) web.close()
+        super.onDestroy()
     }
 
     private fun maybeStartService() {

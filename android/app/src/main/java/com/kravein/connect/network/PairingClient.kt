@@ -10,7 +10,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 sealed interface PairResult {
     data class Paired(val credential: DeviceCredential) : PairResult
@@ -38,13 +37,7 @@ object PairResponse {
 }
 
 /** Redeems a pairing offer for a device credential. Blocking: call it off the main thread. */
-class PairingClient(
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .callTimeout(15, TimeUnit.SECONDS)
-        .build(),
-) {
+class PairingClient(private val client: OkHttpClient = Http.client) {
     fun redeem(offer: PairingOffer, deviceName: String): PairResult {
         val url = HttpUrl.Builder().scheme("http").host(offer.host).port(offer.port).addPathSegments("phone/pair").build()
         val body = JSONObject().put("code", offer.code).put("device_name", deviceName.take(80)).toString()

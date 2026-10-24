@@ -78,6 +78,8 @@ import android.webkit.WebViewClient
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.currentBackStackEntryAsState
+import com.kravein.connect.web.KraveinWebController
 import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.delay
 import androidx.compose.animation.*
@@ -110,6 +112,7 @@ fun KraveinConnectApp(
     onRequestCameraPermission: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onStartService: () -> Unit,
+    web: KraveinWebController,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -196,9 +199,13 @@ fun KraveinConnectApp(
 
     val nowSeconds = { System.currentTimeMillis() / 1000 }
 
+    val route by navController.currentBackStackEntryAsState()
+    val inShell = route?.destination?.route == "home"
+
     Box(modifier = Modifier.fillMaxSize()) {
-        // Render 3D Background
-        HolographicBackground()
+        // The 3D background is a second, always-animating WebView: only the onboarding screens get it, never the
+        // shell, where it would cost battery and memory behind the real Kravein page.
+        if (!inShell) HolographicBackground()
 
         // UI Overlay
         NavHost(
@@ -272,24 +279,54 @@ fun KraveinConnectApp(
                 )
             }
             composable("home") {
-                if (credential != null) {
-                    ConnectedScreen(
-                        credential = credential!!,
-                        state = connectionState,
-                        logs = logs,
-                        status = status,
-                        onDisconnect = {
-                            context.startService(Intent(context, KraveinConnectForegroundService::class.java).apply {
-                                action = KraveinConnectForegroundService.ACTION_STOP
-                            })
-                            navController.navigate("welcome") { popUpTo(0) }
+                val paired = credential
+                if (paired != null) {
+                    val openPermissions = {
+                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", context.packageName, null)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                    }
+                    MainShell(
+                        credential = paired,
+                        web = web,
+                        onPairAgain = { navController.navigate("connect") { popUpTo(0) } },
+                        phoneTab = {
+                            ConnectedScreen(
+                                credential = paired,
+                                state = connectionState,
+                                logs = logs,
+                                status = status,
+                                onToggleConnection = {
+                                    if (connectionState == ConnectionState.DISCONNECTED) {
+                                        onStartService()
+                                    } else {
+                                        context.startService(Intent(context, KraveinConnectForegroundService::class.java).apply {
+                                            action = KraveinConnectForegroundService.ACTION_STOP
+                                        })
+                                    }
+                                },
+                            )
                         },
-                        onOpenPermissions = {
-                            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = Uri.fromParts("package", context.packageName, null)
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            context.startActivity(intent)
+                        settingsTab = {
+                            SettingsScreen(
+                                credential = paired,
+                                onOpenPermissions = openPermissions,
+                                onUnpair = {
+                                    // Stop the socket first, then forget the credential, then drop everything the
+                                    // web session held; the credential flow below sends the user to the welcome screen.
+                                    context.startService(Intent(context, KraveinConnectForegroundService::class.java).apply {
+                                        action = KraveinConnectForegroundService.ACTION_STOP
+                                    })
+                                    storage.clearCredential()
+                                    web.reset()
+                                    AgentStateStore.setCredential(null)
+                                    AgentStateStore.setConnectionState(ConnectionState.DISCONNECTED)
+                                    AgentStateStore.setError(null)
+                                    navController.navigate("welcome") { popUpTo(0) }
+                                },
+                            )
                         },
                     )
                 }
@@ -448,15 +485,17 @@ private fun ConnectedScreen(
     state: ConnectionState,
     logs: List<String>,
     status: String,
-    onDisconnect: () -> Unit,
-    onOpenPermissions: () -> Unit,
+    onToggleConnection: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp).background(androidx.compose.ui.graphics.Color.Transparent).verticalScroll(rememberScrollState()),
     ) {
         Text("KRAVEIN CONNECT", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = androidx.compose.ui.graphics.Color.White)
         Spacer(Modifier.height(8.dp))
-        Text("● Connected", color = MaterialTheme.colorScheme.primary)
+        Text(
+            if (state == ConnectionState.CONNECTED) "● Connected" else "○ ${state.name.lowercase().replace('_', ' ')}",
+            color = MaterialTheme.colorScheme.primary,
+        )
         Spacer(Modifier.height(20.dp))
         Card(colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), contentColor = androidx.compose.ui.graphics.Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))) {
             Column(Modifier.padding(16.dp)) {
@@ -470,17 +509,8 @@ private fun ConnectedScreen(
         }
         Spacer(Modifier.height(16.dp))
         
-        Button(onClick = onDisconnect, modifier = Modifier.fillMaxWidth()) { Text("Disconnect") }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(
-            onClick = onOpenPermissions, 
-            modifier = Modifier.fillMaxWidth(),
-            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f),
-                contentColor = androidx.compose.ui.graphics.Color.White
-            )
-        ) {
-            Text("Permissions", color = androidx.compose.ui.graphics.Color.White)
+        Button(onClick = onToggleConnection, modifier = Modifier.fillMaxWidth()) {
+            Text(if (state == ConnectionState.DISCONNECTED) "Connect" else "Disconnect")
         }
         Spacer(Modifier.height(20.dp))
         Text("Recent Logs", fontWeight = FontWeight.Bold)
@@ -604,5 +634,41 @@ private fun QrScannerScreen(
             Spacer(Modifier.height(8.dp))
             Text(errorText, color = MaterialTheme.colorScheme.error)
         }
+    }
+}
+
+@Composable
+private fun SettingsScreen(
+    credential: DeviceCredential,
+    onOpenPermissions: () -> Unit,
+    onUnpair: () -> Unit,
+) {
+    var confirmUnpair by rememberSaveable { mutableStateOf(false) }
+    if (confirmUnpair) {
+        AlertDialog(
+            onDismissRequest = { confirmUnpair = false },
+            title = { Text("Unpair this phone?") },
+            text = { Text("Kravein will stop controlling this phone and the app returns to pairing. Remove the device on your PC too if you will not use it again.") },
+            confirmButton = { TextButton(onClick = { confirmUnpair = false; onUnpair() }) { Text("Unpair") } },
+            dismissButton = { TextButton(onClick = { confirmUnpair = false }) { Text("Cancel") } },
+        )
+    }
+    Column(Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
+        Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+        Spacer(Modifier.height(16.dp))
+        Text("Server", fontWeight = FontWeight.Bold)
+        Text("${credential.host}:${credential.port}")
+        Text("Paired as ${credential.deviceName}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(20.dp))
+        OutlinedButton(onClick = onOpenPermissions, modifier = Modifier.fillMaxWidth()) { Text("Permissions") }
+        Spacer(Modifier.height(12.dp))
+        Button(onClick = { confirmUnpair = true }, modifier = Modifier.fillMaxWidth()) { Text("Unpair") }
+        Spacer(Modifier.height(24.dp))
+        Text("About", fontWeight = FontWeight.Bold)
+        Text("Kravein Connect ${com.kravein.connect.BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "Shows your PC's Kravein and lets Kravein control this phone over your local network.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

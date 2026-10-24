@@ -5,7 +5,6 @@ import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
 import com.kravein.connect.core.DeviceCredential
 import okhttp3.HttpUrl
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -23,7 +22,10 @@ class PhoneClient(
     private val router: CommandRouter,
     private val helloInfo: (DeviceCredential) -> HelloInfo,
 ) {
-    private val http = OkHttpClient.Builder()
+    // The socket stays open for hours, so it must not inherit the short call/read timeouts of the shared client.
+    private val http = Http.client.newBuilder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .callTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(30, TimeUnit.SECONDS)
         .build()
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
