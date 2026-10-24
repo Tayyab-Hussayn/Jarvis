@@ -57,6 +57,30 @@
         "error": {"type": "string", "required": false, "max_length": 500}
       }
     },
+    "confirm_request": {
+      "direction": "server_to_phone",
+      "about": "A confirmation is waiting. request_id is the confirmation id. Sent to every ready phone, and to a phone that says hello while one is open. Answer with confirm_reply; silence is a denial at expires_at.",
+      "payload": {
+        "action": {"type": "string", "required": true, "max_length": 300},
+        "detail": {"type": "string", "required": true, "max_length": 1000},
+        "danger": {"type": "string", "required": true, "values": ["destructive", "critical"]},
+        "expires_at": {"type": "integer", "required": true}
+      }
+    },
+    "confirm_reply": {
+      "direction": "phone_to_server",
+      "about": "Approve or decline. First answer anywhere wins; an unknown, late or duplicate id gets error unknown_request and approves nothing.",
+      "payload": {
+        "approve": {"type": "boolean", "required": true}
+      }
+    },
+    "confirm_closed": {
+      "direction": "server_to_phone",
+      "about": "The confirmation was resolved (here, in the browser, or by timeout): remove its notification. Same request_id.",
+      "payload": {
+        "outcome": {"type": "string", "required": true, "values": ["approved", "denied", "expired"]}
+      }
+    },
     "ping": {
       "direction": "both",
       "about": "Liveness. Always answered by pong with the same request_id.",

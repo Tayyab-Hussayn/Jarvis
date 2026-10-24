@@ -593,6 +593,29 @@ class PhoneLink:
                 protocol=protocol_version(), device_id=self.device_id,
                 server_name=str(config.get("assistant_name", "Kravein") or "Kravein"),
             ))
+            # A phone that connects while a confirmation is open still gets it.
+            if _notifications_on():
+                from . import events  # lazy: events imports this module
+                for confirm_id, info in events.open_confirms():
+                    with _links_lock:
+                        _relayed.add(confirm_id)
+                    self._send(_confirm_request_frame(confirm_id, info))
+        elif frame_type == "confirm_reply":
+            if not self.ready:
+                self._send(error_frame("not_ready", "send hello first", request_id))
+                return
+            from . import events
+            approve = payload["approve"]
+            accepted = events.resolve_open(request_id, approve)
+            audit.record(
+                "phone.confirm_reply", device_id=self.device_id,
+                confirm_id=request_id, approve=approve, accepted=accepted,
+            )
+            if not accepted:
+                # Unknown, late or already answered: say so, approve nothing.
+                self._send(error_frame(
+                    "unknown_request", f"no confirmation is waiting on {request_id!r}", request_id,
+                ))
         elif frame_type == "ping":
             self._send(make_frame("pong", request_id))
         elif frame_type == "pong":
@@ -675,6 +698,55 @@ def detach(link: PhoneLink, reason: str = "disconnected") -> None:
             _links.pop(link.device_id)
     link.close(reason)
     audit.record("phone.disconnected", device_id=link.device_id, reason=link.close_reason or reason)
+
+
+_relayed: set[str] = set()
+
+
+def _notifications_on() -> bool:
+    return bool(config.get("phone.confirm_notifications", True))
+
+
+def _confirm_request_frame(confirm_id: str, info: dict[str, Any]) -> dict[str, Any]:
+    spec = protocol()["frames"]["confirm_request"]["payload"]
+    danger = str(info["danger"]).lower()
+    return make_frame(
+        "confirm_request", confirm_id,
+        action=str(info["action"])[: spec["action"]["max_length"]],
+        detail=str(info["detail"])[: spec["detail"]["max_length"]],
+        # Only DESTRUCTIVE and CRITICAL ever reach a confirmer.
+        danger="critical" if danger == "critical" else "destructive",
+        expires_at=int(info["expires_at"]),
+    )
+
+
+def _ready_links() -> list[PhoneLink]:
+    with _links_lock:
+        return [l for l in _links.values() if l.ready and not l.closed]
+
+
+def relay_confirm_request(confirm_id: str, info: dict[str, Any]) -> None:
+    """Show a pending confirmation on every connected phone. Any thread."""
+    if not _notifications_on():
+        return
+    payload = _confirm_request_frame(confirm_id, info)
+    with _links_lock:
+        _relayed.add(confirm_id)
+    for link in _ready_links():
+        link._send(payload)
+
+
+def relay_confirm_closed(confirm_id: str, outcome: str) -> None:
+    """Tell every phone a confirmation was resolved (browser, phone or timeout)."""
+    # Only for requests we relayed; and even if notifications were switched
+    # off meanwhile, a delivered request must still be dismissed.
+    with _links_lock:
+        if confirm_id not in _relayed:
+            return
+        _relayed.discard(confirm_id)
+    payload = make_frame("confirm_closed", confirm_id, outcome=outcome)
+    for link in _ready_links():
+        link._send(payload)
 
 
 def connected() -> list[dict[str, Any]]:
