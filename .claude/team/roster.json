@@ -45,6 +45,7 @@
         "kravein/safety.py",
         "kravein/timeutil.py",
         "kravein/toolselect.py",
+        "kravein/service.py",
         "kravein/voice.py",
         "kravein/whatsapp_service.py",
         "tests/engine/",

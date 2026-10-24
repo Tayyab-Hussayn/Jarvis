@@ -14,7 +14,7 @@ updated: 2026-10-23
 
 ## In flight
 - Owner 2026-10-24: (a) Focus on one of several same-app windows must hit exactly that window + show terminal cwd → done #85 + #89; (b) live voice through the phone's mic/speaker → engine pluggable audio merged #84, web merged #91; #92 android (mic permission + adb device test, owner speaks one sentence).
-- Owner reports 2026-10-24 fixed: stale confirm card + 14-day pairing #75; `kravein-web.service` user unit #74. Owner 2026-10-24: NO autostart, manual on/off via a `kravein` CLI → done: `kravein` CLI #79, installer wrapper + unit (never enabled) #78. Installer run by owner 2026-10-24 (web.env fixed to 192.168.100.239). Owner rule: Kravein always on port 8787, one server only → done #81 (second server refused, docker address skipped, hints fixed). All Kravein services stopped on owner request. TODO lead/batch: add `kravein/service.py` to engine in roster.json.
+- Owner reports 2026-10-24 fixed: stale confirm card + 14-day pairing #75; `kravein-web.service` user unit #74. Owner 2026-10-24: NO autostart, manual on/off via a `kravein` CLI → done: `kravein` CLI #79, installer wrapper + unit (never enabled) #78. Installer run by owner 2026-10-24 (web.env fixed to 192.168.100.239). Owner rule: Kravein always on port 8787, one server only → done #81 (second server refused, docker address skipped, hints fixed). All Kravein services stopped on owner request.
 - Nothing assigned. Android full-client plan phases 1–6 done (#45 #47 #48 #52 #53 #55 #57 #60 #61 #64 #67 #68 #69; TLS #22 closed). Device test 2026-10-24 (adb, Vivo V2254): pairing over TLS + pinned phone channel OK; WebView fixed via loopback TLS pipe #71; full adb device pass 1–9 OK (chat, phone battery, confirm Approve/Decline, share, reminder). Open: Chromium renderer keeps ~130 MB after WebView destroy (PSS 210 MB open → 163 MB bg).
 - Remaining plan ideas (not started): home-screen widget, push-to-talk from the phone mic, offline message queue, notification mirroring, clipboard sync.
 - `kravein/web-dist/` is gitignored: run `cd web && npm run build` after a web merge.
@@ -35,7 +35,7 @@ updated: 2026-10-23
 
 - Live voice: control tokens stripped, empty-turn fallback, English/Roman-Urdu only #99 (the missed tool call was a model-side glitch, mitigated not proven fixed). Phone mic+speaker live voice merged #98 (owner-confirmed on device).
 
-- #100 engine: voice transcript must be English (Devanagari→transliteration gave junk); stuck "running" card + "Not connected" (stt.py granted).
+- Voice transcript in English via Whisper translate #101 (base model downloads on first use). #102 web: stuck "running" card after dropped socket.
 
 ## Blockers
 - None.

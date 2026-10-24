@@ -24,8 +24,11 @@ call at `TOOL_TIMEOUT` and always returns *something*, and records
 back rendered in Malayalam and Hindi script. The audio itself reached the model intact — replies
 were correct while the transcript was gibberish, which is a confusing way to fail. Pass
 `AudioTranscriptionConfig(language_codes=[...])`; `language_auto` is a nested config object, not a
-flag, so supplying codes is what disables detection. `voice.language` in settings overrides the
-`en-US` default.
+flag, so supplying codes is what disables detection. **That is not enough for Hindustani-accented
+speech (2026-10-24, #100):** with `en-US` pinned, the owner's English still came back in Devanagari,
+and letter-by-letter transliteration turned it into junk ("he opan flaish laait"). The display/log
+transcript now comes from local faster-whisper `task="translate"` on the user's own turn audio
+(#101); Gemini's text is only a fallback with foreign script stripped. Never transliterate.
 
 **Live input transcription lags the audio.** Deltas keep arriving *after* the model has begun
 answering, so flushing the user's words on the first output chunk truncates them — "running in
