@@ -13,7 +13,7 @@ updated: 2026-10-23
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
-- Android full client (plan `kb/plans/android-agent-app.md`, owner delegated all decisions 2026-10-24): ~~#43 UI token~~ merged #45; ~~#44 client shell~~ merged #48 (85 JVM tests, release APK 24.3 MB); ~~#46 phone layout~~ merged #47; ~~#50 confirm relay~~ merged #52; ~~#51~~ merged #53 (105 JVM tests). ~~#54 redesign~~ merged #55; ~~#56 shell theme~~ merged #57. Phase 6 order: (1) ~~share + QS tile~~ merged #60 #61; (2) reminders — ~~#62~~ merged #64, #63 android; (3) TLS #22 — #65 web (grant cli.py), #66 android queued after #63. Owner: install the new APK and test.
+- Android full client (plan `kb/plans/android-agent-app.md`, owner delegated all decisions 2026-10-24): ~~#43 UI token~~ merged #45; ~~#44 client shell~~ merged #48 (85 JVM tests, release APK 24.3 MB); ~~#46 phone layout~~ merged #47; ~~#50 confirm relay~~ merged #52; ~~#51~~ merged #53 (105 JVM tests). ~~#54 redesign~~ merged #55; ~~#56 shell theme~~ merged #57. Phase 6 order: (1) ~~share + QS tile~~ merged #60 #61; (2) reminders — ~~#62~~ merged #64, ~~#63~~ merged #67; (3) TLS #22 — #65 web (grant cli.py), #66 android. Owner: install the new APK and test.
 
 - Owner: live pairing via the Phones view. Then: app result-shape test (android); #22 TLS. `kravein/web-dist/` is gitignored: run `cd web && npm run build` after a web merge.
 
