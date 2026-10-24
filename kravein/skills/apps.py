@@ -15,14 +15,22 @@ from ..safety import Danger, Verdict, describe_targets, enforce
 
 
 @skill(category="apps", danger=Danger.MODERATE)
-def open_app(app_name: str) -> str:
+def open_app(app_name: str, workspace: str = "") -> str:
     """Launch an application by name. Focuses it if it is already running.
+
+    With a workspace it instead starts a new instance there and leaves the
+    current workspace and focus alone.
 
     Args:
         app_name: What to open, e.g. 'firefox', 'terminal', 'file manager'.
+        workspace: Open a new instance on this workspace (a number or an
+            existing workspace name) without switching to it. Leave empty to
+            open or focus normally.
     """
     if not app_name.strip():
         return "Which application should I open?"
+    if str(workspace).strip():
+        return apps_platform.launch_on_workspace(app_name, workspace)
     return apps_platform.launch_by_name(app_name)
 
 

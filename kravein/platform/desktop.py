@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -121,6 +122,14 @@ class WindowBackend:
         """Launch through the compositor so the app lands on the right output."""
         shell.spawn(command)
         return True
+
+    # Only compositors that can place a new window without switching to its
+    # workspace set this; a plain spawn followed by a move would flash the
+    # window on the current workspace and steal focus.
+    can_spawn_on_workspace = False
+
+    def spawn_on_workspace(self, command: list[str], workspace: str) -> bool:
+        raise NotImplementedError
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +357,24 @@ class HyprlandBackend(WindowBackend):
             return True
         shell.spawn(command)
         return True
+
+    can_spawn_on_workspace = True
+
+    def spawn_on_workspace(self, command: list[str], workspace: str) -> bool:
+        """Start a command whose window opens on a workspace, unfocused.
+
+        ``silent`` is what keeps the user where they are: without it Hyprland
+        follows the new window and switches workspace. Falling back to a plain
+        spawn here would put the app on the wrong workspace, so a rejected
+        dispatch reports failure instead.
+        """
+        joined = " ".join(shlex.quote(part) for part in command)
+        rule = f"{str(workspace).strip()} silent"
+        return self._dispatch(
+            f"return hl.dispatch(hl.dsp.exec_cmd({_lua_string(joined)}, "
+            f"{{workspace={_lua_string(rule)}}}))",
+            "exec", f"[workspace {rule}] {joined}",
+        )
 
 
 # ---------------------------------------------------------------------------

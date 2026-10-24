@@ -31,6 +31,8 @@ updated: 2026-10-23
 
 - Tests isolated from a live server #88 (suite 785 green with the owner server up).
 
+- Owner 2026-10-24: open_app into a workspace merged #95; #96 web sorted workspaces + app launcher + terminal popup merged.
+
 ## Blockers
 - None.
 

@@ -543,6 +543,10 @@ def create_app(token: str | None = None) -> Any:
             )
             try:
                 result = await asyncio.to_thread(_dispatch, skill, args)
+                if skill == "open_app":
+                    await asyncio.to_thread(
+                        _record_launch, str(args.get("app_name") or "")
+                    )
                 session.emit(
                     "tool_result", id=turn_id, call_id=call_id,
                     name=skill, result=result,
@@ -1102,6 +1106,49 @@ def _windows_snapshot() -> dict[str, Any]:
         return {"available": False, "error": str(exc), "windows": [], "workspaces": []}
 
 
+# How often each app was launched from the panel, so the launcher can list the
+# ones the owner actually uses first. Keyed by the desktop entry's exact name:
+# a free-text `open_app` ("the browser") is not counted, otherwise a typo would
+# create a "frequent app" that exists nowhere in the list.
+_LAUNCH_LOCK = threading.Lock()
+FREQUENT_APPS = 5
+
+
+def _launch_file() -> Path:
+    return config.DATA_DIR / "app_launches.json"
+
+
+def _launch_counts() -> dict[str, int]:
+    try:
+        raw = json.loads(_launch_file().read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(k): v for k, v in raw.items()
+        if isinstance(v, int) and not isinstance(v, bool) and v > 0
+    }
+
+
+def _record_launch(app_name: str) -> None:
+    """Count one launch of `app_name` if it is exactly an installed entry."""
+    from .platform import apps
+
+    with contextlib.suppress(Exception):
+        names = {e.name for e in apps.index() if not e.no_display}
+        if app_name not in names:
+            return
+        with _LAUNCH_LOCK:
+            counts = _launch_counts()
+            counts[app_name] = counts.get(app_name, 0) + 1
+            path = _launch_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(counts))
+            tmp.replace(path)
+
+
 def _apps_snapshot() -> dict[str, Any]:
     from .platform import apps
 
@@ -1109,11 +1156,23 @@ def _apps_snapshot() -> dict[str, Any]:
         entries = apps.index()
     except Exception as exc:
         return {"available": False, "error": str(exc), "apps": []}
+    counts = _launch_counts()
+    shown = {e.name for e in entries if not e.no_display}
     return {
         "available": True,
+        "frequent": [
+            name for name, _ in sorted(
+                counts.items(), key=lambda kv: (-kv[1], kv[0].lower())
+            )
+            if name in shown
+        ][:FREQUENT_APPS],
         "apps": [
             {
                 "name": e.name,
+                "id": e.id,
+                "icon": e.icon,
+                "exec": e.exec_cmd,
+                "launches": counts.get(e.name, 0),
                 "comment": e.comment or e.generic_name,
                 "categories": list(e.categories),
                 "terminal": e.terminal,
