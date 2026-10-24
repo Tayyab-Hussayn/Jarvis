@@ -17,6 +17,7 @@ Package `com.kravein.connect` under `android/app/src/main/java/com/kravein/conne
 - `ui/theme/` — `KraveinTokens.kt` (pure: the web aurora palette dark+light, radii, type scale, `background(dark)`, `NOTIFICATION_ACCENT`, WCAG `contrast`), `Theme.kt` (`KraveinConnectTheme` follows the system theme; `GradientButton`, `glassBorder`, `KraveinTheme.colors` for glass/danger). Res: `values{,-night}/colors.xml` + `themes.xml` (window ground = web `--bg`), `values-v31` splash attrs, `mipmap-anydpi-v26/ic_launcher` (adaptive + monochrome), `drawable/ic_stat_kravein` (status-bar glyph).
 - `ui/MainShell.kt` — bottom nav Kravein (WebView) · Phone (`ConnectedScreen`) · Settings (server, permissions, unpair, about); `ui/KraveinConnectApp.kt` holds onboarding and wires the shell.
 - `confirm/` — `Confirmations.kt` (pure: `PendingConfirmation`, `ConfirmationBook` open questions that outlive a socket, `ConfirmationText`, `ReplyOutcome`, `ConfirmationListener`); `ConfirmationNotifier` (HIGH channel `kravein_confirmations`, Approve/Decline via `PendingIntent.getForegroundService`, body opens the Kravein tab through `core/ShellNavigation`).
+- `notice/` — `Notice.kt` (pure: `Notice`, `NoticeKind` reminder|job, `NoticeDedupe`, `NoticeListener`), `NoticeNotifier` (DEFAULT channel `kravein_reminders` "Kravein reminders", tap → Kravein tab).
 - `web/ShareText.kt` (pure: clean/cap/encode shared text), `tile/` (`TileModel` pure, `KraveinTileService`).
 - `pairing/PairingStorage` — encrypted credential. `MainActivity`, `KraveinConnectForegroundService`, `accessibility/`.
 - `android/gradle/libs.versions.toml` — version catalog (AGP 9.4.1, Kotlin 2.4.21, same as `~/code/smart-sticky-wallpaper`).
@@ -52,6 +53,13 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - The server answers a late/duplicate/settled reply with `error unknown_request`; the session turns that (for an id we answered) into `ReplyRejected` → "Not accepted", not a session error.
 - Notification expiry: `setTimeoutAfter(expires_at - now)`; a request already expired on arrival is dropped.
 - POST_NOTIFICATIONS: asked once (setup screen explains why; `UiPrefs.notificationsPrompted`); refusal never blocks setup or the service.
+
+## Reminder notifications (#63)
+- Frame `notify` (server → phone, no reply): `title` ≤ 120, `body` ≤ 1000, `kind` reminder|job, `at` unix s. Strict like every frame; unknown `kind` → `error malformed_frame`; before `welcome` → `not_ready`.
+- Dedupe by `request_id` in `NoticeDedupe` (200 ids, oldest dropped), owned by `PhoneClient` so a replay after reconnect is also dropped. A repeat produces no event and no error frame.
+- Own channel, separate from confirmations (muting one leaves the other). Needs POST_NOTIFICATIONS like confirmations; without it nothing shows.
+- `PhoneProtocolJsonTest.framesMatch` checks `notify` against `kravein/phone_protocol.json` (web #64).
+- Not verified on a device.
 
 ## Share + Quick Settings tile (#59)
 - Share target: `MainActivity` has a `SEND text/plain` filter. `ShareText.clean` trims, drops blank, caps at 4000 chars (never splits a surrogate pair); `NavigationPolicy.authenticatedUrl(last, token, ask)` adds `ask=` (percent-encoded, `%20` for spaces) next to `token=`. `KraveinWebController.shareText` keeps the text in memory until a page load carries it once; a failed load keeps it for Retry.

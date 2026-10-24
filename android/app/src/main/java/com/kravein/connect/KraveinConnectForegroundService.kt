@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import com.kravein.connect.commands.DeviceCommandHandler
 import com.kravein.connect.confirm.ConfirmationListener
 import com.kravein.connect.confirm.ConfirmationNotifier
+import com.kravein.connect.notice.NoticeNotifier
 import com.kravein.connect.confirm.ConfirmationText
 import com.kravein.connect.confirm.Outcome
 import com.kravein.connect.confirm.PendingConfirmation
@@ -33,6 +34,7 @@ class KraveinConnectForegroundService : Service() {
     private lateinit var storage: PairingStorage
     private lateinit var client: PhoneClient
     private lateinit var notifier: ConfirmationNotifier
+    private lateinit var noticeNotifier: NoticeNotifier
     private var connectStarted = false
 
     override fun onCreate() {
@@ -41,6 +43,8 @@ class KraveinConnectForegroundService : Service() {
         val handler = DeviceCommandHandler(this)
         notifier = ConfirmationNotifier(this)
         notifier.ensureChannel()
+        noticeNotifier = NoticeNotifier(this)
+        noticeNotifier.ensureChannel()
         client = PhoneClient(CommandRouter(handler), { handler.helloInfo(it.deviceName) }, object : ConfirmationListener {
             override fun onRequested(confirmation: PendingConfirmation) =
                 notifier.show(confirmation, System.currentTimeMillis() / 1000)
@@ -48,7 +52,7 @@ class KraveinConnectForegroundService : Service() {
             override fun onClosed(requestId: String, outcome: Outcome) = notifier.cancel(requestId)
 
             override fun onReplyRejected(requestId: String) = notifier.showResult(requestId, ConfirmationText.REJECTED)
-        })
+        }, noticeNotifier)
         createNotificationChannel()
         try {
             val notification = buildNotification("Kravein Connect", "Starting connection")
