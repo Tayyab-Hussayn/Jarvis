@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import datetime
 import hashlib
 import itertools
 import json
@@ -46,6 +47,10 @@ PHONES_FILE = config.DATA_DIR / "phones.json"
 
 DEFAULT_OFFER_TTL = 120.0
 DEFAULT_COMMAND_TIMEOUT = 15.0
+# A paired phone keeps working across restarts for this long, then must pair
+# again. Bounded so a lost phone's credential does not live forever.
+DEFAULT_DEVICE_TTL_DAYS = 14
+SWEEP_INTERVAL = 3600.0
 DEVICE_AUTH_SCHEME = "device"
 MAX_PENDING_FRAMES = 256
 
@@ -306,6 +311,70 @@ def _save_devices(devices: dict[str, dict[str, Any]]) -> None:
     os.replace(tmp, PHONES_FILE)
 
 
+def _device_ttl_seconds() -> float:
+    try:
+        days = float(config.get("phone.device_ttl_days", DEFAULT_DEVICE_TTL_DAYS))
+    except (TypeError, ValueError):
+        days = DEFAULT_DEVICE_TTL_DAYS
+    return max(days, 0.0) * 86400
+
+
+def _expires_at(record: dict[str, Any]) -> float:
+    """Epoch seconds when this device's credential stops working.
+
+    Computed from `paired_at` + the *current* ttl, so lowering the setting
+    takes effect on devices paired earlier. A record whose `paired_at` cannot
+    be read is treated as already expired: failing closed means the owner
+    re-pairs, never that a credential of unknown age lives on.
+    """
+    try:
+        parsed = datetime.strptime(str(record.get("paired_at", "")), "%Y-%m-%dT%H:%M:%S%z")
+        paired = parsed.timestamp()
+    except (ValueError, OverflowError):
+        return 0.0
+    return paired + _device_ttl_seconds()
+
+
+def _wall() -> float:
+    return time.time()
+
+
+def _drop(device_id: str, devices: dict[str, dict[str, Any]], event: str) -> None:
+    """Remove a device from `devices` (already loaded, lock held), persist, and
+    cut everything that device holds open. Shared by revoke and expiry."""
+    devices.pop(device_id, None)
+    _save_devices(devices)
+    with _links_lock:
+        link = _links.pop(device_id, None)
+    if link is not None:
+        link.close(event.split(".")[-1])
+    # Its UI tokens (and the web sockets opened with them) die with it.
+    webauth.revoke_ui_tokens(device_id)
+    audit.record(event, device_id=device_id)
+
+
+def sweep_expired() -> list[str]:
+    """Remove every device past its lifetime. Returns the removed ids."""
+    with _store_lock:
+        devices = _load_devices()
+        now = _wall()
+        gone = [d for d, rec in devices.items() if _expires_at(rec) <= now]
+        for device_id in gone:
+            _drop(device_id, devices, "phone.expired")
+    return gone
+
+
+def run_expiry_sweeper(stop: threading.Event) -> None:
+    """Hourly sweep, so a phone that stays connected past its lifetime is cut
+    off too — authentication alone only runs when it (re)connects."""
+    while not stop.is_set():
+        try:
+            sweep_expired()
+        except Exception:
+            pass
+        stop.wait(SWEEP_INTERVAL)
+
+
 def list_devices() -> list[dict[str, Any]]:
     """Paired devices, with no credential material."""
     with _store_lock:
@@ -321,6 +390,7 @@ def list_devices() -> list[dict[str, Any]]:
             "name": record.get("name", ""),
             "paired_at": record.get("paired_at", ""),
             "last_seen": record.get("last_seen", ""),
+            "expires_at": int(_expires_at(record)),
             "connected": live,
             "capabilities": sorted(link.capabilities) if live else [],
         })
@@ -333,15 +403,7 @@ def revoke(device_id: str) -> bool:
         devices = _load_devices()
         if device_id not in devices:
             return False
-        devices.pop(device_id)
-        _save_devices(devices)
-    with _links_lock:
-        link = _links.pop(device_id, None)
-    if link is not None:
-        link.close("revoked")
-    # Its UI tokens (and the web sockets opened with them) die with it.
-    webauth.revoke_ui_tokens(device_id)
-    audit.record("phone.revoked", device_id=device_id)
+        _drop(device_id, devices, "phone.revoked")
     return True
 
 
@@ -367,6 +429,10 @@ def authenticate(header: str | None) -> dict[str, Any] | None:
         expected = record.get("secret_sha256", "") if record else "0" * 64
         if not secrets.compare_digest(_hash(secret), expected) or record is None:
             audit.record("phone.auth_refused", device_id=device_id[:40])
+            return None
+        if _expires_at(record) <= _wall():
+            # The app gets 401 and shows pairing.
+            _drop(device_id, devices, "phone.expired")
             return None
         record["last_seen"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         _save_devices(devices)

@@ -86,6 +86,11 @@ def create_app(token: str | None = None) -> Any:
         threading.Thread(
             target=phone.OutboxRelay().run, args=(stop,), name="phone-outbox", daemon=True
         ).start()
+        # Sweeps once now (startup), then hourly: expired phones are removed
+        # even if they never reconnect.
+        threading.Thread(
+            target=phone.run_expiry_sweeper, args=(stop,), name="phone-expiry", daemon=True
+        ).start()
         try:
             yield
         finally:

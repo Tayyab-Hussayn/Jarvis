@@ -22,11 +22,20 @@ export function shortFingerprint(hex: string): string {
   return hex.length < 16 ? hex : `${hex.slice(0, 8).match(/.{4}/g)!.join(" ")} … ${hex.slice(-4)}`;
 }
 
+/** "expires in 9 days" / "expires today" / "expired" for a device's credential. */
+export function expiryLabel(expiresAt: number, nowMs: number): string {
+  if (expiresAt * 1000 <= nowMs) return "expired";
+  const days = Math.ceil((expiresAt * 1000 - nowMs) / 86_400_000);
+  return days <= 1 ? "expires today" : `expires in ${days} days`;
+}
+
 export interface PhoneDevice {
   device_id: string;
   name: string;
   paired_at: string;
   last_seen: string;
+  /** Epoch seconds when this pairing stops working (14 days after pairing). */
+  expires_at: number;
   connected: boolean;
   capabilities: string[];
 }

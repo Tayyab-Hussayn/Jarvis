@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { formatCountdown, offerPayload, offerState, secondsLeft, shortFingerprint, type PhoneDevice, type PhoneOffer } from "@/lib/phones";
+import { expiryLabel, formatCountdown, offerPayload, offerState, secondsLeft, shortFingerprint, type PhoneDevice, type PhoneOffer } from "@/lib/phones";
 import { qrMatrix } from "@/lib/qr";
 import { api } from "@/lib/session";
 import { useResource } from "@/lib/useApi";
@@ -198,7 +198,7 @@ export function PhonesView() {
                           {device.name || "Unnamed phone"}
                         </p>
                         <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-faint)]">
-                          {device.device_id} · {device.connected ? "connected" : `last seen ${device.last_seen || "never"}`}
+                          {device.device_id} · {device.connected ? "connected" : `last seen ${device.last_seen || "never"}`} · {expiryLabel(device.expires_at, Date.now())}
                         </p>
                       </div>
                       {removing?.device_id === device.device_id ? (

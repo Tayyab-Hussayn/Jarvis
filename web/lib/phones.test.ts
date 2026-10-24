@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatCountdown, offerPayload, offerState, secondsLeft, shortFingerprint, type PhoneOffer } from "./phones.ts";
+import { expiryLabel, formatCountdown, offerPayload, offerState, secondsLeft, shortFingerprint, type PhoneOffer } from "./phones.ts";
 import { qrMatrix } from "./qr.ts";
 
 const offer: PhoneOffer = {
@@ -29,6 +29,13 @@ test("countdown and expiry", () => {
   assert.equal(offerState(offer, true, 1_000_000_000), "live");
   assert.equal(offerState(offer, true, 1_000_120_000), "expired");
   assert.equal(offerState(null, true, 0), "none");
+});
+
+test("device expiry label", () => {
+  const now = 1_000_000_000_000;
+  assert.equal(expiryLabel(1_000_000_000 + 9 * 86400, now), "expires in 9 days");
+  assert.equal(expiryLabel(1_000_000_000 + 3600, now), "expires today");
+  assert.equal(expiryLabel(1_000_000_000 - 1, now), "expired");
 });
 
 test("an unreachable offer never reaches 'live', so no QR is drawn", () => {

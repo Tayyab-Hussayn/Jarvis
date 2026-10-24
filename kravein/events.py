@@ -208,9 +208,17 @@ class Session:
             waited_seconds=round(time.monotonic() - started, 2),
         )
 
+        # Every exit tells the client its card is dead, whoever answered: an
+        # approval from the phone notification used to leave the browser card
+        # open and unaware (the worker moved on, nothing told the page).
+        # `denied` also covers a cancel or a dropped session.
+        outcome = "expired" if not answered else "approved" if approved else "denied"
+        self.emit(
+            "confirm_resolved", id=self.turn_id, confirm_id=confirm_id,
+            outcome=outcome, by=pending.by,
+        )
         if not answered:
-            # Tell the client its card is dead, so it stops offering a button
-            # that no longer resolves anything.
+            # Kept for clients that predate confirm_resolved.
             self.emit(
                 "confirm_expired", id=self.turn_id, confirm_id=confirm_id,
             )
