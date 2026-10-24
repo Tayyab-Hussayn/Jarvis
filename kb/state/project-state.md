@@ -29,7 +29,7 @@ updated: 2026-10-23
 - Decided 2026-10-23: auto-approve allowed only with guardrails — live owner sources only (web/voice/cli, never jobs/WhatsApp), CRITICAL still asks, hard refusals stay, auto expires (1 h) and resets on restart, every auto-approval audited (#35).
 - Flip `llm.tool_routing` to `auto`? Both wait on evidence/owner call.
 
-- #86 engine: isolate 6 tests from a live server on 8787.
+- Tests isolated from a live server #88 (suite 785 green with the owner server up).
 
 ## Blockers
 - None.
