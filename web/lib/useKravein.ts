@@ -31,6 +31,7 @@ import type {
   VoicePhase,
 } from "./protocol";
 import { settleConfirm } from "./confirm";
+import { planRetry, settleOnClose } from "./connection";
 import { isVoiceLive } from "./protocol";
 import { captureToken, getToken, wsUrl } from "./session";
 import {
@@ -60,7 +61,6 @@ const RECONNECT_MAX_MS = 15_000;
 const PING_INTERVAL_MS = 25_000;
 
 /** Close code 1008 is our auth rejection — retrying a bad token is pointless. */
-const POLICY_VIOLATION = 1008;
 
 /** How long to wait for the server to confirm a stop before releasing the UI. */
 const STOP_CONFIRM_TIMEOUT_MS = 8000;
@@ -720,30 +720,21 @@ export function useKravein() {
       releaseDevice();
       setVoicePhase("off");
       setVoiceStopping(false);
-      const spoken = voiceTurn.current;
-      if (spoken) {
-        voiceTurn.current = null;
-        setMessages((current) =>
-          current.map((message) =>
-            message.id === spoken.id ? { ...message, pending: false } : message,
-          ),
-        );
-      }
+      voiceTurn.current = null;
+      // A result the dead socket swallowed would leave its card "running"
+      // forever; a new socket is a new session and replays nothing.
+      setMessages(settleOnClose);
 
       if (goneRef.current) return;
 
-      if (event.code === POLICY_VIOLATION) {
-        setConnection("unauthorized");
-        return;
-      }
-
-      attemptsRef.current += 1;
-      setConnection(attemptsRef.current > 3 ? "offline" : "reconnecting");
-      const delay = Math.min(
-        RECONNECT_BASE_MS * 2 ** (attemptsRef.current - 1),
-        RECONNECT_MAX_MS,
+      const plan = planRetry(
+        attemptsRef.current, event.code, RECONNECT_BASE_MS, RECONNECT_MAX_MS,
       );
-      retryTimerRef.current = setTimeout(connect, delay);
+      attemptsRef.current = plan.attempts;
+      setConnection(plan.state);
+      if (plan.delay !== null) {
+        retryTimerRef.current = setTimeout(connect, plan.delay);
+      }
     };
 
     socket.onerror = () => {
@@ -765,16 +756,29 @@ export function useKravein() {
         socket.send(JSON.stringify({ t: "voice_stop" } satisfies ClientFrame));
       }
     };
+    // A backgrounded phone throttles the backoff timer, so the page comes back
+    // "Not connected" until the next tick. Retry at once on return / network.
+    const retryNow = () => {
+      const socket = socketRef.current;
+      if (goneRef.current || (socket && socket.readyState <= WebSocket.OPEN)) return;
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+      attemptsRef.current = 0;
+      setConnection("reconnecting");
+      connect();
+    };
     const onVisibility = () => {
       if (document.visibilityState === "hidden") leave();
+      else retryNow();
     };
+    window.addEventListener("online", retryNow);
     window.addEventListener("pagehide", leave);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
+      window.removeEventListener("online", retryNow);
       window.removeEventListener("pagehide", leave);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [releaseDevice]);
+  }, [releaseDevice, connect]);
 
   useEffect(() => {
     goneRef.current = false;
