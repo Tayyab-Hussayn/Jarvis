@@ -147,6 +147,15 @@ class PagePermissionPolicyTest {
         val asked = listOf(PagePermissionPolicy.AUDIO, "android.webkit.resource.MIDI_SYSEX")
         assertEquals(listOf(PagePermissionPolicy.AUDIO), PagePermissionPolicy.grant("$origin/", origin, asked, true, true))
     }
+
+    @Test
+    fun `the loopback pipe origin is the paired origin, another loopback port is not`() {
+        val pipe = NavigationPolicy("127.0.0.1", 41234, "http").origin()
+        val audio = listOf(PagePermissionPolicy.AUDIO)
+        assertEquals(audio, PagePermissionPolicy.grant("http://127.0.0.1:41234/", pipe, audio, true, false))
+        assertEquals(emptyList(), PagePermissionPolicy.grant("http://127.0.0.1:41235", pipe, audio, true, false))
+        assertEquals(emptyList(), PagePermissionPolicy.grant("http://127.0.0.1:41234", pipe, audio, false, false))
+    }
 }
 
 class WebViewLifecyclePolicyTest {
