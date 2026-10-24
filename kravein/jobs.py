@@ -639,6 +639,11 @@ def deliver(job: dict[str, Any], text: str, *, failed: bool = False) -> None:
             "failed": bool(failed),
         },
     )
+    # Paired phones, via a file append that never raises (phone.outbox_append).
+    from . import phone
+
+    phone.outbox_append(job.get("title") or "Kravein", text,
+                        "reminder" if job.get("kind", "notify") == "notify" else "job")
     if delivery.NOTIFY in problems:
         record_run(event="notify_failed", id=job.get("id"),
                    error=problems[delivery.NOTIFY][:200])

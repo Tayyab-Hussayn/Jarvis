@@ -819,3 +819,137 @@ def call(
             "phone.command", device_id=link.device_id, command=command, args=args,
             outcome=outcome, seconds=round(_clock() - started, 2),
         )
+
+
+# -- notify outbox (#62) -------------------------------------------------
+#
+# `kravein.jobs tick` is a separate systemd process: it cannot reach this
+# process's phone sockets. It appends to a small file instead and the server
+# polls it. The tick side must stay cheap and must never fail the job, so
+# `outbox_append` swallows every error.
+
+OUTBOX_FILE = config.STATE_DIR / "phone_outbox.jsonl"
+OUTBOX_MAX_AGE = 600  # seconds; older entries are dropped, not delivered
+OUTBOX_MAX_ENTRIES = 100  # trim threshold so the file never grows unbounded
+NOTIFY_POLL_SECONDS = 2.0
+
+
+def _forward_on() -> bool:
+    return bool(config.get("phone.forward_notifications", True))
+
+
+def outbox_append(title: str, body: str, kind: str, *, now: float | None = None) -> bool:
+    """Queue one notification for paired phones. Called from the tick process.
+
+    Returns False instead of raising: a full disk or unwritable state dir must
+    never turn a delivered reminder into a failed job.
+    """
+    if not _forward_on():
+        return False
+    try:
+        import fcntl
+
+        at = int(now if now is not None else time.time())
+        entry = {"id": secrets.token_hex(8), "title": str(title), "body": str(body),
+                 "kind": kind if kind in ("reminder", "job") else "job", "at": at}
+        path = OUTBOX_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Lock a file we never replace: the trim below swaps the outbox inode.
+        lock = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a") as fh:
+                fh.write(json.dumps(entry) + "\n")
+            _outbox_trim(path, at)
+        finally:
+            os.close(lock)
+        return True
+    except Exception:
+        return False
+
+
+def _outbox_read(path: Path) -> list[dict[str, Any]]:
+    try:
+        text = path.read_text()
+    except OSError:
+        return []
+    entries = []
+    for line in text.splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue  # a torn line is skipped, never fatal
+        if isinstance(e, dict) and isinstance(e.get("id"), str):
+            entries.append(e)
+    return entries
+
+
+def _outbox_trim(path: Path, now: float) -> None:
+    """Drop stale entries once the file passes the cap. Caller holds the lock."""
+    entries = _outbox_read(path)
+    if len(entries) <= OUTBOX_MAX_ENTRIES:
+        return
+    keep = [e for e in entries if now - float(e.get("at", 0)) <= OUTBOX_MAX_AGE]
+    keep = keep[-OUTBOX_MAX_ENTRIES:]
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.writelines(json.dumps(e) + "\n" for e in keep)
+    os.replace(tmp, path)
+
+
+def _notify_frame(entry: dict[str, Any]) -> dict[str, Any]:
+    spec = protocol()["frames"]["notify"]["payload"]
+    return make_frame(
+        "notify", str(entry["id"]),
+        title=str(entry.get("title", ""))[: spec["title"]["max_length"]],
+        body=str(entry.get("body", ""))[: spec["body"]["max_length"]],
+        kind="reminder" if entry.get("kind") == "reminder" else "job",
+        at=int(entry.get("at", 0)),
+    )
+
+
+class OutboxRelay:
+    """Server side: deliver new outbox entries to every ready phone."""
+
+    def __init__(self) -> None:
+        self._stamp: tuple[int, int, int] | None = None
+        # Entries that already exist fired before this server started;
+        # re-delivering them on every restart would buzz the phone twice.
+        self._seen: set[str] = {e["id"] for e in _outbox_read(OUTBOX_FILE)}
+
+    def poll(self, now: float | None = None) -> int:
+        """Send what is new. Returns how many entries were relayed."""
+        path = OUTBOX_FILE
+        try:
+            st = path.stat()
+        except OSError:
+            return 0
+        stamp = (st.st_ino, st.st_size, st.st_mtime_ns)
+        if stamp == self._stamp:
+            return 0  # cheap path: nothing changed since the last poll
+        self._stamp = stamp
+        now = time.time() if now is None else now
+        sent = 0
+        entries = _outbox_read(path)
+        for e in entries:
+            if e["id"] in self._seen:
+                continue
+            self._seen.add(e["id"])
+            if not _forward_on() or now - float(e.get("at", 0)) > OUTBOX_MAX_AGE:
+                continue
+            frame = _notify_frame(e)
+            for link in _ready_links():
+                link._send(frame)
+            sent += 1
+        if len(self._seen) > 1000:
+            self._seen = {e["id"] for e in entries}
+        return sent
+
+    def run(self, stop: threading.Event) -> None:
+        while not stop.wait(NOTIFY_POLL_SECONDS):
+            try:
+                self.poll()
+            except Exception as exc:  # the poller must not die
+                audit.record("phone.notify_relay_error", error=str(exc)[:200])
