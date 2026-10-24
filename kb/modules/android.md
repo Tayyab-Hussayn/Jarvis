@@ -58,7 +58,7 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - Frame `notify` (server → phone, no reply): `title` ≤ 120, `body` ≤ 1000, `kind` reminder|job, `at` unix s. Strict like every frame; unknown `kind` → `error malformed_frame`; before `welcome` → `not_ready`.
 - Dedupe by `request_id` in `NoticeDedupe` (200 ids, oldest dropped), owned by `PhoneClient` so a replay after reconnect is also dropped. A repeat produces no event and no error frame.
 - Own channel, separate from confirmations (muting one leaves the other). Needs POST_NOTIFICATIONS like confirmations; without it nothing shows.
-- `PhoneProtocolJsonTest.framesMatch` needs `notify` in `kravein/phone_protocol.json` (web #62); it fails until that is merged.
+- `PhoneProtocolJsonTest.framesMatch` checks `notify` against `kravein/phone_protocol.json` (web #64).
 - Not verified on a device.
 
 ## Share + Quick Settings tile (#59)
