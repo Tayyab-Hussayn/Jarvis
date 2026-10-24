@@ -15,6 +15,7 @@ WorkingDirectory=%h/code/Kravein
 # KRAVEIN_LAN_HOST comes from web.env, written by the installer. The file is
 # required (no leading "-"): without it the host expands to nothing and
 # `--host` would swallow the next argument, so fail at start instead.
+# The port is always 8787 (owner rule: one server, one port).
 # --host is explicit because with several private addresses `--lan` alone
 # refuses to guess which network to expose.
 EnvironmentFile=%h/.config/kravein/web.env

@@ -811,8 +811,12 @@ def main(argv: list[str] | None = None) -> int:
         return _whatsapp_command(args.action)
 
     if command == "serve":
-        from . import webauth
+        from . import service, webauth
         from .server import serve as serve_web
+
+        if service.port_busy(args.port):
+            print(red(service.already_running_message(args.port)))
+            return 1
 
         host = args.host
         if getattr(args, "lan", False):

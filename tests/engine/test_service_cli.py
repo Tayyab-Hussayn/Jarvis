@@ -1,5 +1,6 @@
 """`kravein start|stop|status|pair|phones|open|logs` (#76), systemctl and HTTP stubbed."""
 
+import socket
 import time
 
 import pytest
@@ -49,6 +50,50 @@ class Api:
 def dev(i, name, days=10, connected=True):
     return {"device_id": i, "name": name, "connected": connected,
             "expires_at": time.time() + days * 86400 + 60}
+
+
+def test_port_busy_sees_a_listener_on_a_specific_address():
+    # The server binds the LAN address; the probe must still see it.
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen()
+    port = srv.getsockname()[1]
+    try:
+        assert service.port_busy(port) is True
+    finally:
+        srv.close()
+    assert service.port_busy(port) is False
+
+
+def test_start_refuses_when_port_busy(installed, monkeypatch, capsys):
+    called = []
+    monkeypatch.setattr(service, "port_busy", lambda port=service.PORT: True)
+    monkeypatch.setattr(service, "_systemctl", lambda *a, **k: called.append(a))
+    assert cli.main(["start"]) == 1
+    out = capsys.readouterr().out
+    assert "already running on port 8787" in out and "Close it first" in out
+    assert called == []                      # refused before touching the unit
+
+
+def test_serve_refuses_when_port_busy_before_binding(monkeypatch, capsys):
+    import kravein.server as server
+    started = []
+    monkeypatch.setattr(service, "port_busy", lambda port=service.PORT: port == 8787)
+    monkeypatch.setattr(server, "serve", lambda **kw: started.append(kw) or 0)
+    for argv in (["serve"], ["serve", "--lan", "--host", "192.168.1.20"]):
+        assert cli.main(argv) == 1
+        assert "already running on port 8787" in capsys.readouterr().out
+    assert started == []
+
+
+def test_serve_starts_when_port_free(monkeypatch):
+    import kravein.server as server
+    started = []
+    monkeypatch.setattr(service, "port_busy", lambda port=service.PORT: False)
+    monkeypatch.setattr(server, "serve", lambda **kw: started.append(kw) or 0)
+    assert cli.main(["serve", "--no-open"]) == 0
+    assert started and started[0]["port"] == 8787
+
 
 
 def test_not_installed_prints_installer_command(tmp_path, monkeypatch, capsys):
