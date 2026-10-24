@@ -56,6 +56,7 @@ def test_frequent_first_and_capped(monkeypatch, tmp_path):
     by = {a["name"]: a for a in data["apps"]}
     assert by["Foot"]["launches"] == 3
     assert by["Foot"]["id"] == "Foot.desktop" and by["Foot"]["exec"] == "foot"
+    assert by["Foot"]["icon"] == ""
     assert "Hidden" not in by
 
     monkeypatch.setattr(server, "FREQUENT_APPS", 2)
@@ -77,7 +78,7 @@ def test_persists_and_tolerates_a_corrupt_file(monkeypatch, tmp_path):
 
 def test_open_app_run_records_a_launch_and_needs_a_token(monkeypatch, tmp_path):
     """The ws `run` path counts a successful open_app; the mocked skill stands
-    in for #93's workspace argument, which is not merged yet."""
+    in for the real skill (#93/#95 cover open_app itself)."""
     from fastapi.testclient import TestClient
 
     _setup(monkeypatch, tmp_path)

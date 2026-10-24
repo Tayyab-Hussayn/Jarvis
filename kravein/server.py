@@ -1169,7 +1169,8 @@ def _apps_snapshot() -> dict[str, Any]:
         "apps": [
             {
                 "name": e.name,
-                "id": e.path.name,
+                "id": e.id,
+                "icon": e.icon,
                 "exec": e.exec_cmd,
                 "launches": counts.get(e.name, 0),
                 "comment": e.comment or e.generic_name,
