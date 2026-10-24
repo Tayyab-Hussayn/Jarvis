@@ -36,6 +36,7 @@ class DesktopEntry:
     terminal: bool = False
     no_display: bool = False
     startup_wm_class: str = ""
+    icon: str = ""
 
     @property
     def id(self) -> str:
@@ -132,6 +133,7 @@ def _parse_entry(path: Path) -> DesktopEntry | None:
         terminal=fields.get("Terminal", "").lower() == "true",
         no_display=fields.get("NoDisplay", "").lower() == "true",
         startup_wm_class=fields.get("StartupWMClass", ""),
+        icon=fields.get("Icon", ""),
     )
 
 
@@ -348,6 +350,120 @@ def launch(entry: DesktopEntry, *, focus_existing: bool = True) -> str:
         return f"Could not launch {entry.name}: {exc}"
 
     return f"Launched {entry.name}."
+
+
+def list_entries(category: str = "", limit: int = 0) -> list[dict]:
+    """Structured application list for UI panels: visible entries, by name.
+
+    ``list_apps`` renders the same data as text for the model.
+    """
+    needle = category.lower()
+    entries = [
+        e for e in index()
+        if not e.no_display
+        and (not needle or any(needle in c.lower() for c in e.categories))
+    ]
+    entries.sort(key=lambda e: e.name.lower())
+    if limit > 0:
+        entries = entries[:limit]
+    return [
+        {"name": e.name, "id": e.id, "icon": e.icon, "exec": e.exec_cmd}
+        for e in entries
+    ]
+
+
+def _is_exact(entry: DesktopEntry, text: str) -> bool:
+    binary = Path(entry.command()[0]).name.lower() if entry.command() else ""
+    return text in (
+        entry.name.lower(), binary, entry.id.removesuffix(".desktop").lower()
+    )
+
+
+def check_workspace(workspace: str) -> str | None:
+    """Normalise a workspace argument, or None when it is not acceptable.
+
+    Positive numbers and the names of existing workspaces only: the value
+    ends up inside a compositor command, and a workspace that does not exist
+    and is not a number would be created by accident from a typo.
+    """
+    text = str(workspace).strip()
+    if text.isdigit() and int(text) > 0:
+        return str(int(text))
+    if text and text in desktop.backend().list_workspaces():
+        return text
+    return None
+
+
+def launch_on_workspace(query: str, workspace: str) -> str:
+    """Start a new instance of an app on a workspace without switching to it."""
+    backend = desktop.backend()
+    if not backend.can_spawn_on_workspace:
+        return (
+            f"Opening an app on a chosen workspace is not supported on this "
+            f"desktop ({backend.name}). Open it normally instead."
+        )
+
+    target = check_workspace(workspace)
+    if target is None:
+        return (
+            f"'{workspace}' is not a workspace I can use. Give a workspace "
+            "number or the name of an existing workspace."
+        )
+
+    matches = find(query)
+    if not matches:
+        return (
+            f"Could not find an application matching '{query}'. "
+            f"Try `search_apps {query}` to see what is installed."
+        )
+    text = query.strip().lower()
+    exact = [m for m in matches if _is_exact(m, text)]
+    if len(exact) == 1:
+        entry = exact[0]
+    elif len(matches) == 1:
+        entry = matches[0]
+    else:
+        names = ", ".join(m.name for m in (exact or matches)[:6])
+        return (
+            f"'{query}' matches several applications ({names}). "
+            "Say which one to open."
+        )
+
+    command = entry.command()
+    if not command:
+        return f"{entry.name} has no runnable Exec line."
+    if entry.terminal:
+        term = _terminal_command()
+        if not term:
+            return f"{entry.name} needs a terminal, and none was found."
+        command = term + command
+
+    before = {w.id for w in backend.list_windows()}
+    try:
+        accepted = backend.spawn_on_workspace(command, target)
+    except RuntimeError as exc:
+        return f"Could not launch {entry.name}: {exc}"
+    if not accepted:
+        return f"The compositor refused to start {entry.name} on workspace {target}."
+
+    # The dispatch only says the process was started. A launcher that forks
+    # or hands off to a running instance (browsers) ignores the workspace
+    # rule, so look for the window before claiming where it went.
+    for _ in range(20):
+        time.sleep(0.3)
+        new = [w for w in backend.list_windows() if w.id not in before]
+        if new:
+            win = new[0]
+            if str(win.workspace) == target:
+                return f"Started {entry.name} on workspace {target}."
+            return (
+                f"Started {entry.name}, but its window opened on workspace "
+                f"{win.workspace}, not {target}."
+            )
+    return (
+        f"Started {entry.name} for workspace {target}; no new window has "
+        "appeared yet, so I cannot confirm where it landed."
+    )
 
 
 def launch_by_name(query: str) -> str:
