@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import enum
+import queue
 import threading
 import time
 import traceback
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from . import audit, config, registry
 from .agent import SYSTEM_PROMPT
@@ -55,6 +57,255 @@ TOOL_TIMEOUT = 90.0
 Observer = Callable[[str, str], None]
 
 
+class Control(enum.Enum):
+    """Non-audio items :meth:`NetworkAudio.pull_output` can return."""
+
+    CLEAR = "clear"    # barge-in: the client must drop audio it has buffered
+    CLOSED = "closed"  # the session ended; nothing more will arrive
+
+
+class AudioSource(Protocol):
+    async def capture(
+        self, put: Callable[[bytes], None], astop: asyncio.Event, on_ready: Callable[[], None]
+    ) -> None:
+        """Feed PCM16 mono 16 kHz chunks to ``put`` until ``astop`` is set.
+
+        Returning early ends the whole session (that is how a network client
+        disconnecting is noticed).
+        """
+
+
+class AudioSink(Protocol):
+    async def play(self, audio_queue: asyncio.Queue, stop: threading.Event) -> None:
+        """Play PCM16 mono 24 kHz chunks taken from ``audio_queue``."""
+
+    def interrupt(self) -> None:
+        """Barge-in: discard audio that was queued but not yet played."""
+
+
+def _drain(q: asyncio.Queue | None) -> None:
+    while q is not None:
+        try:
+            q.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+
+
+class SoundDeviceSource:
+    """The laptop microphone."""
+
+    async def capture(self, put, astop, on_ready) -> None:
+        import sounddevice as sd
+
+        def callback(indata, _frames, _time, status) -> None:
+            if not status:
+                put(bytes(indata))
+
+        with sd.RawInputStream(
+            samplerate=SEND_SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype="int16",
+            blocksize=CHUNK_SIZE,
+            callback=callback,
+        ):
+            on_ready()
+            # Await the stop event rather than polling: this wakes the instant
+            # stop() is called instead of up to a tick later.
+            if astop is not None:
+                await astop.wait()
+
+
+class SoundDeviceSink:
+    """The laptop speaker."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue | None = None
+
+    def interrupt(self) -> None:
+        _drain(self._queue)
+
+    async def play(self, audio_queue, stop) -> None:
+        import sounddevice as sd
+
+        self._queue = audio_queue
+        stream = sd.RawOutputStream(
+            samplerate=RECEIVE_SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype="int16",
+            blocksize=CHUNK_SIZE,
+        )
+        stream.start()
+        try:
+            while not stop.is_set():
+                chunk = await audio_queue.get()
+                if chunk is None:
+                    continue
+                # `stream.write` blocks until the buffer drains. Running it on
+                # the event loop froze everything for the length of the reply —
+                # which is exactly why Stop appeared to hang while the phase
+                # was "Speaking". Off-thread, the loop stays responsive and the
+                # stop watcher can still fire.
+                try:
+                    await asyncio.to_thread(stream.write, chunk)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+        finally:
+            # abort(), not stop(): drop whatever is still queued in PortAudio
+            # so the assistant goes quiet at once instead of finishing the
+            # sentence after the user asked it to stop.
+            with contextlib.suppress(Exception):
+                stream.abort()
+            with contextlib.suppress(Exception):
+                stream.close()
+
+
+class NetworkAudio:
+    """Mic and speaker living on another machine (phone, browser).
+
+    Pass the same object as ``source`` and ``sink`` of a :class:`LiveSession`.
+    Everything here is thread-safe; the caller's transport threads never touch
+    the session's event loop directly.
+
+    * Input: :meth:`push_input` takes PCM16 mono little-endian at
+      ``SEND_SAMPLE_RATE`` (16 kHz), any chunk size.
+    * Output: :meth:`pull_output` returns PCM16 mono at ``RECEIVE_SAMPLE_RATE``
+      (24 kHz), or :attr:`Control.CLEAR` (drop buffered playback — barge-in),
+      or :attr:`Control.CLOSED` (session over), or ``None`` on timeout.
+    * :meth:`close` is how the client disconnecting ends the session; the
+      session ending closes it too, so a reader blocked in ``pull_output``
+      always wakes.
+    """
+
+    MAX_INPUT_CHUNKS = 100   # several seconds; older audio is dropped
+    MAX_OUTPUT_ITEMS = 400
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._closed = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._inq: asyncio.Queue | None = None
+        self._pending: list[bytes] = []   # pushed before the session is up
+        self._carry = b""                 # odd trailing byte of a chunk
+        self._out: queue.Queue = queue.Queue()
+        self._audio_queue: asyncio.Queue | None = None
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    # -- caller side (any thread) ---------------------------------------
+
+    def push_input(self, chunk: bytes) -> None:
+        with self._lock:
+            if self._closed or not chunk:
+                return
+            data = self._carry + bytes(chunk)
+            # A split sample would be a click; keep the odd byte for next time.
+            self._carry = data[-1:] if len(data) % 2 else b""
+            data = data[: len(data) - len(self._carry)]
+            if not data:
+                return
+            loop, inq = self._loop, self._inq
+            if loop is None or inq is None:
+                self._pending = (self._pending + [data])[-self.MAX_INPUT_CHUNKS:]
+                return
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(self._enqueue, inq, data)
+
+    def pull_output(self, timeout: float | None = None) -> "bytes | Control | None":
+        try:
+            return self._out.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            loop, inq = self._loop, self._inq
+        # Audio already queued is still delivered first, then the reader sees
+        # the end.
+        self._out.put(Control.CLOSED)
+        if loop is not None and inq is not None:
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._enqueue, inq, None)
+
+    # -- session side (event loop) --------------------------------------
+
+    def _enqueue(self, inq: asyncio.Queue, item: bytes | None) -> None:
+        # Oldest audio goes first when full; the end marker must always fit.
+        while inq.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                inq.get_nowait()
+        inq.put_nowait(item)
+
+    async def capture(self, put, astop, on_ready) -> None:
+        inq: asyncio.Queue = asyncio.Queue(maxsize=self.MAX_INPUT_CHUNKS)
+        with self._lock:
+            self._loop = asyncio.get_running_loop()
+            self._inq = inq
+            pending, self._pending = self._pending, []
+            closed = self._closed
+        if closed:
+            return
+        for data in pending:
+            self._enqueue(inq, data)
+        on_ready()
+        # Return on disconnect (None) as well as on stop: the session's
+        # first-completed watcher turns either into a clean shutdown.
+        stopper = asyncio.create_task(astop.wait()) if astop is not None else None
+        try:
+            while True:
+                getter = asyncio.create_task(inq.get())
+                waits = {getter} | ({stopper} if stopper else set())
+                await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+                if not getter.done():
+                    getter.cancel()
+                    return
+                data = getter.result()
+                if data is None:
+                    return
+                put(data)
+        finally:
+            if stopper:
+                stopper.cancel()
+            self.close()
+
+    def _emit_out(self, item: "bytes | Control") -> None:
+        if self._out.qsize() >= self.MAX_OUTPUT_ITEMS:
+            # Reader is not keeping up (stalled socket). Drop the oldest audio
+            # rather than growing without bound.
+            with contextlib.suppress(queue.Empty):
+                self._out.get_nowait()
+        self._out.put(item)
+
+    def interrupt(self) -> None:
+        _drain(self._audio_queue)
+        if self._closed:
+            return  # the CLOSED marker must reach the reader
+        # Drop what the reader has not collected yet, then tell it to flush
+        # whatever it already handed to its own speaker.
+        while True:
+            try:
+                self._out.get_nowait()
+            except queue.Empty:
+                break
+        self._out.put(Control.CLEAR)
+
+    async def play(self, audio_queue, stop) -> None:
+        self._audio_queue = audio_queue
+        try:
+            while not stop.is_set() and not self._closed:
+                chunk = await audio_queue.get()
+                if chunk:
+                    self._emit_out(chunk)
+        finally:
+            self.close()
+
+
 class LiveSession:
     """A Gemini Live conversation with tool access."""
 
@@ -64,7 +315,13 @@ class LiveSession:
         observer: Observer | None = None,
         confirmer: Confirmer | None = None,
         model: str = "",
+        source: "AudioSource | None" = None,
+        sink: "AudioSink | None" = None,
     ):
+        # Default is the laptop's own mic and speaker; a phone or browser
+        # passes a NetworkAudio for both (see its docstring).
+        self._source = source or SoundDeviceSource()
+        self._sink = sink or SoundDeviceSink()
         self.observer = observer
         self.confirmer = confirmer
         self.model = model or LIVE_MODEL
@@ -192,33 +449,17 @@ class LiveSession:
     # -- audio -----------------------------------------------------------
 
     async def _send_microphone(self, out_queue: asyncio.Queue) -> None:
-        import sounddevice as sd
-
         loop = asyncio.get_running_loop()
 
-        def callback(indata, _frames, _time, status) -> None:
-            if status:
-                return
-            try:
+        def put(data: bytes) -> None:
+            # Called from whatever thread the source captures on. A full queue
+            # drops the chunk: stale audio is worse than a gap.
+            with contextlib.suppress(asyncio.QueueFull, RuntimeError):
                 loop.call_soon_threadsafe(
-                    out_queue.put_nowait,
-                    {"data": bytes(indata), "mime_type": "audio/pcm"},
+                    out_queue.put_nowait, {"data": data, "mime_type": "audio/pcm"}
                 )
-            except (asyncio.QueueFull, RuntimeError):
-                pass
 
-        with sd.RawInputStream(
-            samplerate=SEND_SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            blocksize=CHUNK_SIZE,
-            callback=callback,
-        ):
-            self._emit("listening", "")
-            # Await the stop event rather than polling: this wakes the instant
-            # stop() is called instead of up to a tick later.
-            if self._astop is not None:
-                await self._astop.wait()
+        await self._source.capture(put, self._astop, lambda: self._emit("listening", ""))
 
     async def _drain_queue(self, out_queue: asyncio.Queue) -> None:
         while not self._stop.is_set():
@@ -232,39 +473,7 @@ class LiveSession:
                 return
 
     async def _play_audio(self, audio_queue: asyncio.Queue) -> None:
-        import sounddevice as sd
-
-        stream = sd.RawOutputStream(
-            samplerate=RECEIVE_SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            blocksize=CHUNK_SIZE,
-        )
-        stream.start()
-        try:
-            while not self._stop.is_set():
-                chunk = await audio_queue.get()
-                if chunk is None:
-                    continue
-                # `stream.write` blocks until the buffer drains. Running it on
-                # the event loop froze everything for the length of the reply —
-                # which is exactly why Stop appeared to hang while the phase
-                # was "Speaking". Off-thread, the loop stays responsive and the
-                # stop watcher can still fire.
-                try:
-                    await asyncio.to_thread(stream.write, chunk)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    pass
-        finally:
-            # abort(), not stop(): drop whatever is still queued in PortAudio
-            # so the assistant goes quiet at once instead of finishing the
-            # sentence after the user asked it to stop.
-            with contextlib.suppress(Exception):
-                stream.abort()
-            with contextlib.suppress(Exception):
-                stream.close()
+        await self._sink.play(audio_queue, self._stop)
 
     # -- tools -----------------------------------------------------------
 
@@ -344,6 +553,9 @@ class LiveSession:
                     # Barge-in: the user cut the model off. Keep what was
                     # actually said rather than dropping it.
                     if getattr(server, "interrupted", False):
+                        # Audio already queued is the cut-off answer; playing
+                        # it would talk over the user.
+                        self._sink.interrupt()
                         self._flush_heard()
                         self._flush_said()
 
