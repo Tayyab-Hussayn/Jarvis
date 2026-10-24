@@ -94,3 +94,6 @@ Single source: `web/app/tokens.css` (CSS variables; Tailwind maps `bg-surface` e
 - No `from __future__ import annotations` in `server.py`. Every request gets a reply frame. Confirmation frames are never dropped.
 - Never pass `host=` to `audit.record`: it overwrites the record's own machine-name field.
 - A test that expects a refused phone socket must probe it (`ping`); an accepted socket waits for `hello` forever, so a plain `receive_text()` hangs instead of failing.
+
+## Dropped socket (#102)
+`lib/connection.ts` (pure): `settleOnClose` turns every still-running tool card into `lost` ("Connection lost — result unknown", not failed — it may have run), denies pending confirm cards and marks a pending turn `interrupted` (TurnGraph shows a "check before repeating" note); `planRetry` is the reconnect state machine (reconnecting → offline after 3, capped backoff, keeps retrying; only close 1008 stops). `useKravein` also retries at once on `online` / page visible (a backgrounded phone throttles the timer). Skipped: fetching audited results on reconnect (no per-client audit key; needs an endpoint + client id). Tests `connection.test.ts`.

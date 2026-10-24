@@ -30,7 +30,7 @@ import { DangerBadge } from "./ui";
 const COLLAPSE_AFTER = 12;
 const NARROW_PX = 900;
 
-type NodeKind = "request" | "tool" | "confirm" | "answer" | "error" | "stopped";
+type NodeKind = "request" | "tool" | "confirm" | "answer" | "error" | "stopped" | "lost";
 
 interface GraphNode {
   key: string;
@@ -54,6 +54,13 @@ function buildNodes(message: Message, request: string): GraphNode[] {
   if (message.error) nodes.push({ key: "err", kind: "error", text: message.error });
   // A stop is not a failure — it did what was asked — so it gets its own
   // neutral node rather than the red error treatment.
+  if (message.interrupted && !message.text) {
+    nodes.push({
+      key: "lost",
+      kind: "lost",
+      text: "Connection lost — result unknown. The request may have completed; check before repeating it.",
+    });
+  }
   if (message.cancelled) {
     nodes.push({ key: "stop", kind: "stopped", text: "Stopped at your request." });
   }
@@ -109,8 +116,8 @@ function ToolNode({ tool }: { tool: ToolCallView }) {
           aria-hidden
           className="h-1.5 w-1.5 shrink-0 rounded-full"
           style={{
-            background: tool.done ? "var(--accent)" : "var(--moderate)",
-            boxShadow: `0 0 8px ${tool.done ? "var(--accent)" : "var(--moderate)"}`,
+            background: tool.done && !tool.lost ? "var(--accent)" : "var(--moderate)",
+            boxShadow: `0 0 8px ${tool.done && !tool.lost ? "var(--accent)" : "var(--moderate)"}`,
             animation: tool.done ? undefined : "pulse 1.2s ease-in-out infinite",
           }}
         />
@@ -118,7 +125,7 @@ function ToolNode({ tool }: { tool: ToolCallView }) {
           {tool.name}
         </span>
         <span className="ml-auto shrink-0 text-[length:var(--text-xs)] text-[var(--text-faint)]">
-          {tool.done ? (open ? "hide" : "show") : "running"}
+          {tool.lost ? "unknown" : tool.done ? (open ? "hide" : "show") : "running"}
         </span>
       </button>
 
@@ -206,6 +213,16 @@ function Node({
           style={{ animation: "node-in var(--motion-slow) var(--ease-out)" }}
         >
           <Markdown>{node.text ?? ""}</Markdown>
+        </div>
+      );
+
+    case "lost":
+      return (
+        <div
+          className="w-[min(38rem,100%)] rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"
+          style={{ borderLeftColor: "var(--moderate)", color: "var(--text-muted)" }}
+        >
+          {node.text}
         </div>
       );
 

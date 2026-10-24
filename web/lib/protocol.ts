@@ -129,6 +129,8 @@ export interface ToolCallView {
   display: string;
   result?: string;
   done: boolean;
+  /** The socket died while this ran; the result is unknown, not failed. */
+  lost?: boolean;
   /** Arguments as text, for calls that arrive already rendered rather than
    *  structured. The voice pipeline reports `name(k='v')` as one string, so
    *  there is no object to preview — this keeps the arguments visible instead
@@ -194,4 +196,6 @@ export interface Message {
   /** The user stopped this turn. Rendered differently from a failure — it did
    *  what was asked, so it is not an error. */
   cancelled?: boolean;
+  /** The connection dropped before this turn finished. */
+  interrupted?: boolean;
 }
