@@ -28,13 +28,42 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import audit, config
+from . import audit, config, phone
 from .safety import Danger
 
 # How long a confirmation card may sit unanswered before it is denied. A
 # generous default: the user may have walked away mid-turn, and re-asking is
 # cheap compared with silently killing a process they never approved.
 DEFAULT_CONFIRM_TIMEOUT = 120.0
+
+
+# Confirmation ids are unique across *all* sessions, not per session: a paired
+# phone is shown confirmations from every open browser/voice session and
+# answers by id alone, so two sessions both minting "c1" would let it approve
+# the wrong one.
+_confirm_ids = itertools.count(1)
+_open_confirms: "dict[str, tuple[Session, dict[str, Any]]]" = {}
+_open_lock = threading.Lock()
+
+
+def open_confirms() -> "list[tuple[str, dict[str, Any]]]":
+    """Every confirmation currently waiting, as ``(id, info)``. For a phone
+    that connects while one is pending."""
+    with _open_lock:
+        return [(cid, dict(info)) for cid, (_, info) in _open_confirms.items()]
+
+
+def resolve_open(confirm_id: str, approve: bool) -> bool:
+    """Answer a pending confirmation in whichever session holds it.
+
+    The phone's entry point. Same path as the browser's (``resolve_confirm``);
+    an unknown, late or already-answered id returns False and approves nothing.
+    """
+    with _open_lock:
+        entry = _open_confirms.get(confirm_id)
+    if entry is None:
+        return False
+    return entry[0].resolve_confirm(confirm_id, approve, by="phone")
 
 
 def frame(t: str, **fields: Any) -> dict[str, Any]:
@@ -48,6 +77,7 @@ class _Pending:
 
     event: threading.Event = field(default_factory=threading.Event)
     approved: bool = False
+    by: str = ""
 
 
 class Session:
@@ -69,7 +99,6 @@ class Session:
         self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=max_queue)
         self._pending: dict[str, _Pending] = {}
         self._pending_lock = threading.Lock()
-        self._ids = itertools.count(1)
         self._closed = threading.Event()
         self.turn_id: str = ""
         self.confirm_timeout = (
@@ -115,10 +144,16 @@ class Session:
         if self._closed.is_set():
             return False
 
-        confirm_id = f"c{next(self._ids)}"
+        confirm_id = f"c{next(_confirm_ids)}"
         pending = _Pending()
+        info = {
+            "action": action, "detail": detail, "danger": danger.name,
+            "expires_at": time.time() + self.confirm_timeout,
+        }
         with self._pending_lock:
             self._pending[confirm_id] = pending
+        with _open_lock:
+            _open_confirms[confirm_id] = (self, info)
 
         audit.record(
             "web.confirm_requested",
@@ -138,12 +173,29 @@ class Session:
             timeout=self.confirm_timeout,
         )
 
+        # A phone that raises must not leave the browser card unanswerable.
+        try:
+            phone.relay_confirm_request(confirm_id, info)
+        except Exception:
+            pass
+
         started = time.monotonic()
         answered = pending.event.wait(timeout=self.confirm_timeout)
         approved = bool(answered and pending.approved)
 
         with self._pending_lock:
             self._pending.pop(confirm_id, None)
+        with _open_lock:
+            _open_confirms.pop(confirm_id, None)
+        # Resolved anywhere (browser, phone, cancel, timeout): dismiss the
+        # notification. Runs on every exit, so it cannot be skipped.
+        try:
+            phone.relay_confirm_closed(
+                confirm_id,
+                "expired" if not answered else "approved" if approved else "denied",
+            )
+        except Exception:
+            pass
 
         audit.record(
             "web.confirm_resolved",
@@ -151,6 +203,7 @@ class Session:
             action=action,
             danger=danger.name,
             approved=approved,
+            answered_by=pending.by,
             timed_out=not answered,
             waited_seconds=round(time.monotonic() - started, 2),
         )
@@ -163,8 +216,9 @@ class Session:
             )
         return approved
 
-    def resolve_confirm(self, confirm_id: str, approve: bool) -> bool:
-        """Answer a pending confirmation. Returns False if it was unknown.
+    def resolve_confirm(self, confirm_id: str, approve: bool, by: str = "web") -> bool:
+        """Answer a pending confirmation. Returns False if it was unknown or
+        already answered (first answer wins).
 
         Called from the event loop when a ``confirm_reply`` frame arrives. An
         unknown id means the card already timed out or was never issued —
@@ -172,11 +226,14 @@ class Session:
         """
         with self._pending_lock:
             pending = self._pending.get(confirm_id)
-            if pending is None:
+            if pending is None or pending.event.is_set():
+                # Already answered but the worker has not woken to pop it yet:
+                # a second answer must not flip the first (deny, then approve).
                 return False
             # Set the verdict before waking the worker, or it can observe the
             # default False and deny an action the user actually approved.
             pending.approved = bool(approve)
+            pending.by = by
         pending.event.set()
         return True
 

@@ -1,7 +1,7 @@
 ---
 type: module
 owner: web
-updated: 2026-10-23
+updated: 2026-10-24
 ---
 
 # web
@@ -16,7 +16,7 @@ updated: 2026-10-23
 
 ## Verify
 ```bash
-.venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 97 + 87
+.venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 97+17 + 87
 cd web && npm test          # node --test lib/: phones, QR matrix, policy
 cd web && npm run build
 .venv/bin/python tools/check_layout.py     # only when the UI changed
@@ -34,6 +34,7 @@ The Android app is a device Kravein controls. It connects to the same server and
 - **UI token:** `POST /phone/ui-session` (Device auth, no body) → `{token, expires_at, ttl_seconds}` (default 12 h, `phone.ui_token_ttl_seconds`). Accepted exactly where the browser token is (`/api/*` Bearer, `/ws?token=`), never on `/phone/*`; Host/Origin checks unchanged. Store is in `webauth.py`, memory only, tied to the device: `phone.revoke()` calls `webauth.revoke_ui_tokens()`, which closes `/ws` sockets opened with it (a watcher task in `/ws` also closes at expiry). Audit `phone.ui_session` carries the device id, never the token. Tests `tests/web/test_phone_ui_session.py`.
 - **Instead of Origin:** any `/phone/*` request that **carries** `Origin` is refused (403, or the websocket closes). Browsers always send it on websocket handshakes and cross-site POSTs, and phones never do.
 - **Frames:** phone `hello{protocol, capabilities}` → `welcome` · server `execute{command,args}` → phone `result{ok,data | error_code,error}` (or `error`) · `ping`→`pong` · bad frame → `error{code,message}`. A frame over 64 KiB → error, then close. A late or invented `result` gets `error unknown_request`.
+- **Confirmation relay (#50):** a pending `Session.confirm` is sent to every ready phone as `confirm_request` (request_id = confirmation id), and to a phone that says hello while one is open. Phone `confirm_reply{approve}` goes through `events.resolve_open` → the owning session's `resolve_confirm(by="phone")`. First answer wins (`resolve_confirm` refuses once the event is set, so a late approve cannot flip a denial). Unknown/late/duplicate id → `error unknown_request`; non-bool `approve` → `malformed_frame`; reply before hello → `not_ready`; none approves anything. `confirm_closed{outcome}` (approved/denied/expired) is sent from the tail of `confirm()`, i.e. on every exit (browser, phone, cancel, drop, timeout), only for requests that were relayed. A phone disconnecting does not deny. Confirmation ids are global (`events._confirm_ids`), not per session, since a phone answers by id alone. Setting `phone.confirm_notifications` (default true). Audit `phone.confirm_reply`. Tests `tests/web/test_confirm_relay.py`.
 - **Result shapes:** every command declares `result` (the fields of `data`, same field specs as `args`, plus `values` for a fixed set) in the JSON. On `ok:true` the server checks `data` strictly (missing, wrong type, out of range, unexpected field) and a mismatch raises `PhoneBadResult` (`code="bad_result"`, audited as `phone.bad_result` with the reason only, never the data). The socket stays up. A failed result (`ok:false`) is not checked against it. A new command must add its `result`, or `test_protocol_file_is_self_consistent` fails. The app's `PhoneProtocolJsonTest` only reads `args`, so it does not compare `result` yet.
 - **API:** `phone.call(command, args, device=None, timeout=15)` blocks and returns `data` or raises a `PhoneError` subclass: not connected, ambiguous (several phones and no name: it refuses and lists them, never picks the first), rejected, timeout, disconnected, or failed. A drop, revoke or replacing connection fails pending calls at once. It only works inside the `kravein serve` process. Calling it on the event-loop thread raises. State-changing commands still need `safety.enforce()` in the calling skill.
 - **No TLS** (risk accepted for now): the secret crosses the LAN in plain text on every connect, the same exposure as the browser token under `--lan`. WPA home network only. Follow-up: a self-signed cert with its fingerprint pinned in the QR.
