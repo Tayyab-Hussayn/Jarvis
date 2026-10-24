@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +56,12 @@ import androidx.core.content.ContextCompat
 import com.kravein.connect.KraveinConnectForegroundService
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
+import androidx.compose.foundation.isSystemInDarkTheme
+import com.kravein.connect.ui.theme.GradientButton
+import com.kravein.connect.ui.theme.KraveinConnectTheme
+import com.kravein.connect.ui.theme.KraveinTheme
+import com.kravein.connect.ui.theme.KraveinTokens
+import com.kravein.connect.ui.theme.glassBorder
 import com.kravein.connect.core.DeviceCredential
 import com.kravein.connect.core.OfferParse
 import com.kravein.connect.core.PairingOffer
@@ -209,7 +216,8 @@ fun KraveinConnectApp(
         // shell, where it would cost battery and memory behind the real Kravein page.
         if (!inShell) HolographicBackground()
 
-        // UI Overlay
+        // UI Overlay. The hologram is always dark, so the onboarding screens use the dark palette over it.
+        KraveinConnectTheme(dark = if (inShell) isSystemInDarkTheme() else true) {
         NavHost(
             navController = navController,
             startDestination = startDest,
@@ -339,20 +347,38 @@ fun KraveinConnectApp(
                 }
             }
         }
+        }
     }
 }
 
 // --- NEW ONBOARDING SCREENS ---
+
+/** The web's tracked, upper-case section label (`--tracking-label`). */
+@Composable
+fun SectionLabel(text: String) {
+    Text(text.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+/** A glass panel for the in-shell tabs, same fill and hairline as the onboarding cards. */
+@Composable
+private fun Panel(content: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = KraveinTheme.colors.glassStrong, contentColor = MaterialTheme.colorScheme.onSurface),
+        shape = RoundedCornerShape(KraveinTokens.RADIUS_LG.dp),
+        border = glassBorder(),
+    ) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { content() } }
+}
 
 @Composable
 fun GlassCard(content: @Composable () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
         colors = CardDefaults.cardColors(
-            containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f)
+            containerColor = KraveinTheme.colors.glassStrong,
         ),
-        shape = RoundedCornerShape(24.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+        shape = RoundedCornerShape(KraveinTokens.RADIUS_XL.dp),
+        border = glassBorder()
     ) {
         Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             content()
@@ -364,12 +390,12 @@ fun GlassCard(content: @Composable () -> Unit) {
 fun WelcomeScreen(onNext: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text("KRAVEIN", style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
-        Text("CONNECT", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Light, color = androidx.compose.ui.graphics.Color.White)
+        Text("CONNECT", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Light, color = MaterialTheme.colorScheme.onSurface)
         Spacer(modifier = Modifier.height(60.dp))
         GlassCard {
-            Text("Welcome to the neural bridge.", style = MaterialTheme.typography.bodyLarge, color = androidx.compose.ui.graphics.Color.White)
+            Text("Welcome to the neural bridge.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
             Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
+            GradientButton(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
                 Text("Get Started")
             }
         }
@@ -382,9 +408,9 @@ fun AboutScreen(onNext: () -> Unit) {
         GlassCard {
             Text("Hardware Bridge", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
             Spacer(modifier = Modifier.height(16.dp))
-            Text("This agent acts as a secure physical bridge between your Android device and your PC's Kravein AI.", color = androidx.compose.ui.graphics.Color.White, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Text("This agent acts as a secure physical bridge between your Android device and your PC's Kravein AI.", color = MaterialTheme.colorScheme.onSurface, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
+            GradientButton(onClick = onNext, modifier = Modifier.fillMaxWidth()) {
                 Text("Next")
             }
         }
@@ -399,7 +425,7 @@ fun ConnectChoiceScreen(pairing: Boolean, error: String?, onScanQr: () -> Unit, 
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 "Open Kravein on your PC, choose Phone, and scan the QR code it shows.",
-                color = androidx.compose.ui.graphics.Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
             error?.let {
@@ -410,9 +436,9 @@ fun ConnectChoiceScreen(pairing: Boolean, error: String?, onScanQr: () -> Unit, 
             if (pairing) {
                 androidx.compose.material3.CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             } else {
-                Button(onClick = onScanQr, modifier = Modifier.fillMaxWidth()) { Text("Scan QR Code") }
+                GradientButton(onClick = onScanQr, modifier = Modifier.fillMaxWidth()) { Text("Scan QR Code") }
                 Spacer(modifier = Modifier.height(12.dp))
-                TextButton(onClick = onEnterManually) { Text("Enter Code Manually", color = androidx.compose.ui.graphics.Color.White) }
+                TextButton(onClick = onEnterManually) { Text("Enter Code Manually", color = MaterialTheme.colorScheme.onSurface) }
             }
         }
     }
@@ -451,9 +477,9 @@ private fun StartupPermissionsScreen(
         Spacer(Modifier.height(8.dp))
         Text("Enable the permissions Kravein Connect needs to control your phone reliably.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(20.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), contentColor = androidx.compose.ui.graphics.Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))) {
+        Card(colors = CardDefaults.cardColors(containerColor = KraveinTheme.colors.glassStrong, contentColor = MaterialTheme.colorScheme.onSurface), shape = RoundedCornerShape(KraveinTokens.RADIUS_LG.dp), border = glassBorder()) {
             Column(Modifier.padding(18.dp)) {
-                Text("Missing permissions", fontWeight = FontWeight.Bold)
+                SectionLabel("Missing permissions")
                 Spacer(Modifier.height(10.dp))
                 PermissionRow("Camera", cameraGranted)
                 PermissionRow("Notifications", notificationsGranted, neededLabel = "Recommended")
@@ -468,14 +494,14 @@ private fun StartupPermissionsScreen(
         }
         Spacer(Modifier.height(20.dp))
         if (!cameraGranted) {
-            Button(onClick = onRequestCameraPermission, modifier = Modifier.fillMaxWidth()) { Text("Allow Camera") }
+            GradientButton(onClick = onRequestCameraPermission, modifier = Modifier.fillMaxWidth()) { Text("Allow Camera") }
             Spacer(Modifier.height(10.dp))
         }
         if (!notificationsGranted) {
-            Button(onClick = onRequestNotificationPermission, modifier = Modifier.fillMaxWidth()) { Text("Allow Notifications") }
+            GradientButton(onClick = onRequestNotificationPermission, modifier = Modifier.fillMaxWidth()) { Text("Allow Notifications") }
             Spacer(Modifier.height(10.dp))
         }
-        Button(
+        GradientButton(
             onClick = onContinue,
             enabled = missingItems.isEmpty(),
             modifier = Modifier.fillMaxWidth(),
@@ -504,30 +530,30 @@ private fun ConnectedScreen(
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp).background(androidx.compose.ui.graphics.Color.Transparent).verticalScroll(rememberScrollState()),
     ) {
-        Text("KRAVEIN CONNECT", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, color = androidx.compose.ui.graphics.Color.White)
+        SectionLabel("Kravein Connect")
         Spacer(Modifier.height(8.dp))
+        val tone = when (state) {
+            ConnectionState.CONNECTED -> MaterialTheme.colorScheme.primary
+            ConnectionState.NEEDS_PAIRING -> MaterialTheme.colorScheme.error
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
         Text(
             if (state == ConnectionState.CONNECTED) "● Connected" else "○ ${state.name.lowercase().replace('_', ' ')}",
-            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.headlineMedium,
+            color = tone,
         )
         Spacer(Modifier.height(20.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), contentColor = androidx.compose.ui.graphics.Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))) {
-            Column(Modifier.padding(16.dp)) {
-                Text("${credential.host}:${credential.port}", fontWeight = FontWeight.Bold)
-                Text(credential.deviceName)
-                Text("Battery status is reported by the agent.")
-                Text("Network: Wi-Fi")
-                Text("State: $state")
-                Text(status)
-            }
+        Panel {
+            Text("${credential.host}:${credential.port}", fontWeight = FontWeight.Bold)
+            Text(credential.deviceName, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(16.dp))
-        
-        Button(onClick = onToggleConnection, modifier = Modifier.fillMaxWidth()) {
+        GradientButton(onClick = onToggleConnection, modifier = Modifier.fillMaxWidth()) {
             Text(if (state == ConnectionState.DISCONNECTED) "Connect" else "Disconnect")
         }
         Spacer(Modifier.height(20.dp))
-        Text("Recent Logs", fontWeight = FontWeight.Bold)
+        SectionLabel("Recent Logs")
         Spacer(Modifier.height(8.dp))
         logs.takeLast(8).forEach { line ->
             Text(line, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -589,7 +615,7 @@ private fun QrScannerScreen(
             Spacer(Modifier.size(48.dp))
         }
         Spacer(Modifier.height(16.dp))
-        Card(modifier = Modifier.fillMaxWidth().height(420.dp), shape = RoundedCornerShape(20.dp)) {
+        Card(modifier = Modifier.fillMaxWidth().height(420.dp), shape = RoundedCornerShape(KraveinTokens.RADIUS_XL.dp), border = glassBorder()) {
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { viewContext ->
@@ -668,17 +694,26 @@ private fun SettingsScreen(
         )
     }
     Column(Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
-        Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+        Text("Settings", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(16.dp))
-        Text("Server", fontWeight = FontWeight.Bold)
-        Text("${credential.host}:${credential.port}")
-        Text("Paired as ${credential.deviceName}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SectionLabel("Server")
+        Spacer(Modifier.height(8.dp))
+        Panel {
+            Text("${credential.host}:${credential.port}", fontWeight = FontWeight.Bold)
+            Text("Paired as ${credential.deviceName}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Spacer(Modifier.height(20.dp))
         OutlinedButton(onClick = onOpenPermissions, modifier = Modifier.fillMaxWidth()) { Text("Permissions") }
         Spacer(Modifier.height(12.dp))
-        Button(onClick = { confirmUnpair = true }, modifier = Modifier.fillMaxWidth()) { Text("Unpair") }
+        OutlinedButton(
+            onClick = { confirmUnpair = true },
+            modifier = Modifier.fillMaxWidth(),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+        ) { Text("Unpair") }
         Spacer(Modifier.height(24.dp))
-        Text("About", fontWeight = FontWeight.Bold)
+        SectionLabel("About")
+        Spacer(Modifier.height(8.dp))
         Text("Kravein Connect ${com.kravein.connect.BuildConfig.VERSION_NAME}", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             "Shows your PC's Kravein and lets Kravein control this phone over your local network.",

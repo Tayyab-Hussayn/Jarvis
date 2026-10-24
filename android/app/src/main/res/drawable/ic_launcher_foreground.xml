@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The "K" mark in the accent gradient (cyan to violet). Inside the 66 dp adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M37,33 H45 V75 H37 Z M45,56 L64,33 H74 L53,59 Z M51,50 L74,75 H64 L45,57 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="37"
+                android:startY="33"
+                android:endX="74"
+                android:endY="75"
+                android:type="linear">
+                <item android:color="#3DE3FF" android:offset="0" />
+                <item android:color="#7B8CFF" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

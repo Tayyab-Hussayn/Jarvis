@@ -16,6 +16,7 @@ import com.kravein.connect.confirm.ConfirmationNotifier
 import com.kravein.connect.confirm.ConfirmationText
 import com.kravein.connect.confirm.Outcome
 import com.kravein.connect.confirm.PendingConfirmation
+import com.kravein.connect.ui.theme.KraveinTokens
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
 import com.kravein.connect.commands.CommandRouter
@@ -125,7 +126,8 @@ class KraveinConnectForegroundService : Service() {
 
     private fun buildNotification(title: String, text: String): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_kravein_launcher)
+            .setSmallIcon(R.drawable.ic_stat_kravein)
+            .setColor(KraveinTokens.NOTIFICATION_ACCENT)
             .setContentTitle(title)
             .setContentText(text)
             .setOngoing(true)

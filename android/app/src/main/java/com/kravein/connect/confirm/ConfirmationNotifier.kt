@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import com.kravein.connect.KraveinConnectForegroundService
 import com.kravein.connect.MainActivity
 import com.kravein.connect.R
+import com.kravein.connect.ui.theme.KraveinTokens
 
 /**
  * Shows a pending confirmation as a high-priority notification with Approve and Decline. The buttons start the
@@ -33,7 +34,8 @@ class ConfirmationNotifier(private val context: Context) {
         if (!canNotify()) return
         val critical = confirmation.danger == Danger.CRITICAL
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_kravein_launcher)
+            .setSmallIcon(R.drawable.ic_stat_kravein)
+            .setColor(KraveinTokens.NOTIFICATION_ACCENT)
             .setContentTitle(ConfirmationText.title(confirmation))
             .setContentText(ConfirmationText.body(confirmation))
             .setStyle(NotificationCompat.BigTextStyle().bigText(ConfirmationText.body(confirmation)))
@@ -44,7 +46,7 @@ class ConfirmationNotifier(private val context: Context) {
             .setContentIntent(openKraveinIntent(confirmation.requestId))
             .addAction(0, "Decline", replyIntent(confirmation.requestId, approve = false))
             .addAction(0, "Approve", replyIntent(confirmation.requestId, approve = true))
-        if (critical) builder.setColor(0xFFFF6B6B.toInt()).setSubText("Critical")
+        if (critical) builder.setColor(KraveinTokens.Dark.critical.toInt()).setSubText("Critical")
         // The notification disappears by itself when the question runs out, even if the service was killed meanwhile.
         val remainingMs = (confirmation.expiresAt - nowSeconds) * 1000
         if (remainingMs > 0) builder.setTimeoutAfter(remainingMs)
@@ -55,7 +57,8 @@ class ConfirmationNotifier(private val context: Context) {
     fun showResult(requestId: String, text: String) {
         if (!canNotify()) return
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_kravein_launcher)
+            .setSmallIcon(R.drawable.ic_stat_kravein)
+            .setColor(KraveinTokens.NOTIFICATION_ACCENT)
             .setContentTitle(text)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
