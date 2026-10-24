@@ -40,7 +40,7 @@ export function AutoBanner({ policy }: { policy: PolicyState }) {
   return (
     <div
       role="alert"
-      className="flex shrink-0 items-center justify-center gap-4 px-4 py-1.5 text-[length:var(--text-sm)] font-medium"
+      className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 py-1.5 text-[length:var(--text-sm)] font-medium sm:px-4"
       style={{ background: "var(--critical)", color: "#fff" }}
     >
       <span>Auto-approve is ON — {formatClock(left)} left</span>

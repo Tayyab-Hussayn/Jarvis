@@ -20,6 +20,7 @@ updated: 2026-10-23
 cd web && npm test          # node --test lib/: phones, QR matrix, policy
 cd web && npm run build
 .venv/bin/python tools/check_layout.py     # only when the UI changed
+PYTHONPATH=. .venv/bin/python web/scripts/check_phone_layout.py   # 390x844: no sideways scroll, targets >=40px, drawer, composer above keyboard
 ```
 
 ## Phone channel
@@ -44,6 +45,7 @@ The Android app is a device Kravein controls. It connects to the same server and
 - `config._deep_merge` shares nested dicts with `DEFAULT_SETTINGS`, so writing the `safety` section mutates the defaults in-process; `test_policy_api.py` deep-copies them. Reported to the orchestrator (config.py is not ours).
 
 ## Gotchas
+- **Phone width (<640px, Android WebView):** the rail is `hidden sm:flex`; `NavDrawer` (Shell.tsx, opened by the top bar's menu button) replaces it. Touch targets are enforced by one `@media (max-width: 639px)` rule in `globals.css` (min 40px on buttons/inputs), not per component. `layout.tsx` sets `interactiveWidget: "resizes-content"` so the on-screen keyboard shrinks the layout instead of covering the composer. Desktop is unchanged above the breakpoint.
 - No `from __future__ import annotations` in `server.py`. Every request gets a reply frame. Confirmation frames are never dropped.
 - Never pass `host=` to `audit.record`: it overwrites the record's own machine-name field.
 - A test that expects a refused phone socket must probe it (`ping`); an accepted socket waits for `hello` forever, so a plain `receive_text()` hangs instead of failing.

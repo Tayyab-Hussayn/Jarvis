@@ -17,7 +17,7 @@
  *    machine's state should never be more than a glance away.
  */
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import type { ConfirmView, SystemSnapshot } from "@/lib/protocol";
 import type { Connection } from "@/lib/useKravein";
@@ -173,7 +173,7 @@ export function Rail({
 }) {
   return (
     <nav
-      className="flex shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface)] px-2.5 py-3"
+      className="hidden shrink-0 flex-col border-r sm:flex border-[var(--border)] bg-[var(--surface)] px-2.5 py-3"
       style={{
         width: expanded ? "var(--rail-width-open)" : "var(--rail-width)",
         transition: "width var(--motion-base) var(--ease)",
@@ -248,6 +248,103 @@ export function Rail({
   );
 }
 
+/**
+ * Phone-width navigation: the rail is hidden below 640px and this drawer
+ * replaces it. Thirteen destinations do not fit a bottom bar, and a drawer
+ * leaves the whole height to the content and the keyboard.
+ */
+export function NavDrawer({
+  open,
+  view,
+  onSelect,
+  onClose,
+  badges,
+}: {
+  open: boolean;
+  view: ViewId;
+  onSelect: (view: ViewId) => void;
+  onClose: () => void;
+  badges?: Partial<Record<ViewId, number>>;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-40 sm:hidden">
+      <button
+        type="button"
+        aria-label="Close menu"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/50"
+      />
+      <nav
+        aria-label="Navigation drawer"
+        className="absolute inset-y-0 left-0 flex w-[min(18rem,85vw)] flex-col overflow-y-auto border-r border-[var(--border)] bg-[var(--surface)] px-3 py-3"
+      >
+        <div className="mb-3 flex h-11 items-center justify-between px-1">
+          <span className="text-[length:var(--text-sm)] font-semibold">Kravein</span>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close menu"
+            className="flex h-11 w-11 items-center justify-center rounded-[var(--radius)] text-[var(--text-muted)]"
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </div>
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label} className="mb-3">
+            <div className="mb-1 px-3 text-[length:var(--text-xs)] uppercase tracking-[0.1em] text-[var(--text-faint)]">
+              {group.label}
+            </div>
+            {group.items.map((item) => {
+              const active = view === item.id;
+              const badge = badges?.[item.id];
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    onSelect(item.id);
+                    onClose();
+                  }}
+                  aria-current={active ? "page" : undefined}
+                  className={classNames(
+                    "flex h-11 w-full items-center gap-3 rounded-[var(--radius)] px-3",
+                    active
+                      ? "bg-[var(--accent-dim)] text-[var(--accent)]"
+                      : "text-[var(--text-muted)] active:bg-[var(--surface-raised)]",
+                  )}
+                >
+                  <Icon name={item.icon} size={19} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-left text-[length:var(--text-sm)]">
+                    {item.label}
+                  </span>
+                  {badge !== undefined && badge > 0 && (
+                    <span
+                      className="shrink-0 rounded-[var(--radius-full)] px-1.5 text-[length:var(--text-xs)] font-semibold tabular-nums"
+                      style={{ background: "var(--critical-dim)", color: "var(--critical)" }}
+                    >
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
 /* -- top bar ---------------------------------------------------------- */
 
 function Vital({
@@ -314,6 +411,7 @@ export function TopBar({
   voiceActive,
   voiceOpen,
   onToggleVoice,
+  onMenu,
 }: {
   title: string;
   hostname?: string;
@@ -324,10 +422,21 @@ export function TopBar({
   voiceActive?: boolean;
   voiceOpen?: boolean;
   onToggleVoice?: () => void;
+  onMenu?: () => void;
 }) {
   const status = STATUS[connection];
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border)] bg-[var(--surface)] px-5">
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 sm:gap-4 sm:px-5">
+      {onMenu && (
+        <button
+          type="button"
+          onClick={onMenu}
+          aria-label="Open menu"
+          className="-ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius)] text-[var(--text-muted)] sm:hidden"
+        >
+          <Icon name="menu" size={20} />
+        </button>
+      )}
       <div className="min-w-0">
         <h1 className="truncate text-[length:var(--text-lg)] font-semibold tracking-[-0.01em]">
           {title}
@@ -380,7 +489,7 @@ export function TopBar({
           onClick={onToggleVoice}
           aria-pressed={Boolean(voiceOpen)}
           title={voiceOpen ? "Hide live voice" : "Live voice"}
-          className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border px-3 py-1.5 text-[length:var(--text-xs)]"
+          className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border px-3 py-1.5 text-[length:var(--text-xs)] max-sm:min-h-10 max-sm:min-w-10 max-sm:justify-center"
           style={{
             transition: "all var(--motion-fast) var(--ease)",
             borderColor: voiceActive
@@ -410,12 +519,12 @@ export function TopBar({
       <button
         type="button"
         onClick={onPalette}
-        className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border border-[var(--border-strong)] px-3 py-1.5 text-[length:var(--text-xs)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+        className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border border-[var(--border-strong)] px-3 py-1.5 text-[length:var(--text-xs)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] max-sm:min-h-10 max-sm:min-w-10 max-sm:justify-center"
         style={{ transition: "all var(--motion-fast) var(--ease)" }}
       >
         <Icon name="search" size={14} />
         <span className="hidden sm:inline">Run a skill</span>
-        <kbd className="rounded-[var(--radius-sm)] border border-[var(--border-strong)] px-1 font-[family-name:var(--font-mono)]">
+        <kbd className="hidden rounded-[var(--radius-sm)] border border-[var(--border-strong)] px-1 font-[family-name:var(--font-mono)] sm:inline">
           ⌘K
         </kbd>
       </button>
@@ -456,8 +565,8 @@ export function ConfirmOverlay({
 }) {
   if (confirms.length === 0) return null;
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4">
-      <div className="pointer-events-auto w-full max-w-lg space-y-2">
+    <div className="pointer-events-none fixed inset-x-0 top-2 z-50 flex justify-center px-2 sm:top-4 sm:px-4">
+      <div className="pointer-events-auto max-h-[calc(100dvh-1rem)] w-full max-w-lg space-y-2 overflow-y-auto">
         {confirms.map((confirm) => (
           <div key={confirm.confirmId} className="relative">
             <ConfirmCard confirm={confirm} onRespond={onRespond} />
