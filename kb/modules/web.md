@@ -14,6 +14,8 @@ updated: 2026-10-24
 
 - Confirmation policy UI: `web/components/PolicyPanel.tsx` (Settings selector + in-page auto-approve confirmation) · `AutoBanner.tsx` (red strip on every view) · `web/lib/policy.ts` pure logic, `usePolicy.ts` server-confirmed state + 5 s poll · tests `web/lib/policy.test.ts`, `tests/web/test_policy_api.py`
 
+- Share-in link `/?ask=<text>` (#58): `web/lib/ask.ts` (pure: cap 4000 code points, control chars stripped, tests `ask.test.ts`) · `captureAsk()` in `session.ts` reads it once and strips it from the URL next to `token` · `Console` puts it in the composer from an effect (an existing draft wins). Never sent, shown only as a textarea value.
+
 ## Verify
 ```bash
 .venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 97+17 + 87
