@@ -2,4 +2,8 @@
     <string name="app_name">Kravein Connect</string>
     <string name="tile_label">Kravein</string>
     <string name="accessibility_service_description">Kravein Connect accessibility bridge for device control setup.</string>
+    <string name="mic_rationale_title">Use the phone\'s microphone?</string>
+    <string name="mic_rationale_body">Voice mode listens through this phone\'s microphone and plays Kravein\'s replies on its speaker. The microphone is only on while a voice session is running and stops when you leave the app.</string>
+    <string name="mic_rationale_continue">Continue</string>
+    <string name="mic_rationale_not_now">Not now</string>
 </resources>

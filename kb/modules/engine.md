@@ -1,7 +1,7 @@
 ---
 type: module
 owner: engine
-updated: 2026-10-23
+updated: 2026-10-24
 ---
 
 # engine
@@ -23,6 +23,9 @@ updated: 2026-10-23
   - Out: `net.pull_output(timeout) -> bytes | Control.CLEAR | Control.CLOSED | None` — PCM16 mono **24 kHz** (`RECEIVE_SAMPLE_RATE`). `CLEAR` = barge-in: the client must drop audio it already buffered (uncollected audio is dropped server-side). `CLOSED` = session over. `None` = timeout. Output backlog bounded (400 chunks, oldest dropped).
   - Stop: client disconnect → `net.close()` (ends the session cleanly); `s.stop()` also closes `net`, so a reader blocked in `pull_output` always gets `CLOSED`. Run the reader as a loop until `CLOSED`; no other thread is left behind.
   - Custom backends implement `AudioSource.capture(put, astop, on_ready)` / `AudioSink.play(audio_queue, stop)` + `interrupt()`. Pinned by `tests/engine/test_live_audio.py` (fake genai client).
+
+- Live turn hygiene (`live.py`, #97): transcripts and replies go through `clean_transcript` (strips `<ctrlNN>`/`<unusedNN>`/turn tokens, removes Devanagari/Arabic script — never displayed, never transliterated: letter-by-letter Latin turned "turn off this flashlight" into "tarn of dis flaishalaait"). A turn with no audio, no usable text and no tool call, after the model began or the user spoke, emits `answer` = `EMPTY_REPLY_TEXT` and audits `live.empty_reply` (text only, not spoken). `voice.language`: `""` or `en+ur-roman` = English + Roman Urdu (recognition `en-US`, base language English: replies in English); any other value is a BCP-47 code as before. Config default stays `""` because `platform/stt.py` passes `voice.language` to whisper. Pinned by `tests/engine/test_live_turns.py`.
+- English user transcript (`live.py` + `platform/stt.py`, #100): Gemini input transcription cannot be pinned to English (language_codes is ignored; Hindustani/accented English returns Devanagari), so each turn's mic audio (`_mic`, last 30 s) is run through faster-whisper `task="translate"` (`stt.translate_to_english`, multilingual `voice.translate_model`, default `base`, preloaded in a daemon thread at session start; `voice.live_translate` false disables). `heard` carries the English text; the reply never waits (Whisper runs in a task), only the `listening` marker is held back (<= `TRANSLATE_TIMEOUT` 45 s) so the client's user bubble is not split. Until the model is loaded (`stt.translate_ready()`), or on failure, the fallback is Gemini's text with foreign script stripped; `heard_partial` shows `…` while Devanagari-only. Tests set `stt.translate_available` false in the `backend` fixture so no model is loaded.
 
 ## Gotchas
 - `service.py` (#76): the unit is never enabled (owner: manual on/off). Host comes from `web.env` `KRAVEIN_LAN_HOST`, port 8787. `phones remove` refuses ambiguous names; `open` never prints the token. Pinned by `tests/engine/test_service_cli.py` (systemctl/HTTP stubbed).

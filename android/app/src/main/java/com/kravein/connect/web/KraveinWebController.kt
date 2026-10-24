@@ -3,6 +3,10 @@ package com.kravein.connect.web
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.AudioRecordingConfiguration
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -80,6 +84,44 @@ class KraveinWebController(
     private var retriedAfter401 = false
     private var pendingAsk: String? = null
 
+    private val voice = VoiceSessionPolicy()
+    private var micStoppedByBackground = false
+    private var focusRequest: AudioFocusRequest? = null
+    private val audioManager get() = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    // Only this app's own recordings are reported, so "any configuration" means the page has the microphone open.
+    private val recordingCallback = object : AudioManager.AudioRecordingCallback() {
+        override fun onRecordingConfigChanged(configs: MutableList<AudioRecordingConfiguration>) {
+            apply(voice.onRecording(configs.isNotEmpty()))
+        }
+    }
+
+    private fun apply(action: VoiceSessionPolicy.Action) {
+        val am = audioManager ?: return
+        when (action) {
+            VoiceSessionPolicy.Action.TakeAudioFocus -> {
+                // Speech focus: music ducks/pauses while Kravein talks and listens; replies play on the normal media
+                // stream, so the phone speaker (or a connected headset) at the media volume.
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build(),
+                    )
+                    .setOnAudioFocusChangeListener { }
+                    .build()
+                focusRequest = request
+                am.requestAudioFocus(request)
+            }
+            VoiceSessionPolicy.Action.ReleaseAudioFocus -> {
+                focusRequest?.let { am.abandonAudioFocusRequest(it) }
+                focusRequest = null
+            }
+            VoiceSessionPolicy.Action.None -> Unit
+        }
+    }
+
     /** The view for the tab; built on first use. It may still have a parent from an earlier composition. */
     fun viewFor(credential: DeviceCredential): WebView {
         bind(credential)
@@ -122,6 +164,12 @@ class KraveinWebController(
     }
 
     fun onStop() {
+        // A live voice session never outlives the screen: close the page that holds the microphone. The page also ends
+        // its own session when hidden; this makes it certain. onStart brings the page back.
+        if (voice.mustStopOnBackground()) {
+            webView?.loadUrl("about:blank")
+            micStoppedByBackground = true
+        }
         webView?.onPause()
         lifecycle.onBackground(nowSeconds())
         handler.postDelayed(destroyWhenIdle, IDLE_MS)
@@ -135,6 +183,11 @@ class KraveinWebController(
         }
         webView?.let {
             it.onResume()
+            if (micStoppedByBackground) {
+                micStoppedByBackground = false
+                load(forceNewToken = false)
+                return
+            }
             // The token the page holds may have expired while the app slept; a fresh one only costs a reload when
             // the cached one is within its refresh margin.
             if (_state.value is WebUiState.Ready) refreshIfTokenStale()
@@ -230,6 +283,9 @@ class KraveinWebController(
             view.destroy()
         }
         webView = null
+        audioManager?.unregisterAudioRecordingCallback(recordingCallback)
+        apply(voice.onPageGone())
+        micStoppedByBackground = false
         pipe?.close()
         pipe = null
         lastLoadedToken = null
@@ -268,6 +324,7 @@ class KraveinWebController(
         // No addJavascriptInterface anywhere: the page gets no handle on the app.
         view.webViewClient = Client()
         view.webChromeClient = Chrome()
+        audioManager?.registerAudioRecordingCallback(recordingCallback, handler)
         return view
     }
 

@@ -111,6 +111,18 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "stt_backend": "auto",
         # tiny.en is fastest; small.en is more accurate. base.en is the balance.
         "stt_model": "base.en",
+        # Live voice shows and logs the user's turn as English text, whatever
+        # language was spoken, by running Whisper's translate task on the turn's
+        # audio (Gemini's own transcript comes back in Devanagari). It needs a
+        # multilingual model, not the ".en" one above; off falls back to
+        # Gemini's text with non-Latin script removed.
+        "live_translate": True,
+        "translate_model": "base",
+        # "" = auto for local STT. Live voice reads "" (or "en+ur-roman") as
+        # English-first (base language English, Roman Urdu understood); any
+        # other value is a BCP-47 code.
+        # Setting "en+ur-roman" explicitly would reach local whisper as a bogus
+        # language code, so leave it empty unless you want a fixed language.
         "language": "",
         # How long a pause ends your sentence.
         "silence_seconds": 1.2,

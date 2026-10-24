@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import enum
 import queue
+import re
 import threading
 import time
 import traceback
@@ -49,10 +50,53 @@ VOICE_NAME = "Charon"
 # English badly enough to render it in Malayalam script.
 DEFAULT_LANGUAGE = "en-US"
 
+# `voice.language` preset: listen for English and Roman Urdu/Hindustani, answer
+# in English. Empty means the same, so the stock
+# config (whose "" the local STT also reads as "auto") needs no migration.
+ROMAN_PRESET = "en+ur-roman"
+
+EMPTY_REPLY_TEXT = "Sorry, I didn't catch that — please say it again."
+
+# The native-audio model sometimes emits its own control tokens as text
+# (`<ctrl46>`) instead of a reply or a tool call. They are never content.
+_CONTROL_TOKEN = re.compile(
+    r"<(?:ctrl|unused)\d+>|</?(?:start_of_turn|end_of_turn|eos|bos|pad)>"
+)
+
+# Scripts the owner never wants to see. Gemini's input transcription returns
+# Hindustani (and, by accident, accented English) in Devanagari, and a letter-
+# by-letter transliteration of that turned "turn off this flashlight" into
+# "tarn of dis flaishalaait". The display transcript comes from Whisper's
+# translate task instead (see `_english_heard`); this is the backstop that
+# keeps these scripts off screen when that is unavailable.
+_FOREIGN_SCRIPT = re.compile("[\u0600-\u06ff\u0750-\u077f\u0900-\u097f]+")
+
+# Per-turn microphone audio kept for the English transcript. 30s of PCM16 at
+# 16 kHz; older audio is dropped so a long silence cannot grow without bound.
+MAX_TURN_AUDIO = 30 * SEND_SAMPLE_RATE * 2
+# Placeholder while the English transcript is still being produced.
+HEARING_TEXT = "…"
+
+
+def strip_control_tokens(text: str) -> str:
+    """Remove model control tokens and tidy the whitespace they leave."""
+    return re.sub(r"\s{2,}", " ", _CONTROL_TOKEN.sub("", text)).strip()
+
+
+def clean_transcript(text: str) -> str:
+    """What the user may see: no control tokens, no Devanagari or Arabic script."""
+    text = _FOREIGN_SCRIPT.sub(" ", strip_control_tokens(text))
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
 # A tool call blocks the model's turn. Without a ceiling the whole session can
 # sit silent with no way to tell a slow command from a dead one, and no way out
 # except tearing the session down by hand.
 TOOL_TIMEOUT = 90.0
+
+# Ceiling on the English transcript of one turn, so a stalled model download
+# cannot hold the `listening` marker (and so the client's turn) open forever.
+TRANSLATE_TIMEOUT = 45.0
 
 Observer = Callable[[str, str], None]
 
@@ -342,6 +386,14 @@ class LiveSession:
         # turn boundary.
         self._heard: list[str] = []
         self._said: list[str] = []
+        # What the model did this turn, so a turn that produced nothing can be
+        # told apart from one that simply is not over yet.
+        self._audio_bytes = 0
+        self._tool_called = False
+        # The user's own audio for the turn in progress, kept so Whisper can
+        # write the English transcript (see `_english_heard`).
+        self._mic = bytearray()
+        self._finals: set[asyncio.Task] = set()
 
     # -- helpers ---------------------------------------------------------
 
@@ -363,13 +415,97 @@ class LiveSession:
                 loop.call_soon_threadsafe(event.set)
 
     def _flush_heard(self) -> None:
-        text = "".join(self._heard).strip()
+        text = clean_transcript("".join(self._heard)).strip()
         self._heard.clear()
+        self._mic.clear()
         if text:
             self._emit("heard", text)
 
+    def _english_heard(self, pcm: bytes) -> str:
+        """The user's turn as English text, from Whisper's translate task.
+
+        Blocking (runs in a thread). Empty when unavailable or it failed, in
+        which case the caller falls back to Gemini's own text.
+
+        Gemini's input transcription cannot be pinned to English: it comes back
+        in Devanagari for Hindustani and for some accented English, and
+        transliterating that gives phonetic junk. Whisper hears the same audio
+        and translates any language straight to English.
+        """
+        import tempfile
+        import wave
+        from pathlib import Path
+
+        from .platform import stt
+
+        if len(pcm) < SEND_SAMPLE_RATE // 4 * 2:  # under a quarter second
+            return ""
+        if not self._can_translate():
+            return ""
+        with tempfile.TemporaryDirectory(prefix="kravein-live-") as tmp:
+            path = Path(tmp) / "turn.wav"
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(CHANNELS)
+                w.setsampwidth(2)
+                w.setframerate(SEND_SAMPLE_RATE)
+                w.writeframes(pcm)
+            try:
+                return clean_transcript(stt.translate_to_english(path))
+            except Exception as exc:
+                audit.record("voice.live_translate_failed", error=str(exc)[:300])
+                return ""
+
+    def _can_translate(self) -> bool:
+        from .platform import stt
+
+        # Ready, not just available: on first use the model is still being
+        # downloaded, and waiting on that would hold every turn open. Until it
+        # lands, turns fall back to Gemini's text with foreign script removed.
+        return (
+            bool(config.get("voice.live_translate", True))
+            and stt.translate_available()
+            and stt.translate_ready()
+        )
+
+    async def _finish_heard(self, pcm: bytes, fallback: str, empty: bool = False) -> None:
+        """Emit the English transcript once Whisper has it, then end the turn.
+
+        The reply never waits for this — audio keeps streaming while Whisper
+        runs. Only the `listening` marker is held back, because the client
+        closes the user's bubble on it and a `heard` after that would open a
+        second one.
+        """
+        try:
+            text = await asyncio.wait_for(
+                asyncio.to_thread(self._english_heard, pcm), timeout=TRANSLATE_TIMEOUT
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            audit.record("voice.live_translate_failed", error=str(exc)[:300] or "timeout")
+            text = ""
+        text = text or fallback
+        if self._heard:
+            # The user has already started the next turn; its partials own the
+            # bubble now and a late rewrite would overwrite them.
+            audit.record("voice.live_heard_dropped", chars=len(text))
+        elif text:
+            self._emit("heard", text)
+        if empty:
+            # After the user's words, so the retry prompt reads as the reply.
+            self._emit("answer", EMPTY_REPLY_TEXT)
+        self._emit("listening", "")
+
+    def _preload_translate(self) -> None:
+        from .platform import stt
+
+        try:
+            stt.preload_translate()
+        except Exception as exc:
+            audit.record("voice.live_translate_failed", error=str(exc)[:300])
+
     def _flush_said(self) -> None:
-        text = "".join(self._said).strip()
+        text = clean_transcript("".join(self._said)).strip()
         self._said.clear()
         if text:
             # `answer` is the kind the local pipeline uses for a finished
@@ -377,6 +513,46 @@ class LiveSession:
             # rather than content, so the assistant's own words never reached
             # the transcript at all.
             self._emit("answer", text)
+
+    def _reset_turn(self) -> None:
+        self._audio_bytes = 0
+        self._tool_called = False
+
+    def _end_turn(self) -> bool:
+        """Flush the transcripts, and say so when the model gave nothing back.
+
+        A turn that ends with no spoken audio, no usable text and no tool call
+        (the model emitted only `<ctrl46>`) used to leave a broken reply bubble
+        and silence. The user is told to repeat, and it is audited.
+        """
+        raw_said = "".join(self._said)
+        raw_heard = "".join(self._heard)
+        heard = clean_transcript(raw_heard)
+        spoke = bool(clean_transcript(raw_said)) or self._audio_bytes > 0
+        # Only a turn the model began, or one the user spoke into, can be
+        # "empty"; a stray turn_complete on an idle session is not.
+        engaged = bool(raw_said.strip()) or bool(raw_heard.strip())
+        empty = engaged and not spoke and not self._tool_called
+        pcm = bytes(self._mic)
+        defer = bool(raw_heard.strip()) and self._can_translate()
+        if defer:
+            self._heard.clear()
+            self._mic.clear()
+            task = asyncio.get_running_loop().create_task(self._finish_heard(pcm, heard, empty))
+            self._finals.add(task)
+            task.add_done_callback(self._finals.discard)
+        else:
+            self._flush_heard()
+        self._flush_said()
+        self._reset_turn()
+        if empty:
+            audit.record(
+                "live.empty_reply", heard=heard[:200],
+                control_only=bool(raw_said.strip()),
+            )
+            if not defer:
+                self._emit("answer", EMPTY_REPLY_TEXT)
+        return defer
 
     def _system_prompt(self) -> str:
         from .skills.memory import context_for_prompt
@@ -399,16 +575,28 @@ class LiveSession:
                 + ". When you hear one, stay friendly and concise and wait for "
                 "the user's next command."
             )
+        if self._roman():
+            prompt += (
+                "\n\nYour base language is English. The user speaks English or "
+                "Roman Urdu/Hindustani; understand both, but always reply in "
+                "English, never in Devanagari or Urdu script. When a request maps "
+                "to a tool, call the tool."
+            )
         prompt += (
             "\n\nYou are speaking out loud. Keep replies to a couple of short "
             "sentences unless the user asks for detail."
         )
         return prompt
 
+    def _roman(self) -> bool:
+        """True for the English + Roman Urdu preset (also the unset default)."""
+        raw = str(config.get("voice.language", "") or "").strip().lower()
+        return raw in ("", ROMAN_PRESET)
+
     def _language(self) -> str:
         """BCP-47 code for speech recognition and the reply voice."""
         raw = str(config.get("voice.language", "") or "").strip()
-        if not raw:
+        if not raw or raw.lower() == ROMAN_PRESET:
             return DEFAULT_LANGUAGE
         # Accept "en" or "en_US" as well as "en-US".
         code = raw.replace("_", "-")
@@ -464,6 +652,9 @@ class LiveSession:
     async def _drain_queue(self, out_queue: asyncio.Queue) -> None:
         while not self._stop.is_set():
             message = await out_queue.get()
+            self._mic += message["data"]
+            if len(self._mic) > MAX_TURN_AUDIO:
+                del self._mic[: len(self._mic) - MAX_TURN_AUDIO]
             if self._session is None:
                 continue
             try:
@@ -526,6 +717,7 @@ class LiveSession:
 
                 data = getattr(response, "data", None)
                 if data:
+                    self._audio_bytes += len(data)
                     audio_queue.put_nowait(data)
 
                 server = getattr(response, "server_content", None)
@@ -533,8 +725,11 @@ class LiveSession:
                     inp = getattr(server, "input_transcription", None)
                     if inp is not None and getattr(inp, "text", ""):
                         self._heard.append(inp.text)
-                        # Show it building, as one line that grows.
-                        self._emit("heard_partial", "".join(self._heard).strip())
+                        # Show it building, as one line that grows. Script we
+                        # never display (Devanagari) shows a placeholder until
+                        # the English transcript replaces it.
+                        partial = clean_transcript("".join(self._heard)) or HEARING_TEXT
+                        self._emit("heard_partial", partial)
 
                     out = getattr(server, "output_transcription", None)
                     if out is not None and getattr(out, "text", ""):
@@ -548,7 +743,9 @@ class LiveSession:
                         if not self._said:
                             self._emit("speaking", "")
                         self._said.append(out.text)
-                        self._emit("answer_partial", "".join(self._said).strip())
+                        partial = clean_transcript("".join(self._said))
+                        if partial:
+                            self._emit("answer_partial", partial)
 
                     # Barge-in: the user cut the model off. Keep what was
                     # actually said rather than dropping it.
@@ -558,16 +755,17 @@ class LiveSession:
                         self._sink.interrupt()
                         self._flush_heard()
                         self._flush_said()
+                        self._reset_turn()
 
                     if getattr(server, "turn_complete", False) or getattr(
                         server, "generation_complete", False
                     ):
-                        self._flush_heard()
-                        self._flush_said()
-                        self._emit("listening", "")
+                        if not self._end_turn():
+                            self._emit("listening", "")
 
                 tool_call = getattr(response, "tool_call", None)
                 if tool_call is not None:
+                    self._tool_called = True
                     responses = []
                     for call in getattr(tool_call, "function_calls", []) or []:
                         # Every call must produce a FunctionResponse. A missing
@@ -616,6 +814,18 @@ class LiveSession:
         async with client.aio.live.connect(model=self.model, config=self._config()) as session:
             self._session = session
             self._emit("info", "connected — start speaking")
+            from .platform import stt as _stt
+
+            if config.get("voice.live_translate", True) and _stt.translate_available():
+                # Downloads the multilingual model on first use; doing it now
+                # keeps that wait out of the first spoken turn.
+                # A daemon thread, not the loop's executor: asyncio.run waits
+                # for executor threads, so a stalled download would make Stop
+                # hang.
+                threading.Thread(
+                    target=self._preload_translate, daemon=True,
+                    name="kravein-live-translate-preload",
+                ).start()
 
             out_queue: asyncio.Queue = asyncio.Queue(maxsize=60)
             audio_queue: asyncio.Queue = asyncio.Queue()
@@ -639,6 +849,9 @@ class LiveSession:
                 for task in everything:
                     task.cancel()
                 await asyncio.gather(*everything, return_exceptions=True)
+                for task in list(self._finals):
+                    task.cancel()
+                await asyncio.gather(*self._finals, return_exceptions=True)
                 self._flush_heard()
                 self._flush_said()
                 self._session = None

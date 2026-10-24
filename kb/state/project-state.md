@@ -31,7 +31,11 @@ updated: 2026-10-23
 
 - Tests isolated from a live server #88 (suite 785 green with the owner server up).
 
-- Owner 2026-10-24: open_app into a workspace merged #95; #94 web sorted workspace buttons + per-workspace app launcher (frequent first) + terminal command popup (run_command in the terminal cwd).
+- Owner 2026-10-24: open_app into a workspace merged #95; #96 web sorted workspaces + app launcher + terminal popup merged.
+
+- Live voice: control tokens stripped, empty-turn fallback, English/Roman-Urdu only #99 (the missed tool call was a model-side glitch, mitigated not proven fixed). Phone mic+speaker live voice merged #98 (owner-confirmed on device).
+
+- #100 engine: voice transcript must be English (Devanagari→transliteration gave junk); stuck "running" card + "Not connected" (stt.py granted).
 
 ## Blockers
 - None.

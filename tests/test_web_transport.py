@@ -910,16 +910,16 @@ def test_live_transcription_deltas_become_one_line():
     live = LiveSession(observer=lambda k, t: seen.append((k, t)))
 
     _drive(live, [
-        _Response(_Server(heard="स")),
-        _Response(_Server(heard="्क्रीन")),
-        _Response(_Server(heard=" ओपन")),
+        _Response(_Server(heard="sc")),
+        _Response(_Server(heard="reen")),
+        _Response(_Server(heard=" open")),
         _Response(_Server(said="Opening")),      # model replies -> flush input
         _Response(_Server(said=" it now.")),
         _Response(_Server(turn_complete=True)),
     ])
 
     heard = [t for k, t in seen if k == "heard"]
-    assert heard == ["स्क्रीन ओपन"], f"user speech was not coalesced: {heard}"
+    assert heard == ["screen open"], f"user speech was not coalesced: {heard}"
 
 
 def test_live_emits_the_assistants_reply():

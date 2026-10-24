@@ -22,8 +22,14 @@ from . import shell
 
 DEFAULT_MODEL = "base.en"
 
+# Whisper's translate task needs a multilingual model: the ".en" models only
+# know English and cannot turn Urdu/Hindi speech into English text.
+TRANSLATE_MODEL = "base"
+
 _model = None
 _model_name = ""
+_tmodel = None
+_tmodel_name = ""
 _lock = threading.Lock()
 
 
@@ -122,6 +128,76 @@ def _load_faster_whisper():
 
         _model_name = wanted
         return _model
+
+
+def translate_model_size() -> str:
+    return str(config.get("voice.translate_model", TRANSLATE_MODEL) or TRANSLATE_MODEL)
+
+
+def translate_available() -> bool:
+    """Whether :func:`translate_to_english` can run (faster-whisper only)."""
+    return backend_name() == "faster-whisper"
+
+
+def translate_ready() -> bool:
+    """True once the translate model is in memory (no download or load pending)."""
+    return _tmodel is not None and _tmodel_name == translate_model_size()
+
+
+def _load_translate_model():
+    """Load and cache the multilingual model, separate from the transcribe one."""
+    global _tmodel, _tmodel_name
+
+    wanted = translate_model_size()
+    with _lock:
+        if _tmodel is not None and _tmodel_name == wanted:
+            return _tmodel
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            raise STTError("faster-whisper is not installed.") from exc
+
+        audit.record("stt.model_load", model=wanted, task="translate")
+        try:
+            _tmodel = WhisperModel(
+                wanted, device="cpu", compute_type="int8",
+                download_root=str(config.CACHE_DIR / "whisper"),
+            )
+        except Exception as exc:
+            raise STTError(f"could not load Whisper model '{wanted}': {exc}") from exc
+        _tmodel_name = wanted
+        return _tmodel
+
+
+def preload_translate() -> None:
+    """Load (and on first use download) the translate model ahead of need."""
+    _load_translate_model()
+
+
+def translate_to_english(path: str | Path) -> str:
+    """Turn a WAV file of speech in any language into English text.
+
+    The language is detected per clip. Whisper emits English for English
+    speech too, so one call covers both of the owner's ways of speaking.
+    """
+    audio = Path(path)
+    if not audio.exists():
+        raise STTError(f"audio file not found: {audio}")
+    if not translate_available():
+        raise STTError("translation needs the faster-whisper backend")
+    model = _load_translate_model()
+    try:
+        segments, info = model.transcribe(
+            str(audio), task="translate", language=None, beam_size=1,
+            vad_filter=True, condition_on_previous_text=False,
+        )
+        text = " ".join(seg.text.strip() for seg in segments).strip()
+    except Exception as exc:
+        raise STTError(f"translation failed: {exc}") from exc
+    audit.record(
+        "stt.translated", language=getattr(info, "language", ""), chars=len(text),
+    )
+    return text
 
 
 def transcribe(path: str | Path, language: str = "") -> str:
