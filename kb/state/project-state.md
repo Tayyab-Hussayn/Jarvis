@@ -13,7 +13,7 @@ updated: 2026-10-23
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
-- Android full client (plan `kb/plans/android-agent-app.md`, owner delegated all decisions 2026-10-24): ~~#43 UI token~~ merged #45; ~~#44 client shell~~ merged #48 (85 JVM tests, release APK 24.3 MB); ~~#46 phone layout~~ merged #47. Next: android native confirmations.
+- Android full client (plan `kb/plans/android-agent-app.md`, owner delegated all decisions 2026-10-24): ~~#43 UI token~~ merged #45; ~~#44 client shell~~ merged #48 (85 JVM tests, release APK 24.3 MB); ~~#46 phone layout~~ merged #47; #50 web confirm relay + #51 android confirm notifications (parallel). Then: owner installs the new APK and tests.
 
 - Owner: live pairing via the Phones view. Then: app result-shape test (android); #22 TLS. `kravein/web-dist/` is gitignored: run `cd web && npm run build` after a web merge.
 
