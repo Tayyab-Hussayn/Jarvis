@@ -20,6 +20,8 @@ updated: 2026-10-24
 
 - Device voice (#90): `lib/pcm.ts` (streaming 16 kHz resampler, PCM16, chunker, odd-byte reader) · `lib/playback.ts` (gapless queue + `clear()`) · `lib/audioChoice.ts` (default choice) · `lib/deviceAudio.ts` (getUserMedia + AudioWorklet glue, the only place the mic is held) · `public/pcm-capture.js` (worklet) · choice chips in `Console` · hook wiring in `useKravein.ts` (`releaseDevice`) · server in `server.py` (`_AudioOut`, `audio_reader`, binary branch of the `/ws` loop) · tests `pcm.test.ts`, `playback.test.ts`, `audioChoice.test.ts`, `tests/web/test_device_voice.py`
 
+- Workspace launcher + command popup (#94): `lib/workspaces.ts` (`sortWorkspaces` numbers first then names; `groupApps` frequent-first, flat when searching; `moveIndex`) · `AppLauncher.tsx` (combobox per workspace row, only reports the pick; `WindowsView` runs `open_app(app_name, workspace)`) · `lib/console.ts` (parses `run_command`'s prose result, history, 200-line cap) · `TerminalConsole.tsx` (popup on cards that have a `cwd`; `run_command` over the ws `run` path, so confirmations/audit/policy apply; 30 s timeout, client gives up after timeout+150 s so a dropped frame cannot lock the input; no cancel, a running shell call cannot be interrupted) · server: `/api/apps` adds `id`, `icon`, `exec`, `launches`, `frequent` (top 5); `DATA_DIR/app_launches.json` counts are written by `run_skill` after an `open_app` whose `app_name` is exactly an installed entry · tests `workspaces.test.ts`, `console.test.ts`, `tests/web/test_app_launcher.py`.
+
 ## Verify
 ```bash
 .venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 97+17 + 87
