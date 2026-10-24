@@ -134,6 +134,24 @@ body {
   }
 }
 
+/* -- phone width ------------------------------------------------------ */
+
+/* The Android WebView shows this UI on a touchscreen. One rule here instead
+   of a `max-sm:` on every chip, tab, input and icon button, so a new control
+   cannot forget it. Desktop (>=640px) is untouched. Checkboxes and radios
+   keep their native box; their labels carry the tap target. */
+@media (max-width: 639px) {
+  button,
+  select,
+  textarea,
+  input:not([type="checkbox"]):not([type="radio"]) {
+    min-height: 40px;
+  }
+  button {
+    min-width: 40px;
+  }
+}
+
 /* Honour the OS reduced-motion setting rather than animating regardless. */
 @media (prefers-reduced-motion: reduce) {
   *,

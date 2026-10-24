@@ -32,6 +32,7 @@ import { PhonesView } from "@/components/PhonesView";
 import { SettingsView } from "@/components/SettingsView";
 import {
   ConfirmOverlay,
+  NavDrawer,
   Rail,
   TopBar,
   VIEWS,
@@ -103,6 +104,8 @@ export default function Page() {
   const [view, setView] = useHashView();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [railExpanded, setRailExpanded] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
+  const closeNav = useCallback(() => setNavOpen(false), []);
 
   const policy = usePolicy();
   const skills = useResource<{ skills: SkillInfo[] }>("/api/skills");
@@ -184,8 +187,11 @@ export default function Page() {
         onToggle={toggleRail}
       />
 
+      <NavDrawer open={navOpen} view={view} onSelect={setView} onClose={closeNav} />
+
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar
+          onMenu={() => setNavOpen(true)}
           title={TITLES[view] ?? "Kravein"}
           hostname={state.data?.hostname}
           environment={hello?.environment}
@@ -203,7 +209,7 @@ export default function Page() {
         <main className="min-h-0 flex-1 overflow-hidden">
           <div
             key={view}
-            className="mx-auto flex h-full flex-col px-6 py-5"
+            className="mx-auto flex h-full flex-col px-3 py-3 sm:px-6 sm:py-5"
             style={{
               maxWidth: "var(--content-max)",
               animation: "view-in var(--motion-base) var(--ease)",

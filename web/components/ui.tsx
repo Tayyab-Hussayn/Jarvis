@@ -303,7 +303,7 @@ export function Button({
       disabled={disabled}
       title={title}
       className={classNames(
-        "rounded-[var(--radius-full)] border px-3.5 py-1.5 text-[length:var(--text-sm)] font-medium disabled:cursor-not-allowed disabled:opacity-40",
+        "rounded-[var(--radius-full)] border px-3.5 py-1.5 text-[length:var(--text-sm)] font-medium disabled:cursor-not-allowed disabled:opacity-40 max-sm:min-h-10",
         full && "w-full",
         styles[variant],
       )}

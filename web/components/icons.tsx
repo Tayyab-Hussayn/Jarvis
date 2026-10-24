@@ -28,6 +28,7 @@ export type IconName =
   | "phones"
   | "search"
   | "close"
+  | "menu"
   | "refresh"
   | "trash"
   | "chevron"
@@ -129,6 +130,7 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   close: <path d="M6 6l12 12M18 6 6 18" />,
+  menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   refresh: (
     <>
       <path d="M20 12a8 8 0 1 1-2.5-5.8" />
