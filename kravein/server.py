@@ -106,7 +106,7 @@ def create_app(token: str | None = None) -> Any:
             request.headers.get("authorization"),
             request.query_params.get("token"),
         )
-        if not webauth.verify_token(supplied, app.state.token):
+        if not webauth.token_accepted(supplied, app.state.token):
             raise _unauthorized()
 
     auth = [Depends(require_token)]
@@ -321,6 +321,17 @@ def create_app(token: str | None = None) -> Any:
             return JSONResponse({"detail": str(exc), "code": exc.code}, status_code=403)
         return credential
 
+    @app.post("/phone/ui-session")
+    async def phone_ui_session(request: Request) -> Any:
+        # Origin is already refused for every /phone/* by the middleware.
+        device = phone.authenticate(request.headers.get("authorization"))
+        if device is None:
+            return JSONResponse({"detail": "Invalid device credential"}, status_code=401)
+        token, expires, ttl = webauth.issue_ui_token(device["device_id"])
+        # The device id, never the token: the audit log must not hold a bearer.
+        audit.record("phone.ui_session", device_id=device["device_id"], ttl=ttl)
+        return {"token": token, "expires_at": int(expires), "ttl_seconds": int(ttl)}
+
     @app.websocket("/phone/ws")
     async def phone_ws(socket: WebSocket) -> None:
         headers = socket.headers
@@ -384,7 +395,7 @@ def create_app(token: str | None = None) -> Any:
         supplied = webauth.token_from_request(
             headers.get("authorization"), socket.query_params.get("token")
         )
-        if not webauth.verify_token(supplied, app.state.token):
+        if not webauth.token_accepted(supplied, app.state.token):
             # Close before accepting: never hand an unauthenticated peer an
             # open socket, not even briefly.
             await socket.close(code=1008)
@@ -392,6 +403,24 @@ def create_app(token: str | None = None) -> Any:
 
         await socket.accept()
         loop = asyncio.get_running_loop()
+        ui_watch: asyncio.Task | None = None
+        if not webauth.verify_token(supplied, app.state.token):
+            # Opened with a phone's UI token: end the socket when that token
+            # is revoked or expires, so a revoked phone loses a live session
+            # and not just future ones.
+            gone = asyncio.Event()
+            webauth.on_ui_token_revoked(
+                supplied, lambda: loop.call_soon_threadsafe(gone.set)
+            )
+            expiry = webauth.ui_token_expiry(supplied) or 0.0
+
+            async def watch_ui_token() -> None:
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(gone.wait(), max(0.0, expiry - webauth._now()))
+                with contextlib.suppress(Exception):
+                    await socket.close(code=1008)
+
+            ui_watch = asyncio.create_task(watch_ui_token())
         session = events.Session(loop)
         events.register(session)
         agent = Agent(
@@ -719,6 +748,8 @@ def create_app(token: str | None = None) -> Any:
             stop_voice()
             events.unregister(session)
             session.close()
+            if ui_watch is not None:
+                ui_watch.cancel()
             pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pump_task

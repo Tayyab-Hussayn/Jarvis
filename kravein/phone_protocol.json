@@ -7,6 +7,17 @@
     "request_id": {"type": "string", "required": true, "max_length": 64},
     "payload": {"type": "object", "required": true}
   },
+  "rest": {
+    "about": "HTTP endpoints the phone calls. Every /phone/* request is refused if it carries an Origin header.",
+    "ui-session": {
+      "method": "POST",
+      "path": "/phone/ui-session",
+      "auth": "Authorization: Device <device_id>:<device_secret>, no body",
+      "ok": "200 {token, expires_at (unix s), ttl_seconds}. Default ttl 12 h (phone.ui_token_ttl_seconds).",
+      "refused": "401 for a wrong or revoked credential",
+      "use": "Send as Bearer on /api/*, ?token= on /ws and on the page URL. Never accepted on /phone/*. In memory only: a server restart or revoking the device invalidates it (a live /ws opened with it is closed), so ask again on 401."
+    }
+  },
   "frames": {
     "hello": {
       "direction": "phone_to_server",

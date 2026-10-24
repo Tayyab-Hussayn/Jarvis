@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from . import audit, config
+from . import audit, config, webauth
 
 PROTOCOL_FILE = Path(__file__).resolve().parent / "phone_protocol.json"
 PHONES_FILE = config.DATA_DIR / "phones.json"
@@ -339,6 +339,8 @@ def revoke(device_id: str) -> bool:
         link = _links.pop(device_id, None)
     if link is not None:
         link.close("revoked")
+    # Its UI tokens (and the web sockets opened with them) die with it.
+    webauth.revoke_ui_tokens(device_id)
     audit.record("phone.revoked", device_id=device_id)
     return True
 
