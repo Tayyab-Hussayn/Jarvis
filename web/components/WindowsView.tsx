@@ -3,10 +3,13 @@
 import { useState } from "react";
 
 import { homeOf, shortCwd, windowArgs } from "@/lib/windows";
+import { sortWorkspaces } from "@/lib/workspaces";
 import { useResource, useSkill, type RunSkill } from "@/lib/useApi";
 import { Button, Chip, Empty, Panel, SectionTitle } from "./ui";
-import { ActionRow, SkillOutput } from "./SkillOutput";
+import { SkillOutput } from "./SkillOutput";
 import { Screen } from "./Shell";
+import { AppLauncher } from "./AppLauncher";
+import { TerminalConsole } from "./TerminalConsole";
 
 interface WindowRow {
   id: string;
@@ -26,9 +29,17 @@ interface WindowsSnapshot {
   windows: WindowRow[];
 }
 
+interface AppsSnapshot {
+  available: boolean;
+  frequent?: string[];
+  apps: { name: string; comment: string }[];
+}
+
 export function WindowsView({ run }: { run: RunSkill }) {
   const { data, error, reload } = useResource<WindowsSnapshot>("/api/windows", 4000);
+  const appList = useResource<AppsSnapshot>("/api/apps");
   const skill = useSkill(run);
+  const [console_, setConsole] = useState<WindowRow | null>(null);
   const [workspace, setWorkspace] = useState<string>("");
 
   const act = async (name: string, args: Record<string, unknown>) => {
@@ -50,6 +61,7 @@ export function WindowsView({ run }: { run: RunSkill }) {
     );
   }
 
+  const workspaces = sortWorkspaces(data.workspaces);
   const visible = workspace
     ? data.windows.filter((w) => w.workspace === workspace)
     : data.windows;
@@ -70,7 +82,7 @@ export function WindowsView({ run }: { run: RunSkill }) {
           <Chip active={workspace === ""} onClick={() => setWorkspace("")}>
             All
           </Chip>
-          {data.workspaces.map((ws) => (
+          {workspaces.map((ws) => (
             <Chip key={ws} active={workspace === ws} onClick={() => setWorkspace(ws)}>
               Workspace {ws}
             </Chip>
@@ -132,6 +144,9 @@ export function WindowsView({ run }: { run: RunSkill }) {
                     <Button onClick={() => void act("focus_window", windowArgs(win))}>
                       Focus
                     </Button>
+                    {win.cwd && (
+                      <Button onClick={() => setConsole(win)}>Run command</Button>
+                    )}
                     <Button
                       variant="danger"
                       onClick={() => void act("close_window", windowArgs(win))}
@@ -146,14 +161,42 @@ export function WindowsView({ run }: { run: RunSkill }) {
         </div>
 
         <Panel title="Workspaces">
-          <ActionRow>
-            {data.workspaces.map((ws) => (
-              <Button key={ws} onClick={() => void act("switch_workspace", { workspace: ws })}>
-                Go to {ws}
-              </Button>
+          <div className="space-y-2">
+            {workspaces.map((ws) => (
+              <div key={ws} className="flex flex-wrap items-center gap-2">
+                <span className="min-w-24 text-[length:var(--text-sm)] text-[var(--text-muted)]">
+                  Workspace {ws}
+                  <span className="ml-1.5 text-[length:var(--text-xs)] text-[var(--text-faint)]">
+                    {data.windows.filter((w) => w.workspace === ws).length} open
+                  </span>
+                </span>
+                <Button onClick={() => void act("switch_workspace", { workspace: ws })}>
+                  Go to {ws}
+                </Button>
+                <AppLauncher
+                  apps={appList.data?.apps ?? []}
+                  frequent={appList.data?.frequent ?? []}
+                  workspace={ws}
+                  busy={skill.running !== "" || !appList.data?.available}
+                  onLaunch={(app) =>
+                    void act("open_app", { app_name: app.name, workspace: ws }).then(
+                      appList.reload,
+                    )
+                  }
+                />
+              </div>
             ))}
-          </ActionRow>
+          </div>
         </Panel>
+        {console_ && console_.cwd && (
+          <TerminalConsole
+            app={console_.app}
+            workspace={console_.workspace}
+            cwd={console_.cwd}
+            run={run}
+            onClose={() => setConsole(null)}
+          />
+        )}
       </div>
     </Screen>
   );
