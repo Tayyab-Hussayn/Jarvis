@@ -4,6 +4,8 @@ import com.kravein.connect.commands.CommandRouter
 import com.kravein.connect.confirm.ConfirmationBook
 import com.kravein.connect.confirm.ConfirmationListener
 import com.kravein.connect.confirm.ReplyOutcome
+import com.kravein.connect.notice.NoticeDedupe
+import com.kravein.connect.notice.NoticeListener
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
 import com.kravein.connect.core.DeviceCredential
@@ -25,9 +27,13 @@ class PhoneClient(
     private val router: CommandRouter,
     private val helloInfo: (DeviceCredential) -> HelloInfo,
     private val confirmations: ConfirmationListener = ConfirmationListener.None,
+    private val notices: NoticeListener = NoticeListener.None,
 ) {
     /** Open questions survive a reconnect; a tap while the socket is down must still be answered honestly. */
     val book = ConfirmationBook()
+
+    /** Shared across reconnects: the PC may replay a notice on the new socket. */
+    private val seenNotices = NoticeDedupe()
 
     // The socket stays open for hours, so it must not inherit the short call/read timeouts of the shared client.
     private val http = Http.client.newBuilder()
@@ -85,7 +91,7 @@ class PhoneClient(
         socket?.cancel()
         val url = HttpUrl.Builder().scheme("http").host(credential.host).port(credential.port).addPathSegments("phone/ws").build()
         val request = Request.Builder().url(url).header("Authorization", credential.authorization()).build()
-        val newSession = PhoneSession(router, helloInfo(credential), book) { UUID.randomUUID().toString().replace("-", "") }
+        val newSession = PhoneSession(router, helloInfo(credential), book, notices = seenNotices) { UUID.randomUUID().toString().replace("-", "") }
         session = newSession
         AgentStateStore.setConnectionState(ConnectionState.CONNECTING)
         AgentStateStore.setStatus("Connecting to ${credential.host}")
@@ -131,6 +137,7 @@ class PhoneClient(
                     }
                     is SessionEvent.ConfirmRequested -> confirmations.onRequested(event.confirmation)
                     is SessionEvent.ConfirmClosed -> confirmations.onClosed(event.requestId, event.outcome)
+                    is SessionEvent.NoticeReceived -> notices.onNotice(event.notice)
                     is SessionEvent.ReplyRejected -> confirmations.onReplyRejected(event.requestId)
                 }
             }

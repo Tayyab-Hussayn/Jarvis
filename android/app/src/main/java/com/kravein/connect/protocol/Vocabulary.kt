@@ -123,6 +123,16 @@ object FrameSpecs {
             Direction.SERVER_TO_PHONE,
             mapOf("outcome" to Field(FieldType.STRING, true)),
         ),
+        // One-way: the PC tells the owner about a reminder or finished job. `kind` is checked in notice/Notice.kt.
+        "notify" to FrameSpec(
+            Direction.SERVER_TO_PHONE,
+            mapOf(
+                "title" to Field(FieldType.STRING, true, maxLength = 120),
+                "body" to Field(FieldType.STRING, true, maxLength = 1000),
+                "kind" to Field(FieldType.STRING, true),
+                "at" to Field(FieldType.INTEGER, true),
+            ),
+        ),
         "ping" to FrameSpec(Direction.BOTH, emptyMap()),
         "pong" to FrameSpec(Direction.BOTH, emptyMap()),
         "error" to FrameSpec(

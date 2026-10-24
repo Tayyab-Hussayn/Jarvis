@@ -6,6 +6,8 @@ import com.kravein.connect.confirm.Outcome
 import com.kravein.connect.confirm.PendingConfirmation
 import com.kravein.connect.confirm.ReplyCheck
 import com.kravein.connect.confirm.ReplyOutcome
+import com.kravein.connect.notice.Notice
+import com.kravein.connect.notice.NoticeDedupe
 import com.kravein.connect.protocol.ErrorCode
 import com.kravein.connect.protocol.Frame
 import com.kravein.connect.protocol.FrameCodec
@@ -20,6 +22,7 @@ sealed interface SessionEvent {
     data class ConfirmRequested(val confirmation: PendingConfirmation) : SessionEvent
     data class ConfirmClosed(val requestId: String, val outcome: Outcome) : SessionEvent
     data class ReplyRejected(val requestId: String) : SessionEvent
+    data class NoticeReceived(val notice: Notice) : SessionEvent
 }
 
 /** A tap turned into the frame to send, or the reason nothing may be sent. */
@@ -45,6 +48,7 @@ class PhoneSession(
     private val info: HelloInfo,
     private val book: ConfirmationBook = ConfirmationBook(),
     private val nowSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
+    private val notices: NoticeDedupe = NoticeDedupe(),
     private val newRequestId: () -> String,
 ) {
     private var helloId: String? = null
@@ -70,6 +74,7 @@ class PhoneSession(
             "execute" -> onExecute(frame)
             "confirm_request" -> onConfirmRequest(frame)
             "confirm_closed" -> onConfirmClosed(frame)
+            "notify" -> onNotify(frame)
             "ping" -> SessionOutput(send = listOf(FrameCodec.pong(frame.requestId).encode()))
             "pong" -> SessionOutput()
             "error" -> onError(frame)
@@ -124,6 +129,14 @@ class PhoneSession(
         // Event even for an id the book never held: the notification may outlive a restart of the service.
         book.close(frame.requestId)
         return SessionOutput(events = listOf(SessionEvent.ConfirmClosed(frame.requestId, outcome)))
+    }
+
+    private fun onNotify(frame: Frame): SessionOutput {
+        if (!ready) return reply(frame, ErrorCode.NOT_READY, "hello has not been welcomed yet")
+        val notice = Notice.fromFrame(frame) ?: return reply(frame, ErrorCode.MALFORMED_FRAME, "unknown notice kind")
+        // No reply to a notify, so a resend (or a replay after reconnect) is dropped silently.
+        if (!notices.firstTime(notice.requestId)) return SessionOutput()
+        return SessionOutput(events = listOf(SessionEvent.NoticeReceived(notice)))
     }
 
     /**
