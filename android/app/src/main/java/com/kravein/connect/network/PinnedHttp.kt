@@ -7,6 +7,7 @@ import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.concurrent.ConcurrentHashMap
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.X509TrustManager
 
 /** The server presented a certificate other than the pinned one. Never retried, never offered as "continue anyway". */
@@ -66,11 +67,21 @@ object PinnedHttp {
         return cache.getOrPut(normalized) { build(base, PinTrustManager(normalized)) }
     }
 
-    internal fun build(base: OkHttpClient, trust: X509TrustManager): OkHttpClient {
+    /** Sockets whose only trust is the pin; the WebView pipe uses these because a WebView cannot take a trust manager. */
+    fun socketFactoryFor(pin: String?): SSLSocketFactory {
+        val normalized = CertPin.normalize(pin.orEmpty()) ?: throw IllegalArgumentException("https needs a certificate pin")
+        return socketFactory(PinTrustManager(normalized))
+    }
+
+    internal fun socketFactory(trust: X509TrustManager): SSLSocketFactory {
         val context = SSLContext.getInstance("TLS")
         context.init(null, arrayOf(trust), SecureRandom())
+        return context.socketFactory
+    }
+
+    internal fun build(base: OkHttpClient, trust: X509TrustManager): OkHttpClient {
         return base.newBuilder()
-            .sslSocketFactory(context.socketFactory, trust)
+            .sslSocketFactory(socketFactory(trust), trust)
             .hostnameVerifier { _, _ -> true }
             .build()
     }

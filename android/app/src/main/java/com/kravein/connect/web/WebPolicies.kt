@@ -46,20 +46,6 @@ class UiTokenHolder(
 }
 
 /**
- * The only SSL bypass in the app. The WebView cannot use a custom trust manager, so it reports the self-signed
- * certificate as an error; that error may be overridden only for the paired origin, only when the certificate's DER
- * SHA-256 equals the pin from the QR. A missing certificate, missing pin or any other origin cancels.
- */
-object SslErrorPolicy {
-    fun mayProceed(navigation: NavigationPolicy?, pin: String?, errorUrl: String?, der: ByteArray?): Boolean =
-        navigation != null && errorUrl != null && navigation.isPairedOrigin(errorUrl) && CertPin.matches(der, pin)
-
-    const val MESSAGE =
-        "This PC's certificate is not the one in the pairing QR code, so the page was not loaded. " +
-            "Scan a new pairing QR code to pair again."
-}
-
-/**
  * Which URLs the Kravein tab may show. The page is the paired PC's own UI, so everything on that exact
  * scheme/host/port is allowed and nothing else is: other links go to the system browser, other protocols nowhere.
  */

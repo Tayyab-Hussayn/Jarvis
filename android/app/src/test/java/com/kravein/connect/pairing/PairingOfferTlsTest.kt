@@ -6,7 +6,6 @@ import com.kravein.connect.core.OfferParse
 import com.kravein.connect.core.PairingOfferParser
 import com.kravein.connect.network.PairResponse
 import com.kravein.connect.web.NavigationPolicy
-import com.kravein.connect.web.SslErrorPolicy
 import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -130,20 +129,5 @@ class PairingOfferTlsTest {
         assertTrue(NavigationPolicy("pc", 443, "https").isPairedOrigin("https://pc/"))
         assertFalse(NavigationPolicy("pc", 80, "https").isPairedOrigin("https://pc/"))
         assertTrue(NavigationPolicy("pc", 80).isPairedOrigin("http://pc/"))
-    }
-
-    @Test
-    fun sslErrorsProceedOnlyForThePinnedCertificateOnThePairedOrigin() {
-        val der = "cert".toByteArray()
-        val fp = CertPin.fingerprint(der)
-        val policy = NavigationPolicy("192.168.1.5", 8787, "https")
-        val url = "https://192.168.1.5:8787/"
-        assertTrue(SslErrorPolicy.mayProceed(policy, fp, url, der))
-        assertFalse(SslErrorPolicy.mayProceed(policy, fp, url, "other".toByteArray()))
-        assertFalse(SslErrorPolicy.mayProceed(policy, fp, url, null))
-        assertFalse(SslErrorPolicy.mayProceed(policy, null, url, der))
-        assertFalse(SslErrorPolicy.mayProceed(policy, fp, "https://evil.example:8787/", der))
-        assertFalse(SslErrorPolicy.mayProceed(policy, fp, null, der))
-        assertFalse(SslErrorPolicy.mayProceed(null, fp, url, der))
     }
 }
