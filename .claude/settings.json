@@ -106,5 +106,10 @@
       "Bash(git push --force*)",
       "Bash(git push -f*)"
     ]
-  }
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeCoAuthoredBy": false
 }
