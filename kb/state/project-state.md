@@ -13,7 +13,7 @@ updated: 2026-10-23
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
-- Nothing assigned.
+- Android full client (plan `kb/plans/android-agent-app.md`, owner delegated all decisions 2026-10-24): #43 web UI token, #44 android client shell (parallel). Next: web phone-width layout, android native confirmations.
 
 - Owner: live pairing via the Phones view. Then: app result-shape test (android); #22 TLS. `kravein/web-dist/` is gitignored: run `cd web && npm run build` after a web merge.
 
