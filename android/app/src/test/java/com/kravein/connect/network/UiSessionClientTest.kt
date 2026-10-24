@@ -19,14 +19,14 @@ class UiSessionClientTest {
     private val credential = DeviceCredential("dev1", "s3cret", "Pixel", "192.168.1.5", 8787)
     private var seen: Request? = null
 
-    private fun client(code: Int = 200, body: String = "", fail: Boolean = false) = UiSessionClient(
+    private fun client(code: Int = 200, body: String = "", fail: Boolean = false) = UiSessionClient { _, _ ->
         OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
             seen = chain.request()
             if (fail) throw IOException("down")
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(code).message("x")
                 .body(body.toResponseBody("application/json".toMediaType())).build()
-        }).build(),
-    )
+        }).build()
+    }
 
     @Test
     fun `success returns the token and sends the device header without an origin`() {

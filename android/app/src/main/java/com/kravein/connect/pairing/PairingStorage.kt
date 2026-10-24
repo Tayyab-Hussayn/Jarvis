@@ -34,6 +34,8 @@ class PairingStorage(context: Context) {
                     .put("host", credential.host)
                     .put("port", credential.port)
                     .put("paired_at", credential.pairedAt)
+                    .put("scheme", credential.scheme)
+                    .also { json -> credential.certSha256?.let { json.put("cert_sha256", it) } }
                     .toString(),
             )
             .apply()
@@ -50,6 +52,9 @@ class PairingStorage(context: Context) {
                 host = json.getString("host"),
                 port = json.getInt("port"),
                 pairedAt = json.optString("paired_at"),
+                // Absent in credentials stored before TLS: those are plain-http pairings.
+                scheme = json.optString("scheme", "http"),
+                certSha256 = json.optString("cert_sha256").takeIf { it.isNotEmpty() },
             )
         } catch (_: Exception) {
             null

@@ -166,6 +166,13 @@ class PhoneSessionTest {
     fun otherFailuresRetryWithGrowingCappedBackoff() {
         assertEquals(FailureAction.Retry(2_000), ConnectionPolicy.onFailure(null, 1))
         assertEquals(FailureAction.Retry(2_000), ConnectionPolicy.onFailure(500, 1))
+        // TLS: a pin mismatch stops at once; a pre-TLS credential only after three plain-http-to-TLS looking failures.
+        val mismatch = javax.net.ssl.SSLHandshakeException("bad").apply { initCause(PinMismatchException("pin")) }
+        assertEquals(FailureAction.PinMismatch, ConnectionPolicy.onFailure(null, 1, mismatch))
+        assertEquals(FailureAction.Retry(2_000), ConnectionPolicy.onFailure(null, 1, java.io.EOFException(), tlsHints = 2))
+        assertEquals(FailureAction.NeedsTlsRepair, ConnectionPolicy.onFailure(null, 3, java.io.EOFException(), tlsHints = 3))
+        assertEquals(ConnectionState.NEEDS_PAIRING, ConnectionPolicy.stateAfter(FailureAction.PinMismatch))
+        assertEquals(ConnectionState.NEEDS_PAIRING, ConnectionPolicy.stateAfter(FailureAction.NeedsTlsRepair))
         assertEquals(ConnectionState.RECONNECTING, ConnectionPolicy.stateAfter(ConnectionPolicy.onFailure(null, 2)))
         assertEquals(listOf(2_000L, 4_000L, 8_000L, 16_000L, 30_000L, 30_000L), (1..6).map { ConnectionPolicy.backoffMs(it) })
         assertEquals(30_000L, ConnectionPolicy.backoffMs(1_000))

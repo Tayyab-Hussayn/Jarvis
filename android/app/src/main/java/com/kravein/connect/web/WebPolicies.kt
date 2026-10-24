@@ -1,5 +1,6 @@
 package com.kravein.connect.web
 
+import com.kravein.connect.core.CertPin
 import com.kravein.connect.core.DeviceCredential
 import com.kravein.connect.network.UiSessionResult
 import com.kravein.connect.network.UiToken
@@ -45,10 +46,24 @@ class UiTokenHolder(
 }
 
 /**
+ * The only SSL bypass in the app. The WebView cannot use a custom trust manager, so it reports the self-signed
+ * certificate as an error; that error may be overridden only for the paired origin, only when the certificate's DER
+ * SHA-256 equals the pin from the QR. A missing certificate, missing pin or any other origin cancels.
+ */
+object SslErrorPolicy {
+    fun mayProceed(navigation: NavigationPolicy?, pin: String?, errorUrl: String?, der: ByteArray?): Boolean =
+        navigation != null && errorUrl != null && navigation.isPairedOrigin(errorUrl) && CertPin.matches(der, pin)
+
+    const val MESSAGE =
+        "This PC's certificate is not the one in the pairing QR code, so the page was not loaded. " +
+            "Scan a new pairing QR code to pair again."
+}
+
+/**
  * Which URLs the Kravein tab may show. The page is the paired PC's own UI, so everything on that exact
  * scheme/host/port is allowed and nothing else is: other links go to the system browser, other protocols nowhere.
  */
-class NavigationPolicy(host: String, private val port: Int) {
+class NavigationPolicy(host: String, private val port: Int, private val scheme: String = "http") {
     private val host = host.lowercase()
 
     sealed interface Decision {
@@ -57,11 +72,11 @@ class NavigationPolicy(host: String, private val port: Int) {
         data object Block : Decision
     }
 
-    fun origin(): String = "http://${hostForUrl()}:$port"
+    fun origin(): String = "$scheme://${hostForUrl()}:$port"
 
     fun isPairedOrigin(url: String): Boolean {
         val uri = parse(url) ?: return false
-        return uri.scheme.equals("http", ignoreCase = true) && uri.host?.trim('[', ']')?.lowercase() == host.trim('[', ']') &&
+        return uri.scheme.equals(scheme, ignoreCase = true) && uri.host?.trim('[', ']')?.lowercase() == host.trim('[', ']') &&
             effectivePort(uri) == port
     }
 
@@ -103,7 +118,7 @@ class NavigationPolicy(host: String, private val port: Int) {
 
     private fun hostForUrl() = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
 
-    private fun effectivePort(uri: URI) = if (uri.port == -1) 80 else uri.port
+    private fun effectivePort(uri: URI) = if (uri.port == -1) (if (scheme == "https") 443 else 80) else uri.port
 
     private fun parse(url: String): URI? = try {
         URI(url).takeIf { it.scheme != null }

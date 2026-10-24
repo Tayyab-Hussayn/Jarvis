@@ -54,6 +54,16 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - Notification expiry: `setTimeoutAfter(expires_at - now)`; a request already expired on arrival is dropped.
 - POST_NOTIFICATIONS: asked once (setup screen explains why; `UiPrefs.notificationsPrompted`); refusal never blocks setup or the service.
 
+## TLS pin (#66, closes #22 on the app side)
+- Offer: optional `scheme` (`http` default | `https`) + `cert_sha256`. https without a well-formed 64-hex fingerprint, any other scheme, or a non-string value is rejected; the pin is normalised to lower-case hex (`CertPin.normalize` also accepts `AA:BB:…`). A pin on an http offer is dropped. Manual entry is always http.
+- `DeviceCredential` and the encrypted credential carry `scheme` + `certSha256`; entries stored before TLS read back as plain http.
+- `network/PinnedHttp.clientFor(scheme, pin)`: http → the shared plain client; https → one cached client per pin whose `PinTrustManager` accepts only a leaf whose DER SHA-256 equals the pin (no CA, no expiry check, no client certs) and whose hostname verifier is replaced by the pin (the server is an IP). That relaxed verifier exists only on that client. Pair, `/phone/ws` (derived from it with the long timeouts) and `/phone/ui-session` all use it.
+- A different certificate throws `PinMismatchException`; `TlsFailures.isPinMismatch` walks the cause chain. The socket stops (state `NEEDS_PAIRING`, `MISMATCH_MESSAGE`) instead of retrying; pairing and ui-session show the same message.
+- WebView: `onReceivedSslError` → `SslErrorPolicy.mayProceed` (paired origin + DER SHA-256 == pin) else `cancel()` and an Offline error. This is the only SSL bypass in the app. `NavigationPolicy(host, port, scheme)` treats the paired origin per scheme (default port 443/80).
+- Pre-TLS credential vs https server: a plain-http request to a TLS port shows up as EOF / reset / bad status line, a downed server as refused/timeout. After 3 consecutive such failures on an unpinned credential `ConnectionPolicy` returns `NeedsTlsRepair` → `NEEDS_PAIRING` with "The PC now uses a secure connection…". Heuristic; the stored credential is kept until a new pairing replaces it.
+- Tests: `PinnedHttpTest` runs a real JDK `HttpsServer` with a keytool PKCS12 (`src/test/resources/pin-test.p12`, `pin-other.p12`, password `changeit`, test-only) for match / mismatch / plain-client-refused.
+- Not verified on a device: the WebView's wss:// to the self-signed server (Chromium may not route websocket certificate errors through `onReceivedSslError`; a `proceed()` for the page origin is normally remembered per host), and the real server's EC P-256 certificate (only the JVM keystore was exercised).
+
 ## Reminder notifications (#63)
 - Frame `notify` (server → phone, no reply): `title` ≤ 120, `body` ≤ 1000, `kind` reminder|job, `at` unix s. Strict like every frame; unknown `kind` → `error malformed_frame`; before `welcome` → `not_ready`.
 - Dedupe by `request_id` in `NoticeDedupe` (200 ids, oldest dropped), owned by `PhoneClient` so a replay after reconnect is also dropped. A repeat produces no event and no error frame.
