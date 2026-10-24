@@ -111,6 +111,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "stt_backend": "auto",
         # tiny.en is fastest; small.en is more accurate. base.en is the balance.
         "stt_model": "base.en",
+        # "" = auto for local STT. Live voice reads "" (or "en+ur-roman") as
+        # English + Roman Urdu in Latin script; any other value is a BCP-47 code.
+        # Setting "en+ur-roman" explicitly would reach local whisper as a bogus
+        # language code, so leave it empty unless you want a fixed language.
         "language": "",
         # How long a pause ends your sentence.
         "silence_seconds": 1.2,
