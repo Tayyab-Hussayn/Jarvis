@@ -18,6 +18,10 @@ def installed(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "unit_path", lambda: unit)
     monkeypatch.setattr(service, "web_env_path", lambda: env)
     monkeypatch.setattr(service, "_scheme", lambda: "https")
+    # The real probe binds 0.0.0.0:8787, so the owner's running server would
+    # make every start() test report "already running". Tests that want a busy
+    # port override this themselves.
+    monkeypatch.setattr(service, "port_busy", lambda port=service.PORT: False)
     return tmp_path
 
 

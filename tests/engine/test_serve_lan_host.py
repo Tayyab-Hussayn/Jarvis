@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from kravein import cli, server, webauth
+from kravein import cli, server, service, webauth
 
 DOCKER, WIFI = "172.17.0.1", "192.168.1.20"
 
@@ -11,6 +11,8 @@ DOCKER, WIFI = "172.17.0.1", "192.168.1.20"
 @pytest.fixture
 def served(monkeypatch):
     calls = []
+    # Not the machine's real port 8787: a live server there refuses `serve`.
+    monkeypatch.setattr(service, "port_busy", lambda port=service.PORT: False)
     monkeypatch.setattr(
         server, "serve", lambda **kw: calls.append(kw) or 0
     )
