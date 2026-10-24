@@ -1,6 +1,11 @@
 package com.kravein.connect.network
 
 import com.kravein.connect.commands.CommandRouter
+import com.kravein.connect.confirm.ConfirmationBook
+import com.kravein.connect.confirm.Outcome
+import com.kravein.connect.confirm.PendingConfirmation
+import com.kravein.connect.confirm.ReplyCheck
+import com.kravein.connect.confirm.ReplyOutcome
 import com.kravein.connect.protocol.ErrorCode
 import com.kravein.connect.protocol.Frame
 import com.kravein.connect.protocol.FrameCodec
@@ -12,6 +17,15 @@ data class HelloInfo(val deviceName: String, val osVersion: String, val appVersi
 sealed interface SessionEvent {
     data class Ready(val deviceId: String, val serverName: String) : SessionEvent
     data class ServerError(val code: ErrorCode, val message: String) : SessionEvent
+    data class ConfirmRequested(val confirmation: PendingConfirmation) : SessionEvent
+    data class ConfirmClosed(val requestId: String, val outcome: Outcome) : SessionEvent
+    data class ReplyRejected(val requestId: String) : SessionEvent
+}
+
+/** A tap turned into the frame to send, or the reason nothing may be sent. */
+sealed interface ReplyPlan {
+    data class Send(val confirmation: PendingConfirmation, val frame: String) : ReplyPlan
+    data class Refused(val outcome: ReplyOutcome) : ReplyPlan
 }
 
 /** What one inbound frame caused: frames to send back, things the UI should know, and whether to hang up. */
@@ -29,9 +43,12 @@ data class SessionOutput(
 class PhoneSession(
     private val router: CommandRouter,
     private val info: HelloInfo,
+    private val book: ConfirmationBook = ConfirmationBook(),
+    private val nowSeconds: () -> Long = { System.currentTimeMillis() / 1000 },
     private val newRequestId: () -> String,
 ) {
     private var helloId: String? = null
+    private val answered = LinkedHashSet<String>()
     var ready: Boolean = false
         private set
 
@@ -51,6 +68,8 @@ class PhoneSession(
         return when (frame.type) {
             "welcome" -> onWelcome(frame)
             "execute" -> onExecute(frame)
+            "confirm_request" -> onConfirmRequest(frame)
+            "confirm_closed" -> onConfirmClosed(frame)
             "ping" -> SessionOutput(send = listOf(FrameCodec.pong(frame.requestId).encode()))
             "pong" -> SessionOutput()
             "error" -> onError(frame)
@@ -88,8 +107,52 @@ class PhoneSession(
         return SessionOutput(send = listOf(text))
     }
 
+    private fun onConfirmRequest(frame: Frame): SessionOutput {
+        if (!ready) return reply(frame, ErrorCode.NOT_READY, "hello has not been welcomed yet")
+        val confirmation = PendingConfirmation.fromFrame(frame)
+            ?: return reply(frame, ErrorCode.MALFORMED_FRAME, "unusable confirm_request")
+        // Already past its time: the PC has denied it, so there is nothing left to ask.
+        if (confirmation.isExpired(nowSeconds())) return SessionOutput()
+        book.add(confirmation)
+        return SessionOutput(events = listOf(SessionEvent.ConfirmRequested(confirmation)))
+    }
+
+    private fun onConfirmClosed(frame: Frame): SessionOutput {
+        if (!ready) return reply(frame, ErrorCode.NOT_READY, "hello has not been welcomed yet")
+        val outcome = Outcome.fromWire(frame.payload.getString("outcome"))
+            ?: return reply(frame, ErrorCode.MALFORMED_FRAME, "unknown outcome")
+        // Event even for an id the book never held: the notification may outlive a restart of the service.
+        book.close(frame.requestId)
+        return SessionOutput(events = listOf(SessionEvent.ConfirmClosed(frame.requestId, outcome)))
+    }
+
+    /**
+     * The owner tapped Approve or Decline. A frame is produced only while this connection is welcomed and the
+     * question is still open and in time; every other case is a refusal the caller reports. Never approves by itself.
+     */
+    fun planReply(requestId: String, approve: Boolean): ReplyPlan {
+        if (!ready) return ReplyPlan.Refused(ReplyOutcome.NotConnected)
+        return when (val check = book.check(requestId, nowSeconds())) {
+            is ReplyCheck.Ok -> ReplyPlan.Send(check.confirmation, FrameCodec.confirmReply(requestId, approve).encode())
+            ReplyCheck.Expired -> ReplyPlan.Refused(ReplyOutcome.Expired)
+            ReplyCheck.Unknown -> ReplyPlan.Refused(ReplyOutcome.Unknown)
+        }
+    }
+
+    /** The reply went out: the question is answered, a second tap must not send a second answer. */
+    fun replySent(requestId: String) {
+        book.close(requestId)
+        answered.add(requestId)
+        if (answered.size > 50) answered.remove(answered.first())
+    }
+
     private fun onError(frame: Frame): SessionOutput {
         val code = ErrorCode.fromWire(frame.payload.getString("code")) ?: ErrorCode.FAILED
+        // The PC refusing one of our confirm_reply frames (late, duplicate, settled elsewhere) is not a session
+        // fault: only the notification needs correcting, and nothing was approved.
+        if (code == ErrorCode.UNKNOWN_REQUEST && frame.requestId in answered) {
+            return SessionOutput(events = listOf(SessionEvent.ReplyRejected(frame.requestId)))
+        }
         val event = SessionEvent.ServerError(code, frame.payload.getString("message"))
         // An error answering our hello means the server refused this session; do not keep a half-open socket.
         return SessionOutput(events = listOf(event), close = !ready && frame.requestId == helloId)

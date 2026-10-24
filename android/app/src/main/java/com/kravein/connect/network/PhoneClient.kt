@@ -1,6 +1,9 @@
 package com.kravein.connect.network
 
 import com.kravein.connect.commands.CommandRouter
+import com.kravein.connect.confirm.ConfirmationBook
+import com.kravein.connect.confirm.ConfirmationListener
+import com.kravein.connect.confirm.ReplyOutcome
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
 import com.kravein.connect.core.DeviceCredential
@@ -21,7 +24,11 @@ import java.util.concurrent.TimeUnit
 class PhoneClient(
     private val router: CommandRouter,
     private val helloInfo: (DeviceCredential) -> HelloInfo,
+    private val confirmations: ConfirmationListener = ConfirmationListener.None,
 ) {
+    /** Open questions survive a reconnect; a tap while the socket is down must still be answered honestly. */
+    val book = ConfirmationBook()
+
     // The socket stays open for hours, so it must not inherit the short call/read timeouts of the shared client.
     private val http = Http.client.newBuilder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -54,11 +61,31 @@ class PhoneClient(
         AgentStateStore.setStatus("Disconnected")
     }
 
+    /**
+     * Answer a confirmation. Goes out only on the live, welcomed socket; anything else is reported, never queued,
+     * because an approval delivered minutes later to a different situation is worse than none.
+     */
+    @Synchronized
+    fun sendConfirmReply(requestId: String, approve: Boolean): ReplyOutcome {
+        val current = session
+        val live = socket
+        if (stopped || current == null || live == null) return ReplyOutcome.NotConnected
+        return when (val plan = current.planReply(requestId, approve)) {
+            is ReplyPlan.Refused -> plan.outcome
+            is ReplyPlan.Send -> if (live.send(plan.frame)) {
+                current.replySent(requestId)
+                ReplyOutcome.Sent
+            } else {
+                ReplyOutcome.NotConnected
+            }
+        }
+    }
+
     private fun open(credential: DeviceCredential) {
         socket?.cancel()
         val url = HttpUrl.Builder().scheme("http").host(credential.host).port(credential.port).addPathSegments("phone/ws").build()
         val request = Request.Builder().url(url).header("Authorization", credential.authorization()).build()
-        val newSession = PhoneSession(router, helloInfo(credential)) { UUID.randomUUID().toString().replace("-", "") }
+        val newSession = PhoneSession(router, helloInfo(credential), book) { UUID.randomUUID().toString().replace("-", "") }
         session = newSession
         AgentStateStore.setConnectionState(ConnectionState.CONNECTING)
         AgentStateStore.setStatus("Connecting to ${credential.host}")
@@ -102,6 +129,9 @@ class PhoneClient(
                         AgentStateStore.addLog("Server error ${event.code.wire}: ${event.message}")
                         AgentStateStore.setError(event.message)
                     }
+                    is SessionEvent.ConfirmRequested -> confirmations.onRequested(event.confirmation)
+                    is SessionEvent.ConfirmClosed -> confirmations.onClosed(event.requestId, event.outcome)
+                    is SessionEvent.ReplyRejected -> confirmations.onReplyRejected(event.requestId)
                 }
             }
             if (out.close) webSocket.close(1000, "closing")

@@ -86,6 +86,9 @@ object FrameCodec {
         return Frame("result", requestId, payload)
     }
 
+    fun confirmReply(requestId: String, approve: Boolean) =
+        Frame("confirm_reply", requestId, JSONObject().put("approve", approve))
+
     fun pong(requestId: String) = Frame("pong", requestId, JSONObject())
 
     fun error(requestId: String, code: ErrorCode, message: String) =

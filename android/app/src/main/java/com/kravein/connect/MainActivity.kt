@@ -9,7 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import com.kravein.connect.confirm.ConfirmationNotifier
 import com.kravein.connect.core.AgentStateStore
+import com.kravein.connect.core.ShellNavigation
+import com.kravein.connect.core.UiPrefs
 import com.kravein.connect.pairing.PairingStorage
 import com.kravein.connect.ui.KraveinConnectApp
 import com.kravein.connect.ui.theme.KraveinConnectTheme
@@ -17,6 +20,7 @@ import com.kravein.connect.web.KraveinWebController
 
 class MainActivity : ComponentActivity() {
     private lateinit var storage: PairingStorage
+    private lateinit var uiPrefs: UiPrefs
     private var pendingServiceStart = false
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
@@ -24,15 +28,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            if (pendingServiceStart) {
-                pendingServiceStart = false
-                startPhoneService()
-            }
-        } else {
+        // Denied is fine: the connection and the web UI work without notifications; only the Approve/Decline
+        // notifications are lost, and the Kravein tab still shows every confirmation.
+        if (!granted) AgentStateStore.addLog("Notifications are off: confirmations will only show inside the app.")
+        if (pendingServiceStart) {
             pendingServiceStart = false
-            AgentStateStore.setError("Notification permission is required for Kravein Connect.")
-            AgentStateStore.setStatus("Notification permission denied")
+            startPhoneService()
         }
     }
 
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         web = KraveinWebController(applicationContext, requestRuntimePermissions = { pagePermissions.launch(it) })
         storage = PairingStorage(this)
+        uiPrefs = UiPrefs(this)
         AgentStateStore.setCredential(storage.loadCredential())
         maybeStartService()
         ensureCameraPermission()
@@ -63,6 +65,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == ConfirmationNotifier.ACTION_OPEN_KRAVEIN) ShellNavigation.requestKraveinTab()
     }
 
     override fun onStart() {
@@ -84,8 +91,10 @@ class MainActivity : ComponentActivity() {
     private fun maybeStartService() {
         if (AgentStateStore.credential.value != null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+                !uiPrefs.notificationsPrompted
             ) {
+                uiPrefs.notificationsPrompted = true
                 pendingServiceStart = true
                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                 return

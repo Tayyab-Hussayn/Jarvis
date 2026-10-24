@@ -104,6 +104,25 @@ object FrameSpecs {
                 "error" to Field(FieldType.STRING, false, maxLength = 500),
             ),
         ),
+        // Confirmations: the PC asks, the phone answers with the same request_id, the PC says when it is settled.
+        // danger/outcome are plain strings here; their allowed values are checked in confirm/Confirmations.kt.
+        "confirm_request" to FrameSpec(
+            Direction.SERVER_TO_PHONE,
+            mapOf(
+                "action" to Field(FieldType.STRING, true, maxLength = 300),
+                "detail" to Field(FieldType.STRING, true, maxLength = 1000),
+                "danger" to Field(FieldType.STRING, true),
+                "expires_at" to Field(FieldType.INTEGER, true),
+            ),
+        ),
+        "confirm_reply" to FrameSpec(
+            Direction.PHONE_TO_SERVER,
+            mapOf("approve" to Field(FieldType.BOOLEAN, true)),
+        ),
+        "confirm_closed" to FrameSpec(
+            Direction.SERVER_TO_PHONE,
+            mapOf("outcome" to Field(FieldType.STRING, true)),
+        ),
         "ping" to FrameSpec(Direction.BOTH, emptyMap()),
         "pong" to FrameSpec(Direction.BOTH, emptyMap()),
         "error" to FrameSpec(
