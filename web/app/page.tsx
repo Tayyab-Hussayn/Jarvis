@@ -98,6 +98,9 @@ export default function Page() {
     stopVoice,
     restartVoice,
     dismissVoiceError,
+    audioChoice,
+    setAudioChoice,
+    deviceAudioUnsupported,
     voiceStopping,
   } = useKravein();
 
@@ -138,6 +141,14 @@ export default function Page() {
       ]
         .filter(Boolean)
         .join(", ");
+
+  // This device's mic and speaker run through Gemini Live only, so a missing
+  // key or an insecure page is a reason to say, not a pipeline to fall back to.
+  const deviceAudioReason =
+    deviceAudioUnsupported() ||
+    (voice.data && !liveConfigured
+      ? "This device's mic and speaker need Gemini Live (no API key set)."
+      : "");
 
   // Send the preference, not a decision. `voice.mode` in settings picks the
   // pipeline and the server resolves it — "auto" prefers Live when a key is
@@ -245,9 +256,16 @@ export default function Page() {
                 voiceMode={voiceMode}
                 voiceError={voiceError}
                 voiceNote={voiceNotes[voiceNotes.length - 1] ?? ""}
-                voiceReady={voiceReady}
-                canSwitchPipeline={localReady && liveConfigured}
-                voiceUnavailableReason={voiceUnavailableReason}
+                voiceReady={audioChoice === "device" ? !deviceAudioReason : voiceReady}
+                // Switching pipelines is a laptop-mic thing: device audio only
+                // exists on Live.
+                canSwitchPipeline={localReady && liveConfigured && audioChoice === "laptop"}
+                voiceUnavailableReason={
+                  audioChoice === "device" ? deviceAudioReason : voiceUnavailableReason
+                }
+                audioChoice={audioChoice}
+                onAudioChoice={setAudioChoice}
+                deviceAudioReason={deviceAudioReason}
                 onSelectText={stopVoice}
                 onSelectVoice={selectVoice}
                 onRestartVoice={restartVoice}

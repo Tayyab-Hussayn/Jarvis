@@ -33,6 +33,12 @@ import type {
 import { settleConfirm } from "./confirm";
 import { isVoiceLive } from "./protocol";
 import { captureToken, getToken, wsUrl } from "./session";
+import {
+  AUDIO_CHOICE_KEY,
+  defaultAudioChoice,
+  type AudioChoice,
+} from "./audioChoice";
+import { DeviceAudio, deviceAudioUnsupported } from "./deviceAudio";
 
 export type Connection =
   | "connecting"
@@ -92,6 +98,14 @@ export function useKravein() {
   // conversation, so it stays out of the transcript and shows as a status
   // line instead of masquerading as something Kravein said.
   const [voiceNotes, setVoiceNotes] = useState<string[]>([]);
+  // Whose mic and speaker a session uses. Undecided until the server's hello
+  // says whether this page is on the laptop; a stored choice wins over that.
+  const [audioChoice, setAudioChoiceState] = useState<AudioChoice>("laptop");
+  const audioChoiceRef = useRef<AudioChoice>("laptop");
+  const audioChosenRef = useRef(false);
+  // The open microphone/speaker of a device session, if any. A ref, not state:
+  // the socket callbacks and unload handlers must see the current one.
+  const deviceRef = useRef<DeviceAudio | null>(null);
   // Scheduled jobs fire from a separate process and push through the server.
   // They belong to no turn, so they are kept apart from `messages` rather than
   // being rendered as something the assistant said.
@@ -133,6 +147,14 @@ export function useKravein() {
     },
     [],
   );
+
+  // The only way the microphone is released. Idempotent, and reached from the
+  // stop button, a server `stopped`/error, a closed socket and a hidden page.
+  const releaseDevice = useCallback(() => {
+    const device = deviceRef.current;
+    deviceRef.current = null;
+    device?.stop();
+  }, []);
 
   const handle = useCallback(
     (frame: ServerFrame) => {
@@ -213,6 +235,21 @@ export function useKravein() {
             model: frame.model,
             environment: frame.environment,
           });
+          if (!audioChosenRef.current) {
+            let stored: string | null = null;
+            try {
+              stored = localStorage.getItem(AUDIO_CHOICE_KEY);
+            } catch {
+              // storage blocked: fall back to the default
+            }
+            const choice = defaultAudioChoice(frame.local_client, stored);
+            audioChoiceRef.current = choice;
+            setAudioChoiceState(choice);
+          }
+          break;
+
+        case "audio_clear":
+          deviceRef.current?.clear();
           break;
 
         case "turn_start":
@@ -513,6 +550,7 @@ export function useKravein() {
               setVoiceNotes([`Voice session started (${frame.text}).`]);
               break;
             case "stopped":
+              releaseDevice();
               setVoicePhase("off");
               setVoiceStopping(false);
               closeTurn();
@@ -576,6 +614,15 @@ export function useKravein() {
               } else {
                 setVoicePhase("error");
                 note(frame.text);
+                // The UI now treats the session as dead, so the microphone
+                // must not stay open under it. Ask the server to end it too;
+                // it always answers, and a refused start has nothing to end.
+                if (deviceRef.current) {
+                  releaseDevice();
+                  socketRef.current?.send(
+                    JSON.stringify({ t: "voice_stop" } satisfies ClientFrame),
+                  );
+                }
               }
               break;
             default:
@@ -588,7 +635,7 @@ export function useKravein() {
           break;
       }
     },
-    [patchTurn],
+    [patchTurn, releaseDevice],
   );
 
   /* -- stopping invariants -------------------------------------------- */
@@ -632,6 +679,8 @@ export function useKravein() {
       return;
     }
     socketRef.current = socket;
+    // Model audio arrives as binary frames; the default would be Blobs.
+    socket.binaryType = "arraybuffer";
 
     socket.onopen = () => {
       attemptsRef.current = 0;
@@ -644,6 +693,10 @@ export function useKravein() {
     };
 
     socket.onmessage = (event) => {
+      if (typeof event.data !== "string") {
+        deviceRef.current?.play(event.data as ArrayBuffer);
+        return;
+      }
       try {
         handle(JSON.parse(event.data) as ServerFrame);
       } catch {
@@ -664,6 +717,7 @@ export function useKravein() {
       // The server stops the voice loop when the socket closes, so the UI must
       // not keep claiming it is listening. An in-flight spoken turn is settled
       // rather than left pending — it will never receive its closing frame.
+      releaseDevice();
       setVoicePhase("off");
       setVoiceStopping(false);
       const spoken = voiceTurn.current;
@@ -696,7 +750,31 @@ export function useKravein() {
       // `onclose` always follows; reconnect is handled there so it is not
       // scheduled twice.
     };
-  }, [handle]);
+  }, [handle, releaseDevice]);
+
+  // A hidden page loses its microphone on phones anyway, and an open mic under
+  // a page nobody is looking at is the wrong default. End a device session
+  // when the page goes away or into the background; the laptop's own session
+  // is not tied to this page being visible and is left alone.
+  useEffect(() => {
+    const leave = () => {
+      if (!deviceRef.current) return;
+      releaseDevice();
+      const socket = socketRef.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ t: "voice_stop" } satisfies ClientFrame));
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") leave();
+    };
+    window.addEventListener("pagehide", leave);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [releaseDevice]);
 
   useEffect(() => {
     goneRef.current = false;
@@ -706,9 +784,10 @@ export function useKravein() {
       goneRef.current = true;
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       if (pingTimerRef.current) clearInterval(pingTimerRef.current);
+      releaseDevice();
       socketRef.current?.close();
     };
-  }, [connect]);
+  }, [connect, releaseDevice]);
 
   /* -- actions -------------------------------------------------------- */
 
@@ -809,10 +888,58 @@ export function useKravein() {
       setVoiceError("");
       setVoiceStopping(false);
       setVoicePhase("starting");
-      if (!send({ t: "voice_start", mode })) {
+      const fail = (message: string) => {
         setVoicePhase("error");
-        setVoiceError("Not connected.");
+        setVoiceError(message);
+      };
+
+      if (audioChoiceRef.current !== "device") {
+        if (!send({ t: "voice_start", mode, audio: "laptop" })) fail("Not connected.");
+        return;
       }
+
+      // This device's mic and speaker. Permission comes first, so a refusal
+      // never starts a server session that would then wait for audio that is
+      // not coming; only then is the server asked.
+      const socket = socketRef.current;
+      if (socket?.readyState !== WebSocket.OPEN) {
+        fail("Not connected.");
+        return;
+      }
+      void DeviceAudio.start(
+        (frame) => {
+          if (socket.readyState === WebSocket.OPEN) socket.send(frame);
+        },
+        () => socket.bufferedAmount,
+      ).then(
+        (device) => {
+          if (
+            socket.readyState !== WebSocket.OPEN ||
+            socketRef.current !== socket ||
+            phaseRef.current !== "starting"
+          ) {
+            // The socket dropped, or the user cancelled, while the permission
+            // prompt was up.
+            device.stop();
+            if (phaseRef.current === "starting") fail("Not connected.");
+            return;
+          }
+          deviceRef.current = device;
+          socket.send(
+            JSON.stringify({ t: "voice_start", mode, audio: "device" } satisfies ClientFrame),
+          );
+        },
+        (error: unknown) => {
+          const denied = error instanceof DOMException && error.name === "NotAllowedError";
+          fail(
+            denied
+              ? "Microphone permission was refused. Allow it for this page, or use the laptop's mic."
+              : error instanceof Error
+                ? error.message
+                : "Could not open the microphone.",
+          );
+        },
+      );
     },
     [send],
   );
@@ -823,10 +950,14 @@ export function useKravein() {
     // no `stopped` frame, and the flag that gates the toggle is cleared by
     // that frame.
     if (!isVoiceLive(phaseRef.current)) {
+      releaseDevice();
       setVoiceStopping(false);
       return;
     }
     setVoiceStopping(true);
+    // The microphone is ours to close, so it closes now rather than waiting
+    // for the server's word; the session state still waits for `stopped`.
+    releaseDevice();
     send({ t: "voice_stop" });
     // Do not flip to "off" here: the server confirms with a `stopped` frame
     // once the loop has actually released the microphone. Claiming it stopped
@@ -844,6 +975,7 @@ export function useKravein() {
         return;
       }
       setVoiceStopping(true);
+      releaseDevice();
       send({ t: "voice_stop" });
       const started = Date.now();
       const poll = setInterval(() => {
@@ -857,8 +989,19 @@ export function useKravein() {
         }
       }, 250);
     },
-    [send, startVoice],
+    [send, startVoice, releaseDevice],
   );
+
+  const setAudioChoice = useCallback((choice: AudioChoice) => {
+    audioChosenRef.current = true;
+    audioChoiceRef.current = choice;
+    setAudioChoiceState(choice);
+    try {
+      localStorage.setItem(AUDIO_CHOICE_KEY, choice);
+    } catch {
+      // a per-viewer convenience only
+    }
+  }, []);
 
   // A failure outlives the session that caused it — that is the point, so the
   // reason voice stopped does not vanish the instant the phase flips to off.
@@ -894,5 +1037,8 @@ export function useKravein() {
     stopVoice,
     restartVoice,
     dismissVoiceError,
+    audioChoice,
+    setAudioChoice,
+    deviceAudioUnsupported,
   };
 }
