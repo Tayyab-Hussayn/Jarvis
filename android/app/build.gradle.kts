@@ -20,6 +20,17 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true // the About text shows VERSION_NAME
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // No release keystore lives in the repo; the debug key lets the release build install for testing.
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     compileOptions {

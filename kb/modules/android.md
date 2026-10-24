@@ -12,14 +12,18 @@ Package `com.kravein.connect` under `android/app/src/main/java/com/kravein/conne
 - `commands/` — `CommandRouting.kt`: `DeviceAction` (the commands + arg specs), `CommandRouter` (validates, never runs unknown/invalid), `resolveApp` (refuses ambiguous app names). `DeviceCommandHandler` is the Android backend (`DeviceBackend`).
 - `network/` — `PhoneSession` (pure per-connection state machine), `ConnectionPolicy` (backoff, refused-credential → `NEEDS_PAIRING`), `PhoneClient` (OkHttp websocket glue), `PairingClient` (`POST /phone/pair`).
 - `core/` — `AppModels.kt` (`PairingOfferParser`, `DeviceCredential`, `ConnectionState`), `AgentStateStore` (UI state; no secrets).
-- `pairing/PairingStorage` — encrypted credential. `ui/` Compose screens. `MainActivity`, `KraveinConnectForegroundService`, `accessibility/`.
+- `network/Http` — the one shared `OkHttpClient`; pairing, `UiSessionClient` (`POST /phone/ui-session` → `UiToken`, 401 = `Refused`) and the phone socket derive from it.
+- `web/` — `WebPolicies.kt` (pure: `UiTokenHolder` in-memory token cache with refresh margin, `NavigationPolicy` paired-origin allow-list + token-free URL rebuild, `PagePermissionPolicy` mic/camera, `WebViewLifecyclePolicy` create-on-first-show / destroy after 5 min idle); `KraveinWebController` (the hardened WebView, 401 → new token + reload, Offline/NeedsPairing state, driven by Activity `onStart/onStop`).
+- `ui/MainShell.kt` — bottom nav Kravein (WebView) · Phone (`ConnectedScreen`) · Settings (server, permissions, unpair, about); `ui/KraveinConnectApp.kt` holds onboarding and wires the shell.
+- `pairing/PairingStorage` — encrypted credential. `MainActivity`, `KraveinConnectForegroundService`, `accessibility/`.
 - `android/gradle/libs.versions.toml` — version catalog (AGP 9.4.1, Kotlin 2.4.21, same as `~/code/smart-sticky-wallpaper`).
-- Tests: `android/app/src/test/java/com/kravein/connect/{protocol,commands,network,pairing}/`.
+- Tests: `android/app/src/test/java/com/kravein/connect/{protocol,commands,network,pairing,web}/`.
 
 ## Verify
 ```bash
 android/gradlew -p android :app:assembleDebug       # -> android/app/build/outputs/apk/debug/app-debug.apk
 android/gradlew -p android :app:testDebugUnitTest
+android/gradlew -p android :app:assembleRelease     # R8 + shrinkResources, debug-signed; first run needs network (compose-group-mapping)
 ```
 Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/Sdk` (create it in a fresh worktree). The first build downloads libraries from Maven (~8 min); later ones hit `~/.gradle`.
 
@@ -31,6 +35,13 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - Refused credential: the server closes before accepting, OkHttp reports HTTP 401/403 on the handshake → state `NEEDS_PAIRING`, no more reconnects, UI goes to the pairing screen. The stored credential is kept until a new pairing replaces it (a 403 can also be a Host-check failure; do not destroy a good secret over it).
 - Result data (JSON only says "object"): `get_battery {percent, charging}`, `volume_get/set {percent}`, `get_device_info {model, os_version, app_version}`, `flashlight_* {flashlight}`, `launch_app {package}`, `open_url {url}`.
 - Vocabulary guard: `PhoneProtocolJsonTest` reads the JSON via the `kravein.protocol.json` system property (set in `app/build.gradle.kts`, also a task input) and fails if commands, args, frames, error codes or limits differ.
+
+## Web UI tab (#44)
+- `POST /phone/ui-session` with the device header → `{token, expires_at, ttl_seconds}`; the page loads at `/?token=…`. The token is memory-only; the web UI moves it into sessionStorage and strips it from the URL, so `lastUrl` kept for rebuilds is token-free.
+- Hardening: JS on, no `addJavascriptInterface`, file/content access off, `shouldOverrideUrlLoading` sends other hosts to the system browser, `shouldInterceptRequest` answers 403 for any sub-resource outside the paired origin. Mic/camera only for the paired origin and only with the Android permission held (else it asks, the page retries).
+- Cleartext: the paired host is only known at runtime, so a static network-security-config cannot name it; the manifest keeps `usesCleartextTraffic` (LAN IP, TLS is #22) and the WebView enforces paired-origin-only. WebSocket traffic from the page is not visible to `shouldInterceptRequest`.
+- Lifecycle: WebView built when the Kravein tab is first composed; `onStop` pauses it and schedules destruction after 5 min; `onStart` destroys it if the limit passed. The three.js `HolographicBackground` (a second WebView) shows on onboarding screens only.
+- Refresh: token reloaded on Retry/Reload, on a main-frame 401 (once, then "pair again"), and on return to the foreground when the cached token is inside its 60 s margin. No timer polls.
 
 ## Pair against a local server
 `.venv/bin/python -m kravein serve --lan` → get an offer with the browser token (`POST /api/phone/offer`; render its JSON as a QR) → scan it in the app (or enter host/port/code). `GET /api/phones` lists the device; `DELETE /api/phones/{id}` revokes it and the app shows the pairing screen.
