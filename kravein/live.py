@@ -19,6 +19,7 @@ import asyncio
 import contextlib
 import enum
 import queue
+import re
 import threading
 import time
 import traceback
@@ -48,6 +49,89 @@ VOICE_NAME = "Charon"
 # Recognition language. Empty means "let the model guess", which mis-detected
 # English badly enough to render it in Malayalam script.
 DEFAULT_LANGUAGE = "en-US"
+
+# `voice.language` preset: listen for English and Roman Urdu/Hindustani, answer
+# in English or Roman Urdu in Latin script. Empty means the same, so the stock
+# config (whose "" the local STT also reads as "auto") needs no migration.
+ROMAN_PRESET = "en+ur-roman"
+
+EMPTY_REPLY_TEXT = "Sorry, I didn't catch that — please say it again."
+
+# The native-audio model sometimes emits its own control tokens as text
+# (`<ctrl46>`) instead of a reply or a tool call. They are never content.
+_CONTROL_TOKEN = re.compile(
+    r"<(?:ctrl|unused)\d+>|</?(?:start_of_turn|end_of_turn|eos|bos|pad)>"
+)
+
+# Devanagari -> Latin. Transcription cannot be forced into Latin script for
+# Hindustani speech (it came back as "स्विच टू वर्क स्पेस वन"), so display and
+# logs get a rough phonetic Latin form instead. Deliberately simple: readable,
+# not a standard scheme.
+_DEV_VOWELS = {
+    "अ": "a", "आ": "aa", "इ": "i", "ई": "i", "उ": "u", "ऊ": "u", "ए": "e",
+    "ऐ": "ai", "ओ": "o", "औ": "au", "ऑ": "o", "ऋ": "ri",
+}
+_DEV_MATRAS = {
+    "ा": "aa", "ि": "i", "ी": "i", "ु": "u", "ू": "u", "े": "e", "ै": "ai",
+    "ो": "o", "ौ": "au", "ॉ": "o", "ृ": "ri",
+}
+_DEV_CONSONANTS = {
+    "क": "k", "ख": "kh", "ग": "g", "घ": "gh", "ङ": "n", "च": "ch", "छ": "chh",
+    "ज": "j", "झ": "jh", "ञ": "n", "ट": "t", "ठ": "th", "ड": "d", "ढ": "dh",
+    "ण": "n", "त": "t", "थ": "th", "द": "d", "ध": "dh", "न": "n", "प": "p",
+    "फ": "f", "ब": "b", "भ": "bh", "म": "m", "य": "y", "र": "r", "ल": "l",
+    "व": "v", "श": "sh", "ष": "sh", "स": "s", "ह": "h", "ळ": "l",
+    "क़": "q", "ख़": "kh", "ग़": "gh", "ज़": "z", "ड़": "r", "ढ़": "rh", "फ़": "f",
+}
+_DEV_SIGNS = {"ं": "n", "ँ": "n", "ः": "h", "़": ""}
+_DEV_DIGITS = {chr(0x966 + i): str(i) for i in range(10)}
+_HALANT = "्"
+
+
+def strip_control_tokens(text: str) -> str:
+    """Remove model control tokens and tidy the whitespace they leave."""
+    return re.sub(r"\s{2,}", " ", _CONTROL_TOKEN.sub("", text)).strip()
+
+
+def transliterate_devanagari(text: str) -> str:
+    """Rough Latin rendering of any Devanagari in ``text``; other text is kept."""
+    if not any("\u0900" <= c <= "\u097f" for c in text):
+        return text
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        # Nukta forms are two code points; try the pair first.
+        pair = text[i:i + 2]
+        key = pair if pair in _DEV_CONSONANTS else c
+        if key in _DEV_CONSONANTS:
+            i += len(key)
+            out.append(_DEV_CONSONANTS[key])
+            nxt = text[i] if i < n else ""
+            if nxt in _DEV_MATRAS:
+                out.append(_DEV_MATRAS[nxt])
+                i += 1
+            elif nxt == _HALANT:
+                i += 1
+            elif nxt and "\u0900" <= nxt <= "\u097f" and nxt != "।":
+                out.append("a")
+            # else: word-final consonant, the inherent "a" is silent in Hindi
+        elif c in _DEV_VOWELS:
+            out.append(_DEV_VOWELS[c]); i += 1
+        elif c in _DEV_SIGNS:
+            out.append(_DEV_SIGNS[c]); i += 1
+        elif c in _DEV_DIGITS:
+            out.append(_DEV_DIGITS[c]); i += 1
+        elif c == "।":
+            out.append("."); i += 1
+        else:
+            out.append(c); i += 1
+    return "".join(out)
+
+
+def clean_transcript(text: str) -> str:
+    """What the user may see: no control tokens, no Devanagari."""
+    return transliterate_devanagari(strip_control_tokens(text))
 
 # A tool call blocks the model's turn. Without a ceiling the whole session can
 # sit silent with no way to tell a slow command from a dead one, and no way out
@@ -342,6 +426,10 @@ class LiveSession:
         # turn boundary.
         self._heard: list[str] = []
         self._said: list[str] = []
+        # What the model did this turn, so a turn that produced nothing can be
+        # told apart from one that simply is not over yet.
+        self._audio_bytes = 0
+        self._tool_called = False
 
     # -- helpers ---------------------------------------------------------
 
@@ -363,13 +451,13 @@ class LiveSession:
                 loop.call_soon_threadsafe(event.set)
 
     def _flush_heard(self) -> None:
-        text = "".join(self._heard).strip()
+        text = clean_transcript("".join(self._heard)).strip()
         self._heard.clear()
         if text:
             self._emit("heard", text)
 
     def _flush_said(self) -> None:
-        text = "".join(self._said).strip()
+        text = clean_transcript("".join(self._said)).strip()
         self._said.clear()
         if text:
             # `answer` is the kind the local pipeline uses for a finished
@@ -377,6 +465,34 @@ class LiveSession:
             # rather than content, so the assistant's own words never reached
             # the transcript at all.
             self._emit("answer", text)
+
+    def _reset_turn(self) -> None:
+        self._audio_bytes = 0
+        self._tool_called = False
+
+    def _end_turn(self) -> None:
+        """Flush the transcripts, and say so when the model gave nothing back.
+
+        A turn that ends with no spoken audio, no usable text and no tool call
+        (the model emitted only `<ctrl46>`) used to leave a broken reply bubble
+        and silence. The user is told to repeat, and it is audited.
+        """
+        raw_said = "".join(self._said)
+        heard = clean_transcript("".join(self._heard))
+        spoke = bool(clean_transcript(raw_said)) or self._audio_bytes > 0
+        # Only a turn the model began, or one the user spoke into, can be
+        # "empty"; a stray turn_complete on an idle session is not.
+        engaged = bool(raw_said.strip()) or bool(heard)
+        empty = engaged and not spoke and not self._tool_called
+        self._flush_heard()
+        self._flush_said()
+        self._reset_turn()
+        if empty:
+            audit.record(
+                "live.empty_reply", heard=heard[:200],
+                control_only=bool(raw_said.strip()),
+            )
+            self._emit("answer", EMPTY_REPLY_TEXT)
 
     def _system_prompt(self) -> str:
         from .skills.memory import context_for_prompt
@@ -399,16 +515,28 @@ class LiveSession:
                 + ". When you hear one, stay friendly and concise and wait for "
                 "the user's next command."
             )
+        if self._roman():
+            prompt += (
+                "\n\nThe user speaks English or Roman Urdu/Hindustani. Understand "
+                "both. Always reply in English or Roman Urdu written in Latin "
+                "script, never in Devanagari or Urdu script. When a request maps "
+                "to a tool, call the tool."
+            )
         prompt += (
             "\n\nYou are speaking out loud. Keep replies to a couple of short "
             "sentences unless the user asks for detail."
         )
         return prompt
 
+    def _roman(self) -> bool:
+        """True for the English + Roman Urdu preset (also the unset default)."""
+        raw = str(config.get("voice.language", "") or "").strip().lower()
+        return raw in ("", ROMAN_PRESET)
+
     def _language(self) -> str:
         """BCP-47 code for speech recognition and the reply voice."""
         raw = str(config.get("voice.language", "") or "").strip()
-        if not raw:
+        if not raw or raw.lower() == ROMAN_PRESET:
             return DEFAULT_LANGUAGE
         # Accept "en" or "en_US" as well as "en-US".
         code = raw.replace("_", "-")
@@ -526,6 +654,7 @@ class LiveSession:
 
                 data = getattr(response, "data", None)
                 if data:
+                    self._audio_bytes += len(data)
                     audio_queue.put_nowait(data)
 
                 server = getattr(response, "server_content", None)
@@ -534,7 +663,9 @@ class LiveSession:
                     if inp is not None and getattr(inp, "text", ""):
                         self._heard.append(inp.text)
                         # Show it building, as one line that grows.
-                        self._emit("heard_partial", "".join(self._heard).strip())
+                        partial = clean_transcript("".join(self._heard))
+                        if partial:
+                            self._emit("heard_partial", partial)
 
                     out = getattr(server, "output_transcription", None)
                     if out is not None and getattr(out, "text", ""):
@@ -548,7 +679,9 @@ class LiveSession:
                         if not self._said:
                             self._emit("speaking", "")
                         self._said.append(out.text)
-                        self._emit("answer_partial", "".join(self._said).strip())
+                        partial = clean_transcript("".join(self._said))
+                        if partial:
+                            self._emit("answer_partial", partial)
 
                     # Barge-in: the user cut the model off. Keep what was
                     # actually said rather than dropping it.
@@ -558,16 +691,17 @@ class LiveSession:
                         self._sink.interrupt()
                         self._flush_heard()
                         self._flush_said()
+                        self._reset_turn()
 
                     if getattr(server, "turn_complete", False) or getattr(
                         server, "generation_complete", False
                     ):
-                        self._flush_heard()
-                        self._flush_said()
+                        self._end_turn()
                         self._emit("listening", "")
 
                 tool_call = getattr(response, "tool_call", None)
                 if tool_call is not None:
+                    self._tool_called = True
                     responses = []
                     for call in getattr(tool_call, "function_calls", []) or []:
                         # Every call must produce a FunctionResponse. A missing
