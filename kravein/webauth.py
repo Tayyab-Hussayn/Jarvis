@@ -34,6 +34,9 @@ import ipaddress
 import os
 import secrets
 import socket
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -168,6 +171,98 @@ def verify_token(supplied: str | None, expected: str) -> bool:
     if not supplied or not expected:
         return False
     return secrets.compare_digest(str(supplied), str(expected))
+
+
+# ---------------------------------------------------------------------------
+# UI tokens — a paired phone's short-lived stand-in for the browser token
+# ---------------------------------------------------------------------------
+#
+# The device credential must never reach /api or /ws (it can drive the phone
+# channel; the browser token can drive the whole assistant). A phone that wants
+# the web UI trades its credential for one of these. In memory only: a restart
+# invalidates them and the app simply asks again. Each is tied to its device so
+# revoking the device kills its tokens and the sockets opened with them.
+
+DEFAULT_UI_TTL = 12 * 3600.0
+
+_now = time.time
+_ui_lock = threading.Lock()
+# token -> (device_id, expires_at, close callbacks for live sockets)
+_ui_tokens: dict[str, tuple[str, float, list[Callable[[], None]]]] = {}
+
+
+def issue_ui_token(device_id: str, ttl: float | None = None) -> tuple[str, float, float]:
+    """Mint a UI token for ``device_id``. Returns ``(token, expires_at, ttl)``."""
+    ttl = float(ttl if ttl is not None else config.get("phone.ui_token_ttl_seconds", DEFAULT_UI_TTL))
+    token = secrets.token_urlsafe(TOKEN_BYTES)
+    expires = _now() + ttl
+    with _ui_lock:
+        _purge_expired_locked()
+        _ui_tokens[token] = (device_id, expires, [])
+    return token, expires, ttl
+
+
+def _purge_expired_locked() -> None:
+    now = _now()
+    for token in [t for t, (_, exp, _cb) in _ui_tokens.items() if exp <= now]:
+        _ui_tokens.pop(token, None)
+
+
+def verify_ui_token(supplied: str | None) -> bool:
+    """Is this a live UI token? Constant-time per candidate, empty never matches."""
+    return ui_token_expiry(supplied) is not None
+
+
+def ui_token_expiry(supplied: str | None) -> float | None:
+    if not supplied:
+        return None
+    found: float | None = None
+    with _ui_lock:
+        now = _now()
+        for token, (_, exp, _cb) in _ui_tokens.items():
+            # No early exit: every stored token is compared.
+            if secrets.compare_digest(str(supplied), token) and exp > now:
+                found = exp
+    return found
+
+
+def token_accepted(supplied: str | None, expected: str) -> bool:
+    """The browser token or a live UI token — wherever the browser token works."""
+    return verify_token(supplied, expected) or verify_ui_token(supplied)
+
+
+def on_ui_token_revoked(token: str, callback: Callable[[], None]) -> None:
+    """Run ``callback`` (from any thread) when this UI token is revoked.
+
+    Call only for a token that just passed ``verify_ui_token``. If it is gone
+    by now the callback fires immediately, so a revoke racing a handshake
+    cannot leave a socket open.
+    """
+    with _ui_lock:
+        entry = _ui_tokens.get(token)
+        if entry is not None:
+            entry[2].append(callback)
+            return
+    callback()
+
+
+def revoke_ui_tokens(device_id: str) -> int:
+    """Drop every UI token of a device and close the sockets opened with them."""
+    with _ui_lock:
+        gone = [t for t, (dev, _, _cb) in _ui_tokens.items() if dev == device_id]
+        callbacks = [cb for t in gone for cb in _ui_tokens.pop(t)[2]]
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception:  # a dead socket must not stop the others closing
+            pass
+    return len(gone)
+
+
+def clear_ui_tokens() -> None:
+    """Forget every UI token. Used by the tests."""
+    with _ui_lock:
+        _ui_tokens.clear()
 
 
 def token_from_request(
