@@ -10,7 +10,7 @@ export type Danger = "SAFE" | "MODERATE" | "DESTRUCTIVE" | "CRITICAL";
 /* -- server -> client ------------------------------------------------ */
 
 export type ServerFrame =
-  | { t: "hello"; assistant_name: string; skills: number; provider: string; model: string; environment: string }
+  | { t: "hello"; assistant_name: string; skills: number; provider: string; model: string; environment: string; local_client?: boolean }
   | { t: "turn_start"; id: string; skill?: string }
   | { t: "thinking"; id: string; text: string }
   | { t: "tool_call"; id: string; call_id: string; name: string; args: Record<string, unknown>; display: string }
@@ -29,7 +29,10 @@ export type ServerFrame =
   | { t: "routine_event"; routine: string; step: string; label: string; text: string; nag: number }
   | { t: "error"; id?: string; message: string }
   | { t: "reset_ok" }
-  | { t: "voice_state"; phase: string; text: string }
+  | { t: "voice_state"; phase: string; text: string; audio?: "device" | "laptop" }
+  // Device voice: the user talked over the model; drop queued playback. Model
+  // audio itself arrives as binary frames (PCM16 mono 24 kHz), not JSON.
+  | { t: "audio_clear" }
   | { t: "pong" };
 
 /* -- client -> server ------------------------------------------------ */
@@ -49,7 +52,11 @@ export type ClientFrame =
   // starts and stops it — audio never crosses the socket. `mode` is a
   // *preference*: only the server knows what is installed and keyed, so it
   // resolves "auto" and reports what actually started in the `started` frame.
-  | { t: "voice_start"; mode: "local" | "live" | "auto" }
+  //
+  // `audio: "device"` makes this page the microphone and speaker: it then sends
+  // binary PCM16 mono 16 kHz frames on the same socket (no JSON), and needs
+  // Live. Omitted or "laptop" is the server's own mic and speaker.
+  | { t: "voice_start"; mode: "local" | "live" | "auto"; audio?: "device" | "laptop" }
   | { t: "voice_stop" }
   | { t: "ping" };
 

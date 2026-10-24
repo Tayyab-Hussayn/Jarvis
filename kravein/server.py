@@ -28,7 +28,9 @@ forbidden no matter what the browser answers.
 # misread as a required query parameter and the route 422s.
 
 import asyncio
+import collections
 import contextlib
+import ipaddress
 import json
 import threading
 from pathlib import Path
@@ -458,15 +460,40 @@ def create_app(token: str | None = None) -> Any:
         busy = threading.Event()
 
         audit.record("web.connected")
-        session.emit("hello", **_hello_payload())
+        peer = socket.client.host if socket.client else ""
+        # Whether this page is on the laptop itself. The phone app also loads
+        # 127.0.0.1 (a loopback pipe on the phone), so the page cannot tell;
+        # the server sees the phone's LAN address and can.
+        session.emit(
+            "hello", **_hello_payload(), local_client=_is_loopback_peer(peer)
+        )
+
+        # The JSON pump and the audio sender both write to this socket.
+        send_lock = asyncio.Lock()
 
         async def pump() -> None:
             """Drain the outbound queue onto the socket."""
             while True:
                 payload = await session.next_frame()
-                await socket.send_text(json.dumps(payload, default=str))
+                async with send_lock:
+                    await socket.send_text(json.dumps(payload, default=str))
 
         pump_task = asyncio.create_task(pump())
+
+        audio_out = _AudioOut()
+
+        async def audio_sender() -> None:
+            """Write device-voice audio to the socket, in order. A slow client
+            costs dropped audio (see `_AudioOut`), never a stalled loop."""
+            while True:
+                item = await audio_out.get()
+                async with send_lock:
+                    if item is _CLEAR:
+                        await socket.send_text(json.dumps({"t": "audio_clear"}))
+                    else:
+                        await socket.send_bytes(item)
+
+        audio_task = asyncio.create_task(audio_sender())
 
         # One stop flag per turn. The agent loop runs on a worker thread, so
         # cancelling the asyncio task around it does not reach the loop — the
@@ -546,7 +573,7 @@ def create_app(token: str | None = None) -> Any:
         #
         # (This is exactly the assumption that breaks for remote access, which
         # is why phone support stays a separate piece of work.)
-        voice_box: dict[str, Any] = {"session": None, "thread": None}
+        voice_box: dict[str, Any] = {"session": None, "thread": None, "net": None}
 
         def voice_observer(kind: str, text: str) -> None:
             # Voice turns deliberately never enter `messages` — the text
@@ -582,13 +609,39 @@ def create_app(token: str | None = None) -> Any:
                 "voice_state", phase="info",
                 text=f"Waiting for your confirmation: {action}",
             )
-            with contextlib.suppress(Exception):
-                _tts.speak("I need your confirmation.", blocking=True)
+            # The laptop speaker is the wrong place to say it when the owner is
+            # on the phone; the card (also relayed to phones) is the prompt.
+            if voice_box.get("net") is None:
+                with contextlib.suppress(Exception):
+                    _tts.speak("I need your confirmation.", blocking=True)
             return session.confirm(action, detail, danger)
 
-        def voice_worker(mode: str) -> None:
+        def audio_reader(net: Any) -> None:
+            """Move the session's output audio onto the loop until it ends.
+
+            Its own thread because `pull_output` blocks; it exits when the
+            session closes `net` (CLOSED), so nothing is left behind.
+            """
+            from .live import Control
+
+            while True:
+                item = net.pull_output(0.5)
+                if item is Control.CLOSED:
+                    return
+                if item is None:
+                    continue
+                try:
+                    if item is Control.CLEAR:
+                        loop.call_soon_threadsafe(audio_out.clear)
+                    else:
+                        loop.call_soon_threadsafe(audio_out.put, item)
+                except RuntimeError:  # the loop is gone, and the socket with it
+                    return
+
+        def voice_worker(mode: str, net: Any = None) -> None:
             from . import voice as voice_mod
 
+            reader: threading.Thread | None = None
             try:
                 if mode == "live":
                     ok, why = voice_mod.live_available()
@@ -598,11 +651,25 @@ def create_app(token: str | None = None) -> Any:
                     # LiveSession lives in live.py, not voice.py.
                     from .live import LiveSession
 
-                    live = LiveSession(
-                        observer=voice_observer, confirmer=voice_confirmer
-                    )
+                    if net is not None:
+                        live = LiveSession(
+                            observer=voice_observer, confirmer=voice_confirmer,
+                            source=net, sink=net,
+                        )
+                        reader = threading.Thread(
+                            target=audio_reader, args=(net,), daemon=True,
+                            name="kravein-web-voice-out",
+                        )
+                        reader.start()
+                    else:
+                        live = LiveSession(
+                            observer=voice_observer, confirmer=voice_confirmer
+                        )
                     voice_box["session"] = live
-                    session.emit("voice_state", phase="started", text="live")
+                    session.emit(
+                        "voice_state", phase="started", text="live",
+                        audio="device" if net is not None else "laptop",
+                    )
                     live.run()
                 else:
                     convo = voice_mod.VoiceSession(
@@ -618,8 +685,19 @@ def create_app(token: str | None = None) -> Any:
                 )
                 session.emit("voice_state", phase="error", text=str(exc))
             finally:
+                # Closing `net` wakes the reader (CLOSED) and ends the input
+                # side even if `run()` raised before it ever started.
+                if net is not None:
+                    net.close()
+                if reader is not None:
+                    reader.join(timeout=2.0)
                 voice_box["session"] = None
                 voice_box["thread"] = None
+                voice_box["net"] = None
+                if net is not None:
+                    # Playback the client still holds is stale once we stop.
+                    with contextlib.suppress(RuntimeError):
+                        loop.call_soon_threadsafe(audio_out.clear)
                 session.emit("voice_state", phase="stopped", text="")
 
         def stop_voice() -> bool:
@@ -629,6 +707,11 @@ def create_app(token: str | None = None) -> Any:
             if active is not None:
                 with contextlib.suppress(Exception):
                     active.stop()
+            net = voice_box.get("net")
+            if net is not None:
+                # Also covers a stop that lands before the session exists.
+                with contextlib.suppress(Exception):
+                    net.close()
             with contextlib.suppress(Exception):
                 from .platform import tts as _tts
 
@@ -638,7 +721,20 @@ def create_app(token: str | None = None) -> Any:
         turn_task: asyncio.Task | None = None
         try:
             while True:
-                raw = await socket.receive_text()
+                message = await socket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+                chunk = message.get("bytes")
+                if chunk is not None:
+                    # Device-voice microphone audio. A stream, so no reply per
+                    # frame; with no device session (stopped, or a late frame)
+                    # it is dropped. `push_input` never blocks and drops the
+                    # oldest audio when the session falls behind.
+                    net = voice_box.get("net")
+                    if net is not None and len(chunk) <= MAX_AUDIO_FRAME:
+                        net.push_input(chunk)
+                    continue
+                raw = message.get("text") or ""
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
@@ -699,13 +795,35 @@ def create_app(token: str | None = None) -> Any:
                     # snapshot and then assume it got what it asked for, which
                     # both disabled voice on live-only machines and left the UI
                     # labelling the session with a mode it might not be in.
-                    mode, problem = voice_mod.resolve_mode(str(msg.get("mode") or ""))
+                    use_device = msg.get("audio") == "device"
+                    requested = str(msg.get("mode") or "")
+                    if use_device and requested == "local":
+                        session.emit(
+                            "voice_state", phase="error",
+                            text="This device's mic and speaker need Live voice.",
+                        )
+                        continue
+                    # Device audio is Live-only (`NetworkAudio` feeds a
+                    # LiveSession). Asking for it forces `live`, so a missing
+                    # key is a refusal, not a quiet fall back to the laptop mic.
+                    mode, problem = voice_mod.resolve_mode(
+                        "live" if use_device else requested
+                    )
                     if not mode:
                         session.emit("voice_state", phase="error", text=problem)
                         continue
-                    audit.record("web.voice_start", mode=mode)
+                    audit.record(
+                        "web.voice_start", mode=mode,
+                        audio="device" if use_device else "laptop",
+                    )
+                    net = None
+                    if use_device:
+                        from .live import NetworkAudio
+
+                        net = NetworkAudio()
+                        voice_box["net"] = net
                     worker = threading.Thread(
-                        target=voice_worker, args=(mode,), daemon=True,
+                        target=voice_worker, args=(mode, net), daemon=True,
                         name="kravein-web-voice",
                     )
                     voice_box["thread"] = worker
@@ -775,8 +893,11 @@ def create_app(token: str | None = None) -> Any:
             if ui_watch is not None:
                 ui_watch.cancel()
             pump_task.cancel()
+            audio_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pump_task
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await audio_task
             if turn_task is not None:
                 turn_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -802,6 +923,55 @@ def create_app(token: str | None = None) -> Any:
             }
 
     return app
+
+
+# ---------------------------------------------------------------------------
+# Device voice (the browser's mic and speaker)
+# ---------------------------------------------------------------------------
+
+# One microphone frame is ~100 ms (3.2 KB); anything far larger is not ours.
+MAX_AUDIO_FRAME = 64 * 1024
+
+_CLEAR = object()   # barge-in marker, kept in order with the audio
+
+
+class _AudioOut:
+    """Bounded, drop-oldest hand-off from the reader thread to the sender task.
+
+    Only touched on the event loop (the reader goes through
+    `call_soon_threadsafe`), so a slow client costs old audio, never a stalled
+    loop or unbounded memory.
+    """
+
+    MAX_ITEMS = 200
+
+    def __init__(self) -> None:
+        self._items: "collections.deque[Any]" = collections.deque(maxlen=self.MAX_ITEMS)
+        self._ready = asyncio.Event()
+
+    def put(self, item: bytes) -> None:
+        self._items.append(item)
+        self._ready.set()
+
+    def clear(self) -> None:
+        """Barge-in: audio not sent yet is stale. The marker tells the client
+        to drop what it already buffered."""
+        self._items.clear()
+        self._items.append(_CLEAR)
+        self._ready.set()
+
+    async def get(self) -> Any:
+        while not self._items:
+            self._ready.clear()
+            await self._ready.wait()
+        return self._items.popleft()
+
+
+def _is_loopback_peer(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 # ---------------------------------------------------------------------------

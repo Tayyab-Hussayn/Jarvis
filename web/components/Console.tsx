@@ -27,7 +27,8 @@ import { captureAsk } from "@/lib/session";
 import { Icon } from "./icons";
 import { ModeToggle } from "./ModeToggle";
 import { TurnGraph } from "./TurnGraph";
-import { Button } from "./ui";
+import type { AudioChoice } from "@/lib/audioChoice";
+import { Button, Chip } from "./ui";
 
 // Four short prompts in an even 2x2 grid. The previous set were full
 // sentences of uneven length and wrapped 3 + 1, leaving a ragged final row.
@@ -109,6 +110,9 @@ export function Console({
   onSelectVoice,
   onRestartVoice,
   onDismissVoiceError,
+  audioChoice,
+  onAudioChoice,
+  deviceAudioReason,
 }: {
   messages: Message[];
   busy: boolean;
@@ -131,6 +135,10 @@ export function Console({
   onSelectVoice: () => void;
   onRestartVoice: (mode: "local" | "live") => void;
   onDismissVoiceError: () => void;
+  audioChoice: AudioChoice;
+  onAudioChoice: (choice: AudioChoice) => void;
+  /** Why "this device" cannot be used right now; empty when it can. */
+  deviceAudioReason: string;
 }) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -207,6 +215,33 @@ export function Console({
                   onSelectText={onSelectText}
                   onSelectVoice={onSelectVoice}
                 />
+                {!voiceLive && (
+                  <div
+                    role="group"
+                    aria-label="Microphone and speaker"
+                    className="mt-3 flex flex-wrap items-center justify-center gap-2"
+                  >
+                    <Chip
+                      active={audioChoice === "device"}
+                      onClick={() => onAudioChoice("device")}
+                      title={deviceAudioReason || "Talk through this device's mic and speaker"}
+                    >
+                      This device&apos;s mic &amp; speaker
+                    </Chip>
+                    <Chip
+                      active={audioChoice === "laptop"}
+                      onClick={() => onAudioChoice("laptop")}
+                      title="Talk through the laptop's mic and speaker"
+                    >
+                      Laptop mic &amp; speaker
+                    </Chip>
+                    {audioChoice === "device" && deviceAudioReason && (
+                      <p className="w-full text-center text-[length:var(--text-xs)] text-[var(--text-faint)]">
+                        {deviceAudioReason}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Text mode keeps exactly the suggestion grid it had. Voice mode
