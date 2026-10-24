@@ -33,6 +33,8 @@ updated: 2026-10-23
 
 - Owner 2026-10-24: open_app into a workspace merged #95; #96 web sorted workspaces + app launcher + terminal popup merged.
 
+- #97 engine: live voice `<ctrl46>` reply + Devanagari transcript; English/Roman-Urdu only (owner 2026-10-24). #92 android voice: owner confirmed phone mic+speaker work; PR pending.
+
 ## Blockers
 - None.
 
