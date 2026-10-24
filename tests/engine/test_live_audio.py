@@ -67,6 +67,9 @@ def backend(monkeypatch):
     monkeypatch.setattr(genai, "Client", Client)
     monkeypatch.setattr(config, "gemini_api_key", lambda: "k")
     monkeypatch.setattr(LiveSession, "_config", lambda self: None)
+    # Never load or download a Whisper model under test.
+    from kravein.platform import stt
+    monkeypatch.setattr(stt, "translate_available", lambda: False)
     monkeypatch.setattr(config, "STATE_DIR", Path("/nonexistent-kravein-test"))
     return holder
 
