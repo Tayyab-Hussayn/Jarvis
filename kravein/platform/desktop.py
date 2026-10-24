@@ -14,6 +14,7 @@ Backends are picked at import time from :mod:`detect` and can be re-probed.
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -638,6 +639,76 @@ def find_windows(query: str) -> list[Window]:
     return exact + prefix + partial
 
 
+def window_by_id(window_id: str) -> Window | None:
+    """The window with exactly this backend handle, or ``None``.
+
+    Deliberately no fallback to name matching: an id the caller took from a
+    list that has since changed must fail, not land on a lookalike.
+    """
+    want = (window_id or "").strip().lower()
+    if not want:
+        return None
+    for win in backend().list_windows():
+        if (win.id or "").lower() == want:
+            return win
+    return None
+
+
+_TERMINALS = {
+    "foot", "footclient", "kitty", "alacritty", "wezterm", "wezterm-gui",
+    "ghostty", "konsole", "gnome-terminal", "gnome-terminal-server", "xterm",
+    "urxvt", "st", "terminator", "tilix", "xfce4-terminal", "lxterminal",
+}
+
+
+def _children(pid: int) -> list[int]:
+    kids: list[int] = []
+    try:
+        for task in os.listdir(f"/proc/{pid}/task"):
+            with open(f"/proc/{pid}/task/{task}/children") as fh:
+                kids += [int(p) for p in fh.read().split()]
+    except (OSError, ValueError):
+        pass
+    return kids
+
+
+def terminal_cwd(window: Window) -> str | None:
+    """Working directory of a terminal window's shell, or ``None`` if unknown.
+
+    Follows the process tree down from the window's pid while each process has
+    exactly one child (terminal -> shell -> foreground program). Stopping at a
+    fork keeps a shell with background jobs on the shell's own cwd. A terminal
+    whose own pid has several children (foot/kitty servers hosting many
+    windows under one pid) cannot be mapped to this window, so it yields
+    ``None`` rather than another window's directory.
+    """
+    app = (window.app or "").lower()
+    if not window.pid or app not in _TERMINALS:
+        return None
+    pid = window.pid
+    kids = _children(pid)
+    if len(kids) != 1:
+        return None
+    for _ in range(8):
+        pid = kids[0]
+        kids = _children(pid)
+        if len(kids) != 1:
+            break
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return None
+
+
+def window_record(window: Window) -> dict[str, Any]:
+    """Structured form of a window: exact ``id`` plus ``cwd`` (or ``None``)."""
+    return {
+        "id": window.id, "title": window.title, "app": window.app,
+        "pid": window.pid, "workspace": window.workspace,
+        "focused": window.focused, "cwd": terminal_cwd(window),
+    }
+
+
 def describe_windows() -> str:
     """Human-readable window list."""
     windows = backend().list_windows()
@@ -655,5 +726,8 @@ def describe_windows() -> str:
     for ws in sorted(by_workspace, key=lambda k: (len(k), k)):
         lines.append(f"  workspace {ws}:")
         for win in by_workspace[ws]:
-            lines.append("    " + win.describe())
+            extra = f"  (id {win.id}"
+            cwd = terminal_cwd(win)
+            extra += f", cwd {cwd})" if cwd else ")"
+            lines.append("    " + win.describe() + extra)
     return "\n".join(lines)

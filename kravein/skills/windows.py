@@ -7,6 +7,7 @@ IPC, so it works without synthetic input.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 
@@ -40,6 +41,27 @@ class AmbiguousTarget(Exception):
 
 def _describe(w) -> str:
     return f"workspace {w.workspace} · {w.app} · {w.title[:44]} · pid {w.pid}"
+
+
+def _describe_full(w) -> str:
+    """_describe plus the terminal's directory, for confirmation cards."""
+    cwd = desktop.terminal_cwd(w)
+    return _describe(w) + (f" · cwd {cwd}" if cwd else "")
+
+
+def _resolve_id(window_id: str):
+    """Exactly the window with this id, or refuse.
+
+    No fallback to name matching: the id comes from a list that may be stale,
+    and "close that one" must never become "close a lookalike".
+    """
+    target = desktop.window_by_id(window_id)
+    if target is None:
+        raise AmbiguousTarget(
+            f"No window with id {window_id} — it may have closed. "
+            "Run list_windows for current ids."
+        )
+    return target
 
 
 def _resolve_one(query: str, workspace: str = ""):
@@ -129,8 +151,17 @@ def _wait_until_gone(backend, ids: set[str], timeout: float = _GONE_TIMEOUT) -> 
 
 
 @skill(category="windows", danger=Danger.SAFE)
-def list_windows() -> str:
-    """List every open window, grouped by workspace."""
+def list_windows(as_json: bool = False) -> str:
+    """List every open window, grouped by workspace, with each window's exact
+    id and, for terminals, the shell's working directory.
+
+    Args:
+        as_json: Return a JSON list of {id, title, app, pid, workspace,
+            focused, cwd} instead of text.
+    """
+    if as_json:
+        return json.dumps([desktop.window_record(w)
+                           for w in desktop.backend().list_windows()])
     return desktop.describe_windows()
 
 
@@ -154,15 +185,19 @@ def focused_window() -> str:
 
 
 @skill(category="windows", danger=Danger.MODERATE)
-def focus_window(query: str, workspace: str = "") -> str:
-    """Bring a window to the front by app name or title.
+def focus_window(query: str = "", workspace: str = "", id: str = "") -> str:
+    """Bring a window to the front by app name or title, or by exact id.
 
     Args:
         query: Part of the application id or window title.
         workspace: Only consider windows on this workspace.
+        id: Exact window id from list_windows. When given, acts on exactly
+            that window and ignores query; refuses if it no longer exists.
     """
+    if not (id or query):
+        return "Give a query or an id from list_windows."
     try:
-        target = _resolve_one(query, workspace)
+        target = _resolve_id(id) if id else _resolve_one(query, workspace)
     except AmbiguousTarget as exc:
         return exc.message
 
@@ -236,6 +271,7 @@ def close_window(
     query: str = "",
     workspace: str = "",
     force: bool = False,
+    id: str = "",
     _source: str = "local",
     _confirm: bool = False,
 ) -> str:
@@ -246,9 +282,16 @@ def close_window(
         workspace: Only consider windows on this workspace. Use it whenever the
             app name could match more than one window.
         force: Kill the client instead of politely asking it to close.
+        id: Exact window id from list_windows. When given, closes exactly
+            that window and ignores query; refuses if it no longer exists.
     """
     backend = desktop.backend()
-    if query:
+    if id:
+        try:
+            target = _resolve_id(id)
+        except AmbiguousTarget as exc:
+            return exc.message
+    elif query:
         try:
             target = _resolve_one(query, workspace)
         except AmbiguousTarget as exc:
@@ -278,7 +321,7 @@ def close_window(
         # Name the workspace, title and pid. "close window 'foot'" was not
         # reviewable with three foot terminals open, so approving it could not
         # be an informed decision.
-        reasons=[f"{verb}s {_describe(target)} (unsaved work may be lost)"],
+        reasons=[f"{verb}s {_describe_full(target)} (unsaved work may be lost)"],
     )
     # Declaring targets rather than letting safety.py read them back out of the
     # sentence. Two of these matter:
@@ -294,7 +337,7 @@ def close_window(
             targets=describe_targets(
                 f"window:{target.id}",
                 f"app:{target.app}",
-                "" if query else "close_window:implicit",
+                "" if (query or id) else "close_window:implicit",
             ))
 
     # Resolution, confirmation and action are three separate moments. Between
