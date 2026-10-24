@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import threading
 from pathlib import Path
@@ -62,11 +63,117 @@ def test_control_tokens_are_stripped(raw, clean):
     assert live.strip_control_tokens(raw) == clean
 
 
-def test_devanagari_transcript_becomes_latin():
-    out = live.transliterate_devanagari("स्विच टू वर्क स्पेस वन")
-    assert out == "svich tu vark spes van"
-    assert live.transliterate_devanagari("hello workspace 4") == "hello workspace 4"
-    assert not any("ऀ" <= c <= "ॿ" for c in live.clean_transcript("नमस्ते <ctrl46>"))
+def test_foreign_script_is_never_displayed_or_transliterated():
+    assert live.clean_transcript("नमस्ते <ctrl46>") == ""
+    assert live.clean_transcript("open फ्लैशलाइट now") == "open now"
+    assert live.clean_transcript("hello workspace 4") == "hello workspace 4"
+    assert not hasattr(live, "transliterate_devanagari")
+
+
+def _speak_script(deltas, tail=()):
+    async def script(_s):
+        for d in deltas:
+            yield _resp(server_content=_sc(input_transcription=_text(d)))
+        await asyncio.sleep(0.3)  # let the pushed mic audio reach the turn buffer
+        yield _resp(server_content=_sc(turn_complete=True))
+        for r in tail:
+            yield r
+    return script
+
+
+def _translated_session(backend, monkeypatch, deltas, translate, listen_after=1):
+    from kravein.platform import stt
+
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(audit, "record", lambda *a, **k: None)
+    monkeypatch.setattr(stt, "translate_available", lambda: True)
+    monkeypatch.setattr(stt, "translate_ready", lambda: True)
+    monkeypatch.setattr(stt, "preload_translate", lambda: None)
+    monkeypatch.setattr(stt, "translate_to_english", translate)
+    backend.script = _speak_script(deltas)
+    net = NetworkAudio()
+    net.push_input(b"\x01\x00" * 16000)  # one second
+    s = LiveSession(source=net, sink=net, observer=lambda k, t: events.append((k, t)))
+    t, _ = _run_in_thread(s)
+    assert _wait(lambda: len([e for e in events if e[0] == "listening"]) > listen_after, 5)
+    s.stop()
+    t.join(3)
+    return events
+
+
+def test_user_turn_is_shown_as_whispers_english_not_geminis_devanagari(backend, monkeypatch):
+    seen = {}
+
+    def translate(path):
+        import wave
+        with wave.open(str(path)) as w:
+            seen["frames"] = w.getnframes()
+            seen["rate"] = w.getframerate()
+        return "Hey, open the flashlight on my mobile."
+
+    events = _translated_session(backend, monkeypatch, ["हे ओपन ", "फ्लैशलाइट"], translate)
+    heard = [t for k, t in events if k == "heard"]
+    assert heard == ["Hey, open the flashlight on my mobile."]
+    assert seen["rate"] == 16000 and seen["frames"] >= 16000
+    # Devanagari never reaches the client, not even as a partial.
+    shown = [t for k, t in events if k in ("heard", "heard_partial")]
+    assert not any("ऀ" <= c <= "ॿ" for t in shown for c in t)
+    assert live.HEARING_TEXT in [t for k, t in events if k == "heard_partial"]
+    # The bubble closes only after the English text arrived.
+    order = [k for k, _ in events if k in ("heard", "listening")]
+    assert order[-2:] == ["heard", "listening"]
+
+
+def test_translate_failure_falls_back_to_geminis_latin_text(backend, monkeypatch):
+    def boom(path):
+        raise RuntimeError("model download failed")
+
+    events = _translated_session(backend, monkeypatch, ["turn off the light"], boom)
+    assert [t for k, t in events if k == "heard"] == ["turn off the light"]
+
+
+def test_translate_failure_with_devanagari_shows_nothing_foreign(backend, monkeypatch):
+    def boom(path):
+        raise RuntimeError("offline")
+
+    events = _translated_session(backend, monkeypatch, ["टर्न ऑफ"], boom)
+    assert [t for k, t in events if k == "heard"] == []
+    assert [e for e in events if e[0] == "listening"][1:]  # the turn still closed
+
+
+def test_a_slow_transcript_does_not_delay_the_reply(backend, monkeypatch):
+    import time
+
+    from kravein.platform import stt
+
+    gate = threading.Event()
+    monkeypatch.setattr(stt, "translate_available", lambda: True)
+    monkeypatch.setattr(stt, "translate_ready", lambda: True)
+    monkeypatch.setattr(stt, "preload_translate", lambda: None)
+    monkeypatch.setattr(stt, "translate_to_english", lambda p: (gate.wait(5), "late text")[1])
+    monkeypatch.setattr(audit, "record", lambda *a, **k: None)
+    events: list[tuple[str, str]] = []
+
+    async def script(_s):
+        yield _resp(server_content=_sc(input_transcription=_text("नमस्ते")))
+        await asyncio.sleep(0.3)
+        yield _resp(server_content=_sc(turn_complete=True))
+        yield _resp(server_content=_sc(output_transcription=_text("Done.")))
+        yield _resp(server_content=_sc(turn_complete=True))
+
+    backend.script = script
+    net = NetworkAudio()
+    net.push_input(b"\x01\x00" * 16000)
+    s = LiveSession(source=net, sink=net, observer=lambda k, t: events.append((k, t)))
+    t, _ = _run_in_thread(s)
+    try:
+        assert _wait(lambda: "Done." in _answers(events), 3)  # reply flowed while Whisper ran
+        assert not [e for e in events if e[0] == "heard"]
+    finally:
+        gate.set()
+    assert _wait(lambda: ("heard", "late text") in events, 3)
+    s.stop()
+    t.join(3)
 
 
 def test_reply_of_only_control_tokens_is_replaced_by_a_retry_prompt(backend, monkeypatch):
@@ -77,7 +184,7 @@ def test_reply_of_only_control_tokens_is_replaced_by_a_retry_prompt(backend, mon
     ])
     assert _answers(events) == [live.EMPTY_REPLY_TEXT]
     assert not any("<ctrl" in t for _, t in events)
-    assert [t for k, t in events if k == "heard"] == ["svich tu vark spes van"]
+    assert [t for k, t in events if k == "heard"] == []
     [(_, kw)] = [r for r in records if r[0] == "live.empty_reply"]
     assert kw["control_only"] is True
 
@@ -171,3 +278,19 @@ def test_roman_preset_puts_the_language_rule_in_the_prompt(monkeypatch):
         lambda key, default=None: "fr" if key == "voice.language" else real(key, default),
     )
     assert "Roman Urdu" not in LiveSession()._system_prompt()
+
+
+def test_model_still_downloading_means_no_wait_and_gemini_fallback(backend, monkeypatch):
+    from kravein.platform import stt
+
+    called = []
+    monkeypatch.setattr(stt, "translate_available", lambda: True)
+    monkeypatch.setattr(stt, "translate_ready", lambda: False)
+    monkeypatch.setattr(stt, "preload_translate", lambda: None)
+    monkeypatch.setattr(stt, "translate_to_english", lambda p: called.append(p) or "x")
+    events, _ = _drive(backend, monkeypatch, [
+        _resp(server_content=_sc(input_transcription=_text("switch to workspace one"))),
+        _resp(server_content=_sc(output_transcription=_text("Done."), turn_complete=True)),
+    ])
+    assert [t for k, t in events if k == "heard"] == ["switch to workspace one"]
+    assert not called
