@@ -615,7 +615,52 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--no-open", action="store_true",
                        help="do not open a browser tab")
 
+    sub.add_parser("start", help="start the LAN web server (background)")
+    sub.add_parser("stop", help="stop the web server")
+    sub.add_parser("restart", help="restart the web server")
+    sub.add_parser("status", help="server state, paired phones, confirmation mode")
+    sub.add_parser("pair", help="show a QR to pair a phone")
+    phones_cmd = sub.add_parser("phones", help="list paired phones, or remove one")
+    phones_cmd.add_argument("action", nargs="?", choices=["list", "remove"], default="list")
+    phones_cmd.add_argument("target", nargs="?", default="", help="device id or name")
+    sub.add_parser("open", help="open the web UI in the browser")
+    logs_cmd = sub.add_parser("logs", help="the web server's journal")
+    logs_cmd.add_argument("-f", "--follow", action="store_true")
+    logs_cmd.add_argument("-n", "--lines", type=int, default=50)
+
     return parser
+
+
+def _service_command(args) -> int:
+    from . import service
+
+    try:
+        if args.command == "start":
+            return service.start()
+        if args.command == "stop":
+            return service.stop()
+        if args.command == "restart":
+            return service.restart()
+        if args.command == "status":
+            return service.status()
+        if args.command == "pair":
+            return service.pair(_render_qr)
+        if args.command == "phones":
+            if args.action == "remove" and not args.target:
+                print(red("Say which phone: kravein phones remove <id|name>"))
+                return 2
+            return service.phones(args.action, args.target)
+        if args.command == "open":
+            return service.open_ui()
+        return service.logs(args.follow, args.lines)
+    except service.ServiceError as exc:
+        print(red(str(exc)))
+        return 1
+
+
+_SERVICE_COMMANDS = frozenset(
+    {"start", "stop", "restart", "status", "pair", "phones", "open", "logs"}
+)
 
 
 def _auto_yes(action: str, detail: str, danger: Danger) -> bool:
@@ -660,6 +705,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "repl":
         return Repl().run()
+
+    if command in _SERVICE_COMMANDS:
+        return _service_command(args)
 
     if command == "ask":
         from .agent import Agent
