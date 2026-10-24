@@ -11,6 +11,11 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.kravein.connect.commands.DeviceCommandHandler
+import com.kravein.connect.confirm.ConfirmationListener
+import com.kravein.connect.confirm.ConfirmationNotifier
+import com.kravein.connect.confirm.ConfirmationText
+import com.kravein.connect.confirm.Outcome
+import com.kravein.connect.confirm.PendingConfirmation
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
 import com.kravein.connect.commands.CommandRouter
@@ -26,12 +31,23 @@ class KraveinConnectForegroundService : Service() {
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private lateinit var storage: PairingStorage
     private lateinit var client: PhoneClient
+    private lateinit var notifier: ConfirmationNotifier
+    private var connectStarted = false
 
     override fun onCreate() {
         super.onCreate()
         storage = PairingStorage(this)
         val handler = DeviceCommandHandler(this)
-        client = PhoneClient(CommandRouter(handler)) { handler.helloInfo(it.deviceName) }
+        notifier = ConfirmationNotifier(this)
+        notifier.ensureChannel()
+        client = PhoneClient(CommandRouter(handler), { handler.helloInfo(it.deviceName) }, object : ConfirmationListener {
+            override fun onRequested(confirmation: PendingConfirmation) =
+                notifier.show(confirmation, System.currentTimeMillis() / 1000)
+
+            override fun onClosed(requestId: String, outcome: Outcome) = notifier.cancel(requestId)
+
+            override fun onReplyRejected(requestId: String) = notifier.showResult(requestId, ConfirmationText.REJECTED)
+        })
         createNotificationChannel()
         try {
             val notification = buildNotification("Kravein Connect", "Starting connection")
@@ -62,9 +78,25 @@ class KraveinConnectForegroundService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_CONFIRM_REPLY -> {
+                answerConfirmation(intent)
+                // A service that was just (re)created has no socket yet; reconnecting is right then, but on a live
+                // one connect() would tear down the working connection.
+                if (!connectStarted) connectIfPossible()
+                return START_STICKY
+            }
         }
         connectIfPossible()
         return START_STICKY
+    }
+
+    private fun answerConfirmation(intent: Intent) {
+        val requestId = intent.getStringExtra(EXTRA_REQUEST_ID)?.takeIf { it.isNotBlank() && it.length <= 64 } ?: return
+        // No default: a missing extra must never read as approval.
+        if (!intent.hasExtra(EXTRA_APPROVE)) return
+        val approve = intent.getBooleanExtra(EXTRA_APPROVE, false)
+        val outcome = client.sendConfirmReply(requestId, approve)
+        notifier.showResult(requestId, ConfirmationText.result(outcome, approve))
     }
 
     private fun connectIfPossible() {
@@ -74,6 +106,7 @@ class KraveinConnectForegroundService : Service() {
             return
         }
         AgentStateStore.setCredential(credential)
+        connectStarted = true
         client.connect(credential)
     }
 
@@ -116,6 +149,9 @@ class KraveinConnectForegroundService : Service() {
 
     companion object {
         const val ACTION_STOP = "com.kravein.connect.action.STOP"
+        const val ACTION_CONFIRM_REPLY = "com.kravein.connect.action.CONFIRM_REPLY"
+        const val EXTRA_REQUEST_ID = "request_id"
+        const val EXTRA_APPROVE = "approve"
         private const val CHANNEL_ID = "kravein_connect"
         private const val NOTIFICATION_ID = 4201
     }

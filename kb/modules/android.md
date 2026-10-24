@@ -15,6 +15,7 @@ Package `com.kravein.connect` under `android/app/src/main/java/com/kravein/conne
 - `network/Http` — the one shared `OkHttpClient`; pairing, `UiSessionClient` (`POST /phone/ui-session` → `UiToken`, 401 = `Refused`) and the phone socket derive from it.
 - `web/` — `WebPolicies.kt` (pure: `UiTokenHolder` in-memory token cache with refresh margin, `NavigationPolicy` paired-origin allow-list + token-free URL rebuild, `PagePermissionPolicy` mic/camera, `WebViewLifecyclePolicy` create-on-first-show / destroy after 5 min idle); `KraveinWebController` (the hardened WebView, 401 → new token + reload, Offline/NeedsPairing state, driven by Activity `onStart/onStop`).
 - `ui/MainShell.kt` — bottom nav Kravein (WebView) · Phone (`ConnectedScreen`) · Settings (server, permissions, unpair, about); `ui/KraveinConnectApp.kt` holds onboarding and wires the shell.
+- `confirm/` — `Confirmations.kt` (pure: `PendingConfirmation`, `ConfirmationBook` open questions that outlive a socket, `ConfirmationText`, `ReplyOutcome`, `ConfirmationListener`); `ConfirmationNotifier` (HIGH channel `kravein_confirmations`, Approve/Decline via `PendingIntent.getForegroundService`, body opens the Kravein tab through `core/ShellNavigation`).
 - `pairing/PairingStorage` — encrypted credential. `MainActivity`, `KraveinConnectForegroundService`, `accessibility/`.
 - `android/gradle/libs.versions.toml` — version catalog (AGP 9.4.1, Kotlin 2.4.21, same as `~/code/smart-sticky-wallpaper`).
 - Tests: `android/app/src/test/java/com/kravein/connect/{protocol,commands,network,pairing,web}/`.
@@ -42,6 +43,13 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - Cleartext: the paired host is only known at runtime, so a static network-security-config cannot name it; the manifest keeps `usesCleartextTraffic` (LAN IP, TLS is #22) and the WebView enforces paired-origin-only. WebSocket traffic from the page is not visible to `shouldInterceptRequest`.
 - Lifecycle: WebView built when the Kravein tab is first composed; `onStop` pauses it and schedules destruction after 5 min; `onStart` destroys it if the limit passed. The three.js `HolographicBackground` (a second WebView) shows on onboarding screens only.
 - Refresh: token reloaded on Retry/Reload, on a main-frame 401 (once, then "pair again"), and on return to the foreground when the cached token is inside its 60 s margin. No timer polls.
+
+## Confirmation notifications (#51)
+- Frames: `confirm_request` (action, detail, danger destructive|critical, expires_at) → notification; `confirm_reply{approve}` back with the same request_id; `confirm_closed{outcome}` removes it. A phone that connects while one is pending also receives it (server side, #52).
+- A tap goes notification → `KraveinConnectForegroundService` (`ACTION_CONFIRM_REPLY`) → `PhoneClient.sendConfirmReply` → `PhoneSession.planReply`. A frame is built only on the welcomed live socket, for an open, unexpired id; the book entry is closed once it was sent, so a second tap sends nothing. Otherwise the notification becomes "Not sent – PC unreachable" / "Expired – not sent". Missing `approve` extra never reads as approval.
+- The server answers a late/duplicate/settled reply with `error unknown_request`; the session turns that (for an id we answered) into `ReplyRejected` → "Not accepted", not a session error.
+- Notification expiry: `setTimeoutAfter(expires_at - now)`; a request already expired on arrival is dropped.
+- POST_NOTIFICATIONS: asked once (setup screen explains why; `UiPrefs.notificationsPrompted`); refusal never blocks setup or the service.
 
 ## Pair against a local server
 `.venv/bin/python -m kravein serve --lan` → get an offer with the browser token (`POST /api/phone/offer`; render its JSON as a QR) → scan it in the app (or enter host/port/code). `GET /api/phones` lists the device; `DELETE /api/phones/{id}` revokes it and the app shows the pairing screen.

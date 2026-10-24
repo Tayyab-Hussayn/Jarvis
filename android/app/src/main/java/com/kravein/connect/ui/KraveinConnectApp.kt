@@ -59,6 +59,7 @@ import com.kravein.connect.core.DeviceCredential
 import com.kravein.connect.core.OfferParse
 import com.kravein.connect.core.PairingOffer
 import com.kravein.connect.core.PairingOfferParser
+import com.kravein.connect.core.UiPrefs
 import com.kravein.connect.network.PairResult
 import com.kravein.connect.network.PairingClient
 import kotlinx.coroutines.Dispatchers
@@ -134,16 +135,17 @@ fun KraveinConnectApp(
     val cameraGranted = remember { ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED }
     val notificationsGranted = remember { Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED }
 
-    val setupMissing = listOfNotNull(
-        if (!cameraGranted) "Camera" else null,
-        if (!notificationsGranted) "Notifications" else null,
-    )
+    // Camera is needed to pair. Notifications are only recommended: the screen explains why once, a refusal is
+    // respected, and the app works without them.
+    val uiPrefs = remember { UiPrefs(context) }
+    val setupMissing = listOfNotNull(if (!cameraGranted) "Camera" else null)
+    val offerNotifications = !notificationsGranted && !uiPrefs.notificationsPrompted
 
     val navController = rememberNavController()
 
     // Determine start destination
     val startDest = when {
-        setupMissing.isNotEmpty() -> "permissions"
+        setupMissing.isNotEmpty() || offerNotifications -> "permissions"
         credential != null -> "home"
         else -> "welcome"
     }
@@ -221,8 +223,13 @@ fun KraveinConnectApp(
                     cameraGranted = cameraGranted,
                     notificationsGranted = notificationsGranted,
                     onRequestCameraPermission = onRequestCameraPermission,
-                    onRequestNotificationPermission = onRequestNotificationPermission,
+                    onRequestNotificationPermission = {
+                        uiPrefs.notificationsPrompted = true
+                        onRequestNotificationPermission()
+                    },
                     onContinue = {
+                        // Seeing the reason and continuing counts as the one ask; it is not repeated every launch.
+                        uiPrefs.notificationsPrompted = true
                         if (credential != null) navController.navigate("home") { popUpTo(0) }
                         else navController.navigate("welcome") { popUpTo(0) }
                     }
@@ -449,7 +456,14 @@ private fun StartupPermissionsScreen(
                 Text("Missing permissions", fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(10.dp))
                 PermissionRow("Camera", cameraGranted)
-                PermissionRow("Notifications", notificationsGranted)
+                PermissionRow("Notifications", notificationsGranted, neededLabel = "Recommended")
+                if (!notificationsGranted) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Notifications let you approve or decline Kravein's requests from the lock screen. You can skip this; the app still works.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -472,10 +486,10 @@ private fun StartupPermissionsScreen(
 }
 
 @Composable
-private fun PermissionRow(label: String, granted: Boolean) {
+private fun PermissionRow(label: String, granted: Boolean, neededLabel: String = "Needed") {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label)
-        Text(if (granted) "Granted" else "Needed", color = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+        Text(if (granted) "Granted" else neededLabel, color = if (granted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
     }
 }
 

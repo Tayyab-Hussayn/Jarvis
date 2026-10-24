@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -32,7 +33,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.runtime.LaunchedEffect
 import com.kravein.connect.core.DeviceCredential
+import com.kravein.connect.core.ShellNavigation
 import com.kravein.connect.web.KraveinWebController
 import com.kravein.connect.web.WebUiState
 
@@ -55,6 +58,10 @@ fun MainShell(
     onPairAgain: () -> Unit,
 ) {
     var tab by rememberSaveable { mutableStateOf(ShellTab.KRAVEIN) }
+    // A tap on a confirmation notification lands on the Kravein tab, where the same question is on screen.
+    val showKravein by ShellNavigation.showKravein.collectAsState()
+    val seen = remember { showKravein }
+    LaunchedEffect(showKravein) { if (showKravein != seen) tab = ShellTab.KRAVEIN }
     Scaffold(
         bottomBar = {
             NavigationBar {
