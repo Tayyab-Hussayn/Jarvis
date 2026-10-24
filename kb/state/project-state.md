@@ -13,6 +13,7 @@ updated: 2026-10-23
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
+- Owner reports 2026-10-24: #72 web (stale confirm card after phone approve; 14-day pairing surviving restarts/IP change), #73 qa (serve --lan as systemd user service).
 - Nothing assigned. Android full-client plan phases 1–6 done (#45 #47 #48 #52 #53 #55 #57 #60 #61 #64 #67 #68 #69; TLS #22 closed). Device test 2026-10-24 (adb, Vivo V2254): pairing over TLS + pinned phone channel OK; WebView fixed via loopback TLS pipe #71; full adb device pass 1–9 OK (chat, phone battery, confirm Approve/Decline, share, reminder). Open: Chromium renderer keeps ~130 MB after WebView destroy (PSS 210 MB open → 163 MB bg).
 - Remaining plan ideas (not started): home-screen widget, push-to-talk from the phone mic, offline message queue, notification mirroring, clipboard sync.
 - `kravein/web-dist/` is gitignored: run `cd web && npm run build` after a web merge.
