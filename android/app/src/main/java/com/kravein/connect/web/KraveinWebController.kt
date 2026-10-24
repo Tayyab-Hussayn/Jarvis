@@ -7,15 +7,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
-import android.net.http.SslCertificate
-import android.net.http.SslError
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
-import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -26,6 +22,8 @@ import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
 import com.kravein.connect.core.DeviceCredential
 import com.kravein.connect.ui.theme.KraveinTokens
+import com.kravein.connect.network.LoopbackTlsPipe
+import com.kravein.connect.network.PinnedHttp
 import com.kravein.connect.network.UiSessionClient
 import com.kravein.connect.network.UiSessionResult
 import kotlinx.coroutines.CoroutineScope
@@ -76,6 +74,7 @@ class KraveinWebController(
     private var webView: WebView? = null
     private var credential: DeviceCredential? = null
     private var navigation: NavigationPolicy? = null
+    private var pipe: LoopbackTlsPipe? = null
     private var lastUrl: String? = null
     private var loadJob: Job? = null
     private var retriedAfter401 = false
@@ -89,6 +88,9 @@ class KraveinWebController(
             return view
         }
         lifecycle.onTabShown()
+        // The page's origin is only known once the pipe has a port, so the policy is rebuilt here.
+        pipe = startPipeIfTls(credential)
+        navigation = webPolicy(credential)
         val view = build()
         webView = view
         load(forceNewToken = false)
@@ -165,7 +167,23 @@ class KraveinWebController(
             lastUrl = null
         }
         credential = newCredential
-        navigation = NavigationPolicy(newCredential.host, newCredential.port, newCredential.scheme)
+        navigation = webPolicy(newCredential)
+    }
+
+    /**
+     * What the WebView may load. Over TLS the WebView only ever sees the loopback pipe (see LoopbackTlsPipe), so
+     * its "paired origin" is `http://127.0.0.1:<pipe port>`; the real server is reached through the pinned socket.
+     */
+    private fun webPolicy(c: DeviceCredential): NavigationPolicy =
+        pipe?.let { NavigationPolicy("127.0.0.1", it.localPort, "http") } ?: NavigationPolicy(c.host, c.port, c.scheme)
+
+    private fun startPipeIfTls(c: DeviceCredential): LoopbackTlsPipe? {
+        if (c.scheme != "https") return null
+        return try {
+            LoopbackTlsPipe(c.host, c.port, PinnedHttp.socketFactoryFor(c.certSha256)).start()
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun refreshIfTokenStale() {
@@ -212,6 +230,8 @@ class KraveinWebController(
             view.destroy()
         }
         webView = null
+        pipe?.close()
+        pipe = null
         lastLoadedToken = null
         lifecycle.onDestroyed()
         _state.value = WebUiState.Idle
@@ -219,7 +239,14 @@ class KraveinWebController(
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun build(): WebView {
+        // Debug builds only: lets the device test read the page's console over adb. A release build is never debuggable.
+        if ((appContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         val view = WebView(appContext)
+        // Without explicit params the WebView is measured wrap-content-like and every vh/dvh unit is 0, so the web
+        // UI's h-dvh root collapsed to nothing (blank tab on the device).
+        view.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         // The web page's own --bg, so the frames before it paints match it (the web UI follows the system theme).
         val night = (appContext.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         view.setBackgroundColor(KraveinTokens.background(night))
@@ -281,31 +308,6 @@ class KraveinWebController(
                 }
             } else {
                 _state.value = WebUiState.Offline("The PC answered with an error (${errorResponse.statusCode}).")
-            }
-        }
-
-        // The server's certificate is self-signed, so the WebView always reports it. proceed() only for the pinned
-        // certificate on the paired origin; everything else is cancelled and shown as an error, never a prompt.
-        override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-            val der = derOf(error.certificate)
-            if (SslErrorPolicy.mayProceed(navigation, credential?.certSha256, error.url, der)) {
-                handler.proceed()
-            } else {
-                handler.cancel()
-                _state.value = WebUiState.Offline(SslErrorPolicy.MESSAGE)
-            }
-        }
-
-        private fun derOf(certificate: SslCertificate?): ByteArray? {
-            if (certificate == null) return null
-            return try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    certificate.x509Certificate?.encoded
-                } else {
-                    SslCertificate.saveState(certificate)?.getByteArray("x509-certificate")
-                }
-            } catch (_: Exception) {
-                null
             }
         }
 
