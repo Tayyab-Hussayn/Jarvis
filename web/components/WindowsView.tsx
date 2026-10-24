@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { homeOf, shortCwd, windowArgs } from "@/lib/windows";
 import { useResource, useSkill, type RunSkill } from "@/lib/useApi";
 import { Button, Chip, Empty, Panel, SectionTitle } from "./ui";
 import { ActionRow, SkillOutput } from "./SkillOutput";
@@ -14,6 +15,7 @@ interface WindowRow {
   pid: number | null;
   workspace: string;
   focused: boolean;
+  cwd: string | null;
 }
 
 interface WindowsSnapshot {
@@ -117,14 +119,22 @@ export function WindowsView({ run }: { run: RunSkill }) {
                     <span>ws {win.workspace || "?"}</span>
                     {win.pid && <span>pid {win.pid}</span>}
                   </div>
+                  {win.cwd && (
+                    <div
+                      className="mt-1 truncate font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-muted)]"
+                      title={win.cwd}
+                    >
+                      {shortCwd(win.cwd, homeOf(win.cwd))}
+                    </div>
+                  )}
 
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Button onClick={() => void act("focus_window", { query: win.app })}>
+                    <Button onClick={() => void act("focus_window", windowArgs(win))}>
                       Focus
                     </Button>
                     <Button
                       variant="danger"
-                      onClick={() => void act("close_window", { query: win.app })}
+                      onClick={() => void act("close_window", windowArgs(win))}
                     >
                       Close
                     </Button>

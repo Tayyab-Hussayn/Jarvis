@@ -16,6 +16,8 @@ updated: 2026-10-24
 
 - Share-in link `/?ask=<text>` (#58): `web/lib/ask.ts` (pure: cap 4000 code points, control chars stripped, tests `ask.test.ts`) · `captureAsk()` in `session.ts` reads it once and strips it from the URL next to `token` · `Console` puts it in the composer from an effect (an existing draft wins). Never sent, shown only as a textarea value.
 
+- Windows view (#87): `/api/windows` rows come from `desktop.window_record` (exact `id` + `cwd`). Focus/Close send `{id}` only (`web/lib/windows.ts` `windowArgs`; never the app name, which hit an arbitrary same-app window); a stale id shows the skill's refusal in `SkillOutput` and `act()` reloads the list. Cards show `shortCwd` (`~`, last two segments, full path on hover). Tests `windows.test.ts`, `tests/web/test_windows_api.py`.
+
 ## Verify
 ```bash
 .venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 97+17 + 87

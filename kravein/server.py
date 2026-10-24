@@ -926,13 +926,7 @@ def _windows_snapshot() -> dict[str, Any]:
             "available": True,
             "backend": type(backend).__name__.replace("Backend", "").lower(),
             "workspaces": backend.list_workspaces(),
-            "windows": [
-                {
-                    "id": w.id, "title": w.title, "app": w.app, "pid": w.pid,
-                    "workspace": w.workspace, "focused": w.focused,
-                }
-                for w in windows
-            ],
+            "windows": [desktop.window_record(w) for w in windows],
         }
     except Exception as exc:
         return {"available": False, "error": str(exc), "windows": [], "workspaces": []}
