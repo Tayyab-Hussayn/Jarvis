@@ -3,12 +3,14 @@ package com.kravein.connect
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import com.kravein.connect.confirm.ConfirmationNotifier
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ShellNavigation
@@ -51,6 +53,12 @@ class MainActivity : ComponentActivity() {
         AgentStateStore.setCredential(storage.loadCredential())
         maybeStartService()
         ensureCameraPermission()
+        // Light theme needs dark status/navigation icons; the window colours already come from the theme.
+        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = !night
+            isAppearanceLightNavigationBars = !night
+        }
         setContent {
             KraveinConnectTheme {
                 KraveinConnectApp(

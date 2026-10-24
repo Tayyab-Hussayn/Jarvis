@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Web aurora tokens (web/app/tokens.css), light values; values-night holds the dark ones.
+     KraveinTokensTest fails if these drift from the CSS. -->
+<resources>
+    <color name="kravein_bg">#EEF2F9</color>
+    <color name="kravein_accent">#006B82</color>
+    <color name="kravein_icon_bg">#04060C</color>
+    <color name="kravein_splash_bg">#EEF2F9</color>
+</resources>

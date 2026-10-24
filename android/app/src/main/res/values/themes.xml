@@ -1,7 +1,9 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- The window ground equals the web background token, so neither the splash handoff nor the WebView's first frame flashes white. -->
     <style name="Theme.KraveinConnect" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="android:statusBarColor">#020305</item>
-        <item name="android:navigationBarColor">#020305</item>
-        <item name="android:windowBackground">#020305</item>
+        <item name="android:statusBarColor">@color/kravein_bg</item>
+        <item name="android:navigationBarColor">@color/kravein_bg</item>
+        <item name="android:windowBackground">@color/kravein_bg</item>
+        <item name="colorPrimary">@color/kravein_accent</item>
     </style>
 </resources>

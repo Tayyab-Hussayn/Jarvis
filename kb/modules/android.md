@@ -1,7 +1,7 @@
 ---
 type: module
 owner: android
-updated: 2026-10-22
+updated: 2026-10-24
 ---
 
 # android
@@ -14,11 +14,12 @@ Package `com.kravein.connect` under `android/app/src/main/java/com/kravein/conne
 - `core/` — `AppModels.kt` (`PairingOfferParser`, `DeviceCredential`, `ConnectionState`), `AgentStateStore` (UI state; no secrets).
 - `network/Http` — the one shared `OkHttpClient`; pairing, `UiSessionClient` (`POST /phone/ui-session` → `UiToken`, 401 = `Refused`) and the phone socket derive from it.
 - `web/` — `WebPolicies.kt` (pure: `UiTokenHolder` in-memory token cache with refresh margin, `NavigationPolicy` paired-origin allow-list + token-free URL rebuild, `PagePermissionPolicy` mic/camera, `WebViewLifecyclePolicy` create-on-first-show / destroy after 5 min idle); `KraveinWebController` (the hardened WebView, 401 → new token + reload, Offline/NeedsPairing state, driven by Activity `onStart/onStop`).
+- `ui/theme/` — `KraveinTokens.kt` (pure: the web aurora palette dark+light, radii, type scale, `background(dark)`, `NOTIFICATION_ACCENT`, WCAG `contrast`), `Theme.kt` (`KraveinConnectTheme` follows the system theme; `GradientButton`, `glassBorder`, `KraveinTheme.colors` for glass/danger). Res: `values{,-night}/colors.xml` + `themes.xml` (window ground = web `--bg`), `values-v31` splash attrs, `mipmap-anydpi-v26/ic_launcher` (adaptive + monochrome), `drawable/ic_stat_kravein` (status-bar glyph).
 - `ui/MainShell.kt` — bottom nav Kravein (WebView) · Phone (`ConnectedScreen`) · Settings (server, permissions, unpair, about); `ui/KraveinConnectApp.kt` holds onboarding and wires the shell.
 - `confirm/` — `Confirmations.kt` (pure: `PendingConfirmation`, `ConfirmationBook` open questions that outlive a socket, `ConfirmationText`, `ReplyOutcome`, `ConfirmationListener`); `ConfirmationNotifier` (HIGH channel `kravein_confirmations`, Approve/Decline via `PendingIntent.getForegroundService`, body opens the Kravein tab through `core/ShellNavigation`).
 - `pairing/PairingStorage` — encrypted credential. `MainActivity`, `KraveinConnectForegroundService`, `accessibility/`.
 - `android/gradle/libs.versions.toml` — version catalog (AGP 9.4.1, Kotlin 2.4.21, same as `~/code/smart-sticky-wallpaper`).
-- Tests: `android/app/src/test/java/com/kravein/connect/{protocol,commands,network,pairing,web}/`.
+- Tests: `android/app/src/test/java/com/kravein/connect/{protocol,commands,network,pairing,web,confirm,ui}/`.
 
 ## Verify
 ```bash
@@ -50,6 +51,12 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - The server answers a late/duplicate/settled reply with `error unknown_request`; the session turns that (for an id we answered) into `ReplyRejected` → "Not accepted", not a session error.
 - Notification expiry: `setTimeoutAfter(expires_at - now)`; a request already expired on arrival is dropped.
 - POST_NOTIFICATIONS: asked once (setup screen explains why; `UiPrefs.notificationsPrompted`); refusal never blocks setup or the service.
+
+## Design (#56)
+- Source of truth is `web/app/tokens.css`; `KraveinTokensTest` parses it (system property `kravein.tokens.css`, a task input) and fails when `KraveinTokens` or the `colors.xml` values drift. It also asserts WCAG AA on the text pairs in both themes. When web changes a token, change `KraveinTokens.kt` and `colors.xml` in the next android PR (the test tells you).
+- Dark first, light follows the system. Onboarding screens sit over the three.js hologram (`assets/web_background`, recoloured to cyan/violet on the web bg) and always use the dark palette; the shell uses the system theme. The WebView and window ground equal `--bg`, so splash, WebView and page do not flash.
+- Splash: platform SplashScreen attrs in `values-v31` (no `core-splashscreen` dependency); below Android 12 `windowBackground` shows. Font: platform sans (Inter not bundled, size).
+- Not done: Inter font, blur (Compose has no cheap backdrop blur; glass is a translucent fill + hairline).
 
 ## Pair against a local server
 `.venv/bin/python -m kravein serve --lan` → get an offer with the browser token (`POST /api/phone/offer`; render its JSON as a QR) → scan it in the app (or enter host/port/code). `GET /api/phones` lists the device; `DELETE /api/phones/{id}` revokes it and the app shows the pairing screen.

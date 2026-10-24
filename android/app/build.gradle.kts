@@ -48,9 +48,16 @@ android {
 // The vocabulary test compares the app against the server's definition of the channel. Declared as an input
 // so editing kravein/phone_protocol.json re-runs it instead of reusing a cached pass.
 val phoneProtocolJson = rootProject.file("../kravein/phone_protocol.json")
+// Same for the web design tokens: KraveinTokensTest fails when the native palette drifts from tokens.css.
+val webTokensCss = rootProject.file("../web/app/tokens.css")
 tasks.withType<Test>().configureEach {
     systemProperty("kravein.protocol.json", phoneProtocolJson.absolutePath)
     inputs.file(phoneProtocolJson)
+    systemProperty("kravein.tokens.css", webTokensCss.absolutePath)
+    inputs.file(webTokensCss)
+    systemProperty("kravein.res.dir", file("src/main/res").absolutePath)
+    inputs.dir(file("src/main/res/values"))
+    inputs.dir(file("src/main/res/values-night"))
 }
 
 dependencies {

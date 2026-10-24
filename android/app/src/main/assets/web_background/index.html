@@ -6,7 +6,7 @@
   <title>Kravein 3D WebGL Living AI Background</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #050505; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #04060c; }
     #canvas-container { width: 100%; height: 100%; position: absolute; inset: 0; }
   </style>
 
@@ -590,7 +590,7 @@
 
     // ——— SCENE & CAMERA ———
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x050505, 0.05);
+    scene.fog = new THREE.FogExp2(0x04060c, 0.05);
 
     const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 500);
     camera.position.set(0, 0, 5.8 + ((width < height) ? 6.5 : 0.0));
@@ -640,8 +640,8 @@
           vec4 cr = texture2D(tDiffuse, vUv + dir * offset);
           vec4 cg = texture2D(tDiffuse, vUv);
           vec4 cb = texture2D(tDiffuse, vUv - dir * offset * 0.5);
-          gl_FragColor = vec4(cr.r, cg.g * 1.05, cb.b * 0.6, 1.0) * flicker;
-          gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * vec3(1.15, 0.85, 0.55), 0.25);
+          gl_FragColor = vec4(cr.r, cg.g * 1.05, cb.b * 1.0, 1.0) * flicker;
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * vec3(0.75, 1.0, 1.15), 0.25);
         }
       `
     };
@@ -657,19 +657,19 @@
     controls.enablePan = false;
 
     // ——— COLORS ———
-    const C_BRIGHT = 0xffaa30;
-    const C_MID    = 0xdd7700;
-    const C_DIM    = 0x884400;
-    const C_FAINT  = 0x442200;
-    const C_HOT    = 0xffcc66;
-    const C_CYAN   = 0x37ffea;
+    const C_BRIGHT = 0x3de3ff;
+    const C_MID    = 0x2a9fbf;
+    const C_DIM    = 0x16596b;
+    const C_FAINT  = 0x0c2a38;
+    const C_HOT    = 0x7aeeff;
+    const C_CYAN   = 0x9d8cff;
 
     // ——— BACKGROUND ATMOSPHERE (STARS, FAINT GRID & DUST) ———
     const atmosphereGroup = new THREE.Group();
     scene.add(atmosphereGroup);
 
     // 1. Faint 3D Grid Floor & Ceiling
-    const gridHelper = new THREE.GridHelper(60, 40, 0xaa5500, 0x221100);
+    const gridHelper = new THREE.GridHelper(60, 40, 0x2b6f87, 0x0c1824);
     gridHelper.position.y = -4.5;
     gridHelper.material.opacity = 0.08;
     gridHelper.material.transparent = true;
@@ -686,7 +686,7 @@
     }
     starGeo.setAttribute("position", new THREE.Float32BufferAttribute(starPos, 3));
     const starMat = new THREE.PointsMaterial({
-      color: 0xffddaa,
+      color: 0xcdf6ff,
       size: 0.03,
       transparent: true,
       opacity: 0.35,

@@ -5,7 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -21,6 +21,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.content.ContextCompat
 import com.kravein.connect.core.DeviceCredential
+import com.kravein.connect.ui.theme.KraveinTokens
 import com.kravein.connect.network.UiSessionClient
 import com.kravein.connect.network.UiSessionResult
 import kotlinx.coroutines.CoroutineScope
@@ -197,7 +198,9 @@ class KraveinWebController(
     @SuppressLint("SetJavaScriptEnabled")
     private fun build(): WebView {
         val view = WebView(appContext)
-        view.setBackgroundColor(Color.BLACK)
+        // The web page's own --bg, so the frames before it paints match it (the web UI follows the system theme).
+        val night = (appContext.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        view.setBackgroundColor(KraveinTokens.background(night))
         view.settings.apply {
             javaScriptEnabled = true // the Kravein UI is a JavaScript app
             domStorageEnabled = true // it keeps its token in sessionStorage

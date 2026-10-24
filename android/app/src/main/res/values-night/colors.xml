@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="kravein_bg">#04060C</color>
+    <color name="kravein_accent">#3DE3FF</color>
+    <color name="kravein_icon_bg">#04060C</color>
+    <color name="kravein_splash_bg">#04060C</color>
+</resources>

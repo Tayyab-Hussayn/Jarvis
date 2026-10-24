@@ -1,0 +1,12 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Platform SplashScreen API (Android 12+); older versions show windowBackground, which is the same ground. -->
+    <style name="Theme.KraveinConnect" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@color/kravein_bg</item>
+        <item name="android:navigationBarColor">@color/kravein_bg</item>
+        <item name="android:windowBackground">@color/kravein_bg</item>
+        <item name="colorPrimary">@color/kravein_accent</item>
+        <item name="android:windowSplashScreenBackground">@color/kravein_splash_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/kravein_splash_bg</item>
+    </style>
+</resources>

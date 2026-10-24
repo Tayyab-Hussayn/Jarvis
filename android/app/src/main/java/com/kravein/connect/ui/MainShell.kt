@@ -12,8 +12,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import com.kravein.connect.ui.theme.GradientButton
+import com.kravein.connect.ui.theme.KraveinTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -39,10 +50,10 @@ import com.kravein.connect.core.ShellNavigation
 import com.kravein.connect.web.KraveinWebController
 import com.kravein.connect.web.WebUiState
 
-private enum class ShellTab(val label: String) {
-    KRAVEIN("Kravein"),
-    PHONE("Phone"),
-    SETTINGS("Settings"),
+private enum class ShellTab(val label: String, val icon: ImageVector) {
+    KRAVEIN("Kravein", Icons.Filled.Home),
+    PHONE("Phone", Icons.Filled.Phone),
+    SETTINGS("Settings", Icons.Filled.Settings),
 }
 
 /**
@@ -63,14 +74,23 @@ fun MainShell(
     val seen = remember { showKravein }
     LaunchedEffect(showKravein) { if (showKravein != seen) tab = ShellTab.KRAVEIN }
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            NavigationBar {
+            // Glass chrome with a hairline on top, like the web rail.
+            NavigationBar(containerColor = KraveinTheme.colors.glassStrong, modifier = Modifier.topHairline(KraveinTheme.colors.glassBorder)) {
                 ShellTab.entries.forEach { item ->
                     NavigationBarItem(
                         selected = tab == item,
                         onClick = { tab = item },
-                        icon = { Text(item.label.take(1), fontWeight = FontWeight.Bold) },
-                        label = { Text(item.label) },
+                        icon = { Icon(item.icon, contentDescription = null) },
+                        label = { Text(item.label, style = MaterialTheme.typography.labelSmall) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
                     )
                 }
             }
@@ -98,17 +118,17 @@ private fun KraveinWebTab(credential: DeviceCredential, web: KraveinWebControlle
         WebUiState.NeedsPairing -> Centered {
             Text("This phone is no longer paired", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text("Kravein on your PC refused this device. Pair it again to continue.", textAlign = TextAlign.Center)
-            Button(onClick = onPairAgain, modifier = Modifier.fillMaxWidth()) { Text("Pair again") }
+            GradientButton(onClick = onPairAgain, modifier = Modifier.fillMaxWidth()) { Text("Pair again") }
         }
         is WebUiState.Offline -> Centered {
             Text("Kravein is unreachable", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Text(current.message, textAlign = TextAlign.Center)
-            Button(onClick = { web.reload() }, modifier = Modifier.fillMaxWidth()) { Text("Retry") }
+            GradientButton(onClick = { web.reload() }, modifier = Modifier.fillMaxWidth()) { Text("Retry") }
         }
         else -> {
             Column(Modifier.fillMaxSize()) {
                 if (current == WebUiState.Loading) {
-                    CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally).padding(8.dp))
+                    LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceVariant)
                 }
                 AndroidView(
                     modifier = Modifier.fillMaxWidth().weight(1f),
@@ -130,4 +150,9 @@ private fun Centered(content: @Composable () -> Unit) {
         content()
         Spacer(Modifier.height(8.dp))
     }
+}
+
+/** A 1 dp line along the top edge; the web chrome's `--glass-border` hairline. */
+private fun Modifier.topHairline(color: Color): Modifier = drawBehind {
+    drawLine(color, Offset(0f, 0f), Offset(size.width, 0f), strokeWidth = 1.dp.toPx())
 }
