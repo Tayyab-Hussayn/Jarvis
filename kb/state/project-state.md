@@ -35,7 +35,7 @@ updated: 2026-10-23
 
 - Live voice: control tokens stripped, empty-turn fallback, English/Roman-Urdu only #99 (the missed tool call was a model-side glitch, mitigated not proven fixed). Phone mic+speaker live voice merged #98 (owner-confirmed on device).
 
-- Voice transcript in English via Whisper translate #101 (base model downloads on first use). #102 web: stuck "running" card after dropped socket.
+- Voice transcript in English via Whisper translate #101 (base model downloads on first use). Stuck "running" cards → "unknown" + auto-reconnect #104. Nothing in flight.
 
 ## Blockers
 - None.
