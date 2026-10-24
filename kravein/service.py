@@ -24,7 +24,7 @@ from . import config, webauth
 from .platform import shell
 
 UNIT = "kravein-web.service"
-PORT = 8787                       # the unit runs `serve` with the default port
+DEFAULT_PORT = 8787               # when web.env has no KRAVEIN_PORT
 START_WAIT_SECONDS = 20.0
 
 
@@ -44,17 +44,27 @@ def unit_path():
     return config.XDG_CONFIG_HOME / "systemd" / "user" / UNIT
 
 
-def lan_host() -> str:
-    """The address the unit binds, from web.env ("" when not set up)."""
+def _env_value(name: str) -> str:
     try:
         lines = web_env_path().read_text(encoding="utf-8").splitlines()
     except OSError:
         return ""
     for line in lines:
         key, _, value = line.partition("=")
-        if key.strip() == "KRAVEIN_LAN_HOST":
+        if key.strip() == name:
             return value.strip().strip("'\"")
     return ""
+
+
+def lan_host() -> str:
+    """The address the unit binds, from web.env ("" when not set up)."""
+    return _env_value("KRAVEIN_LAN_HOST")
+
+
+def port() -> int:
+    """The port the unit serves on; a missing or junk value means the default."""
+    value = _env_value("KRAVEIN_PORT")
+    return int(value) if value.isdigit() and 0 < int(value) < 65536 else DEFAULT_PORT
 
 
 def _installer_hint() -> str:
@@ -99,7 +109,7 @@ def _scheme() -> str:
 
 
 def base_url(host: str) -> str:
-    return f"{_scheme()}://{host}:{PORT}"
+    return f"{_scheme()}://{host}:{port()}"
 
 
 def _ssl_context() -> ssl.SSLContext:

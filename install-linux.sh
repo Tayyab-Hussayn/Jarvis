@@ -235,7 +235,7 @@ fi
 # ---------------------------------------------------------------------------
 bold "6d. kravein command and web UI unit (installed, never enabled)"
 
-# Owner decision 2026-10-24: the web UI does not autostart. `kravein web start`
+# Owner decision 2026-10-24: the web UI does not autostart. `kravein start`
 # / `stop` drive `systemctl --user start|stop kravein-web`, so the server runs
 # in the background and survives closing the terminal. That needs two things on
 # disk, and both are shipped here rather than described: the command on PATH,
@@ -271,6 +271,23 @@ esac
 WEB_ENV="$CONFIG_DIR/web.env"
 mapfile -t LAN_ADDRS < <("$VENV/bin/python" -c \
   "from kravein import webauth; print(*webauth.local_addresses(), sep='\n')" 2>/dev/null || true)
+# --- lan filter begin
+# Container and VM bridges hold private addresses too (docker0 is 172.17.0.1)
+# but no phone can reach the server through them; offering one as choice 1 got
+# it picked on the owner's machine. Dropped by interface name; without `ip`
+# nothing is dropped, which only means the owner sees the full list.
+filter_lan_addrs() {
+  local addr iface
+  for addr in "$@"; do
+    iface="$(ip -4 -o addr show 2>/dev/null | awk -v a="$addr" '{split($4, p, "/"); if (p[1] == a) {print $2; exit}}')"
+    case "$iface" in
+      docker*|br-*|veth*|virbr*|vmnet*|vboxnet*|lxcbr*|lxdbr*|podman*|cni*|flannel*|cali*|tun*|tap*) continue ;;
+    esac
+    printf '%s\n' "$addr"
+  done
+}
+# --- lan filter end
+mapfile -t LAN_ADDRS < <(filter_lan_addrs "${LAN_ADDRS[@]}")
 LAN_HOST=""
 CURRENT_HOST=""
 [[ -f "$WEB_ENV" ]] && CURRENT_HOST="$(sed -n 's/^KRAVEIN_LAN_HOST=//p' "$WEB_ENV" | head -n1)"
@@ -298,17 +315,21 @@ mkdir -p "$JOBS_UNITS"
 if [[ -n "$LAN_HOST" ]]; then
   mkdir -p "$CONFIG_DIR"
   # Owner-only before the content lands, so the file is never world-readable.
-  ( umask 077; printf 'KRAVEIN_LAN_HOST=%s\n' "$LAN_HOST" > "$WEB_ENV" )
+  # An existing port is kept: the owner may have moved off 8787 because it was taken.
+  WEB_PORT=""
+  [[ -f "$WEB_ENV" ]] && WEB_PORT="$(sed -n 's/^KRAVEIN_PORT=//p' "$WEB_ENV" | head -n1)"
+  [[ "$WEB_PORT" =~ ^[0-9]+$ ]] || WEB_PORT="8787"
+  ( umask 077; printf 'KRAVEIN_LAN_HOST=%s\nKRAVEIN_PORT=%s\n' "$LAN_HOST" "$WEB_PORT" > "$WEB_ENV" )
   chmod 600 "$WEB_ENV"
-  ok "web.env -> $LAN_HOST"
+  ok "web.env -> $LAN_HOST:$WEB_PORT"
 fi
 # Copied with the real repo path substituted, as the other units are.
 sed "s|%h/code/Kravein|$REPO_DIR|g" \
   "$REPO_DIR/systemd/kravein-web.service" > "$JOBS_UNITS/kravein-web.service"
 systemctl --user daemon-reload
 ok "installed kravein-web.service (not enabled)"
-echo "    Start:    kravein web start      (or: systemctl --user start kravein-web)"
-echo "    Stop:     systemctl --user stop kravein-web"
+echo "    Start:    kravein start      (also: stop, status, pair)"
+echo "    Fallback: systemctl --user start|stop kravein-web"
 echo "    If the address changes (new network), edit $WEB_ENV and restart it."
 echo "    Uninstall: rm $WRAPPER $JOBS_UNITS/kravein-web.service $WEB_ENV"
 if systemctl --user is-enabled kravein-web.service >/dev/null 2>&1; then

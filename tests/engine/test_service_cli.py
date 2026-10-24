@@ -51,6 +51,20 @@ def dev(i, name, days=10, connected=True):
             "expires_at": time.time() + days * 86400 + 60}
 
 
+def test_port_defaults_to_8787_and_reads_web_env(installed):
+    assert service.port() == 8787
+    assert service.base_url("192.168.1.20") == "https://192.168.1.20:8787"
+    (installed / "web.env").write_text("KRAVEIN_LAN_HOST=192.168.1.20\nKRAVEIN_PORT=8788\n")
+    assert service.port() == 8788
+    assert service.base_url("192.168.1.20") == "https://192.168.1.20:8788"
+
+
+@pytest.mark.parametrize("junk", ["", "abc", "0", "70000", "-1"])
+def test_junk_port_falls_back_to_default(installed, junk):
+    (installed / "web.env").write_text(f"KRAVEIN_PORT={junk}\n")
+    assert service.port() == 8787
+
+
 def test_not_installed_prints_installer_command(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(service, "unit_path", lambda: tmp_path / "nope")
     monkeypatch.setattr(service, "web_env_path", lambda: tmp_path / "nope.env")
