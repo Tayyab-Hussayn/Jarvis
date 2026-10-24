@@ -29,10 +29,12 @@ def test_generates_once_and_reuses():
     assert not fresh2 and fp2 == fp and cert2 == cert
 
 
-def test_regenerates_when_ip_not_in_san():
+def test_keeps_the_certificate_when_the_lan_address_changes():
+    # The app pins the fingerprint, not the IP: a new DHCP lease must not
+    # force every paired phone to pair again.
     _, _, fp, _ = webauth.ensure_tls_cert("192.168.1.20")
     _, _, fp2, fresh = webauth.ensure_tls_cert("10.0.0.5")
-    assert fresh and fp2 != fp
+    assert not fresh and fp2 == fp
 
 
 def test_regenerates_a_corrupt_or_keyless_pair():

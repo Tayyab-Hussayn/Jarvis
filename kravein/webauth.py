@@ -345,29 +345,30 @@ def cert_fingerprint(cert_pem: bytes) -> str:
     return hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()
 
 
-def _cert_usable_for(cert_pem: bytes, ip: str) -> bool:
+def _cert_usable(cert_pem: bytes) -> bool:
+    """Parseable and not about to expire. The SAN is deliberately not checked:
+    the app pins the fingerprint, not the address, so a new DHCP lease must
+    not replace the certificate (that would unpair every phone). A browser
+    only warns about the self-signed cert anyway."""
     import datetime as dt
 
     from cryptography import x509
 
     try:
-        cert = x509.load_pem_x509_certificate(cert_pem)
-        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-        have = {str(a) for a in san.get_values_for_type(x509.IPAddress)}
-        expiry = cert.not_valid_after_utc
+        expiry = x509.load_pem_x509_certificate(cert_pem).not_valid_after_utc
     except Exception:
         return False
-    soon = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=TLS_RENEW_BEFORE_DAYS)
-    return str(ipaddress.ip_address(ip)) in have and expiry > soon
+    return expiry > dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=TLS_RENEW_BEFORE_DAYS)
 
 
 def ensure_tls_cert(ip: str) -> tuple[Path, Path, str, bool]:
     """Return (cert_path, key_path, fingerprint, regenerated) for serving `ip`.
 
-    Generated once and reused, so phones keep their pin across restarts. It is
-    regenerated only when the bound address is not in its SAN (the LAN address
-    changed) or it is about to expire — and then the fingerprint changes, so
-    every paired phone has to pair again.
+    Generated once and reused, so phones keep their pin across restarts and
+    address changes. It is regenerated only when a file is missing or corrupt
+    or the certificate is about to expire — and then the fingerprint changes,
+    so every paired phone has to pair again. `ip` only seeds the SAN of a new
+    certificate.
     """
     import datetime as dt
 
@@ -380,7 +381,7 @@ def ensure_tls_cert(ip: str) -> tuple[Path, Path, str, bool]:
     cert_path, key_path = directory / "cert.pem", directory / "key.pem"
     if cert_path.is_file() and key_path.is_file():
         pem = cert_path.read_bytes()
-        if _cert_usable_for(pem, ip):
+        if _cert_usable(pem):
             return cert_path, key_path, cert_fingerprint(pem), False
 
     directory.mkdir(parents=True, exist_ok=True)

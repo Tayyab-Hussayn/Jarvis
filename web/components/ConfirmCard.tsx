@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from "react";
 
+import { outcomeLabel } from "@/lib/confirm";
 import type { ConfirmView } from "@/lib/protocol";
 import { Button, DangerBadge, dangerColour } from "./ui";
 
@@ -111,10 +112,7 @@ export function ConfirmCard({
         </div>
       ) : (
         <p className="mt-2 text-[length:var(--text-xs)] text-[var(--text-muted)]">
-          {confirm.status === "approved" && "Approved."}
-          {confirm.status === "denied" && "Denied."}
-          {confirm.status === "expired" &&
-            "Expired without an answer — treated as denied."}
+          {outcomeLabel(confirm)}
         </p>
       )}
     </div>

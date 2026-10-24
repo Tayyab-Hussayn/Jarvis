@@ -30,6 +30,7 @@ import type {
   ToolCallView,
   VoicePhase,
 } from "./protocol";
+import { settleConfirm } from "./confirm";
 import { isVoiceLive } from "./protocol";
 import { captureToken, getToken, wsUrl } from "./session";
 
@@ -140,6 +141,29 @@ export function useKravein() {
       // `error` frames carry an optional id, so narrow it once here rather
       // than re-asserting at each use.
       const turnId = "id" in frame && frame.id ? frame.id : "";
+
+      // A confirmation resolved anywhere (phone notification, another tab,
+      // cancel, timeout) closes its card here too, wherever the card lives —
+      // inline or in the overlay — so it never stays open and unaware.
+      if (frame.t === "confirm_resolved") {
+        const settle = (confirm: ConfirmView) =>
+          settleConfirm(confirm, frame.confirm_id, frame.outcome, frame.by);
+        setMessages((current) =>
+          current.map((message) => ({
+            ...message,
+            confirms: (message.confirms ?? []).map(settle),
+          })),
+        );
+        setPanelConfirms((current) => current.map(settle));
+        // The outcome is shown briefly, then the overlay card goes away.
+        setTimeout(() => {
+          setPanelConfirms((current) =>
+            current.filter((confirm) => confirm.confirmId !== frame.confirm_id),
+          );
+        }, 4000);
+        return;
+      }
+
       if (isPanelTurn(turnId)) {
         switch (frame.t) {
           case "confirm_request":

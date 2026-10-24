@@ -17,6 +17,7 @@ export type ServerFrame =
   | { t: "tool_result"; id: string; call_id: string; name: string; result: string }
   | { t: "confirm_request"; id: string; confirm_id: string; action: string; detail: string; danger: Danger; timeout: number }
   | { t: "confirm_expired"; id: string; confirm_id: string }
+  | { t: "confirm_resolved"; id: string; confirm_id: string; outcome: "approved" | "denied" | "expired"; by: string }
   | { t: "answer"; id: string; text: string }
   | { t: "turn_end"; id: string; iterations: number; tool_calls?: string[]; error?: string; cancelled?: boolean }
   | { t: "cancelled"; id?: string; pending_confirms?: number }
@@ -136,6 +137,8 @@ export interface ConfirmView {
   /** Epoch ms when the server stops waiting and denies. */
   expiresAt: number;
   status: "pending" | "approved" | "denied" | "expired";
+  /** Who answered, when the server said ("phone", "web"); empty otherwise. */
+  by?: string;
 }
 
 /** Phases in which a voice session is genuinely live.
