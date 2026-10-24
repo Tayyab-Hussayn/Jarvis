@@ -55,20 +55,54 @@ def test_installer_uses_only_defined_variables():
     used = set(re.findall(r"\$\{?([A-Z_][A-Z0-9_]*)", text))
     assigned |= set(re.findall(r"mapfile -t ([A-Z_][A-Z0-9_]*)", text))
     builtin = {"HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
-               "BASH_SOURCE"}
+               "BASH_SOURCE", "PATH"}
     # Names inside single-quoted heredocs/echo text (e.g. \$USER) are not code.
     unbound = used - assigned - builtin - {"USER"}
     assert not unbound, unbound
 
 
-def test_installer_web_step_is_opt_in_and_private():
-    text = INSTALLER.read_text()
-    step = text.split("6d.")[1].split('bold "7.')[0]
-    assert "read -r -p" in step and '"${reply,,}" == "y"' in step
+def _web_step() -> str:
+    body = INSTALLER.read_text().split('bold "6d.')[1].split('bold "7.')[0]
+    return body.split("\n", 1)[1]          # drop the rest of the title line
+
+
+def test_installer_web_step_installs_but_never_enables():
+    step = _web_step()
+    # Owner decision: manual on/off only. Only the comments may say "enable".
+    code = "\n".join(l for l in step.splitlines() if not l.lstrip().startswith("#"))
+    assert not re.search(r"systemctl --user enable\b[^\n]*kravein-web", code)
+    assert not re.search(r"\benable\b", code.replace("is-enabled", "").replace("disable", ""))
+    assert "kravein-web.service" in step and "daemon-reload" in step
     assert "umask 077" in step and 'chmod 600 "$WEB_ENV"' in step
-    assert "systemctl --user enable --now kravein-web.service" in step
     assert "sudo" not in step
-    assert "disable --now kravein-web.service" in step     # prints how to turn it off
+    assert "systemctl --user disable kravein-web.service" in step   # legacy #74 enable
+
+
+def test_installer_wrapper_execs_venv_python_and_warns_off_path(tmp_path):
+    step = _web_step()
+    block = step.split("# The LAN address")[0]     # wrapper + PATH check only
+    assert 'exec "%s/bin/python" -m kravein "$@"' in block
+    assert "is not on your PATH" in block
+    script = tmp_path / "wrap.sh"
+    script.write_text(
+        'set -euo pipefail\nok(){ :; }\nwarn(){ echo "WARN $*"; }\n'
+        f'VENV="/opt/k/.venv"\nHOME="{tmp_path}"\n' + block)
+    env = {"PATH": "/usr/bin:/bin"}
+    for _ in range(2):                              # idempotent on re-run
+        out = subprocess.run(["bash", str(script)], capture_output=True,
+                             text=True, env=env, check=True).stdout
+    wrapper = tmp_path / ".local" / "bin" / "kravein"
+    lines = wrapper.read_text().splitlines()
+    assert lines[0] == "#!/usr/bin/env bash"
+    assert lines[-1] == 'exec "/opt/k/.venv/bin/python" -m kravein "$@"'
+    assert wrapper.stat().st_mode & 0o111
+    assert "not on your PATH" in out
+
+    # A foreign file at that path is left alone.
+    wrapper.write_text("#!/bin/sh\necho mine\n")
+    subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                   env=env, check=True)
+    assert wrapper.read_text() == "#!/bin/sh\necho mine\n"
 
 
 @pytest.mark.skipif(shutil.which("systemd-analyze") is None,

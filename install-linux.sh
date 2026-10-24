@@ -233,56 +233,87 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-bold "6d. web UI on the LAN at login (optional, off by default)"
+bold "6d. kravein command and web UI unit (installed, never enabled)"
 
-# Opt-in and never silent: this exposes the assistant to every device on the
-# network, so it is only enabled after an explicit "y". The address comes from
-# the app's own detection (webauth.local_addresses) so the installer and
-# `serve --lan` cannot disagree about what counts as a private LAN address, and
-# docker/bridge interfaces are not offered. Several candidates are never
-# resolved by taking the first: the owner picks.
+# Owner decision 2026-10-24: the web UI does not autostart. `kravein web start`
+# / `stop` drive `systemctl --user start|stop kravein-web`, so the server runs
+# in the background and survives closing the terminal. That needs two things on
+# disk, and both are shipped here rather than described: the command on PATH,
+# and the unit. The unit is deliberately NOT enabled — there is no `enable`
+# anywhere in this step, and an enable left over from an earlier installer
+# (#74) is only reported, never changed.
+BIN_DIR="$HOME/.local/bin"
+WRAPPER="$BIN_DIR/kravein"
+WRAPPER_MARK="# kravein-installer-wrapper"
+mkdir -p "$BIN_DIR"
+if [[ -e "$WRAPPER" || -L "$WRAPPER" ]] && ! grep -q "$WRAPPER_MARK" "$WRAPPER" 2>/dev/null; then
+  # Never clobber a file we did not write.
+  warn "$WRAPPER exists and is not ours — left alone."
+else
+  # Rewritten on every run so a moved checkout fixes itself (idempotent).
+  rm -f "$WRAPPER"
+  printf '#!/usr/bin/env bash\n%s\nexec "%s/bin/python" -m kravein "$@"\n' \
+    "$WRAPPER_MARK" "$VENV" > "$WRAPPER"
+  chmod 755 "$WRAPPER"
+  ok "installed $WRAPPER"
+fi
+case ":$PATH:" in
+  *":$BIN_DIR:"*) ;;
+  *) warn "$BIN_DIR is not on your PATH — add it, e.g.:"
+     echo "    echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.profile" ;;
+esac
+
+# The LAN address comes from the app's own detection (webauth.local_addresses)
+# so the installer and `serve --lan` cannot disagree about what counts as a
+# private address, and docker/bridge interfaces are not offered. Several
+# candidates are never resolved by taking the first: an address already in
+# web.env is kept if still valid, otherwise the owner picks.
 WEB_ENV="$CONFIG_DIR/web.env"
-read -r -p "  Run the web UI on your LAN at login (phone access)? [y/N] " reply
-if [[ "${reply,,}" == "y" ]]; then
-  mapfile -t LAN_ADDRS < <("$VENV/bin/python" -c \
-    "from kravein import webauth; print(*webauth.local_addresses(), sep='\n')" 2>/dev/null || true)
-  LAN_HOST=""
-  if [[ ${#LAN_ADDRS[@]} -eq 0 || -z "${LAN_ADDRS[0]:-}" ]]; then
-    warn "no private LAN address found — connect to a network and re-run."
-  elif [[ ${#LAN_ADDRS[@]} -eq 1 ]]; then
-    LAN_HOST="${LAN_ADDRS[0]}"
-  else
+mapfile -t LAN_ADDRS < <("$VENV/bin/python" -c \
+  "from kravein import webauth; print(*webauth.local_addresses(), sep='\n')" 2>/dev/null || true)
+LAN_HOST=""
+CURRENT_HOST=""
+[[ -f "$WEB_ENV" ]] && CURRENT_HOST="$(sed -n 's/^KRAVEIN_LAN_HOST=//p' "$WEB_ENV" | head -n1)"
+if [[ ${#LAN_ADDRS[@]} -eq 0 || -z "${LAN_ADDRS[0]:-}" ]]; then
+  warn "no private LAN address found — web.env not written; connect to a network and re-run."
+elif [[ ${#LAN_ADDRS[@]} -eq 1 ]]; then
+  LAN_HOST="${LAN_ADDRS[0]}"
+else
+  for addr in "${LAN_ADDRS[@]}"; do
+    [[ "$addr" == "$CURRENT_HOST" ]] && LAN_HOST="$addr"
+  done
+  if [[ -z "$LAN_HOST" ]]; then
     echo "    More than one private address:"
     for i in "${!LAN_ADDRS[@]}"; do echo "      $((i + 1))) ${LAN_ADDRS[$i]}"; done
     read -r -p "  Which one? [number] " pick
     if [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#LAN_ADDRS[@]} )); then
       LAN_HOST="${LAN_ADDRS[$((pick - 1))]}"
     else
-      warn "no valid choice — not enabling."
+      warn "no valid choice — web.env not written."
     fi
   fi
+fi
 
-  if [[ -n "$LAN_HOST" ]]; then
-    mkdir -p "$CONFIG_DIR" "$JOBS_UNITS"
-    # Owner-only before the content lands, so the file is never world-readable.
-    ( umask 077; printf 'KRAVEIN_LAN_HOST=%s\n' "$LAN_HOST" > "$WEB_ENV" )
-    chmod 600 "$WEB_ENV"
-    # Copied with the real repo path substituted, as the other units are.
-    sed "s|%h/code/Kravein|$REPO_DIR|g" \
-      "$REPO_DIR/systemd/kravein-web.service" > "$JOBS_UNITS/kravein-web.service"
-    systemctl --user daemon-reload
-    if systemctl --user enable --now kravein-web.service >/dev/null 2>&1; then
-      ok "web UI service enabled on $LAN_HOST:8787"
-      echo "    Status:   systemctl --user status kravein-web.service"
-      echo "    Disable:  systemctl --user disable --now kravein-web.service"
-      echo "    If the address changes (new network), edit $WEB_ENV and restart it."
-    else
-      echo "    Installed the unit but could not start it. Check:"
-      echo "      journalctl --user -u kravein-web.service -n 30"
-    fi
-  fi
-else
-  ok "skipped (run it by hand: $VENV/bin/python -m kravein serve --lan)"
+mkdir -p "$JOBS_UNITS"
+if [[ -n "$LAN_HOST" ]]; then
+  mkdir -p "$CONFIG_DIR"
+  # Owner-only before the content lands, so the file is never world-readable.
+  ( umask 077; printf 'KRAVEIN_LAN_HOST=%s\n' "$LAN_HOST" > "$WEB_ENV" )
+  chmod 600 "$WEB_ENV"
+  ok "web.env -> $LAN_HOST"
+fi
+# Copied with the real repo path substituted, as the other units are.
+sed "s|%h/code/Kravein|$REPO_DIR|g" \
+  "$REPO_DIR/systemd/kravein-web.service" > "$JOBS_UNITS/kravein-web.service"
+systemctl --user daemon-reload
+ok "installed kravein-web.service (not enabled)"
+echo "    Start:    kravein web start      (or: systemctl --user start kravein-web)"
+echo "    Stop:     systemctl --user stop kravein-web"
+echo "    If the address changes (new network), edit $WEB_ENV and restart it."
+echo "    Uninstall: rm $WRAPPER $JOBS_UNITS/kravein-web.service $WEB_ENV"
+if systemctl --user is-enabled kravein-web.service >/dev/null 2>&1; then
+  warn "kravein-web is still enabled from an earlier install (autostarts at login)."
+  echo "    Turn that off:  systemctl --user disable kravein-web.service"
 fi
 
 # ---------------------------------------------------------------------------
