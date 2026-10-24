@@ -36,11 +36,15 @@ class PhoneClient(
     private val seenNotices = NoticeDedupe()
 
     // The socket stays open for hours, so it must not inherit the short call/read timeouts of the shared client.
-    private val http = Http.client.newBuilder()
+    // Derived from the pinned client for this server (or the plain one for http), so the pin applies to the socket too.
+    private fun httpFor(credential: DeviceCredential) = PinnedHttp.clientFor(credential.scheme, credential.certSha256).newBuilder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .callTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(30, TimeUnit.SECONDS)
         .build()
+
+    // Consecutive failures that look like plain http hitting a TLS server; only counted without a pin.
+    private var tlsHints = 0
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
 
     private var socket: WebSocket? = null
@@ -54,6 +58,7 @@ class PhoneClient(
         this.credential = credential
         stopped = false
         attempt = 0
+        tlsHints = 0
         open(credential)
     }
 
@@ -89,13 +94,13 @@ class PhoneClient(
 
     private fun open(credential: DeviceCredential) {
         socket?.cancel()
-        val url = HttpUrl.Builder().scheme("http").host(credential.host).port(credential.port).addPathSegments("phone/ws").build()
+        val url = HttpUrl.Builder().scheme(credential.scheme).host(credential.host).port(credential.port).addPathSegments("phone/ws").build()
         val request = Request.Builder().url(url).header("Authorization", credential.authorization()).build()
         val newSession = PhoneSession(router, helloInfo(credential), book, notices = seenNotices) { UUID.randomUUID().toString().replace("-", "") }
         session = newSession
         AgentStateStore.setConnectionState(ConnectionState.CONNECTING)
         AgentStateStore.setStatus("Connecting to ${credential.host}")
-        socket = http.newWebSocket(request, Listener(newSession))
+        socket = httpFor(credential).newWebSocket(request, Listener(newSession))
     }
 
     private fun scheduleReconnect(delayMs: Long) {
@@ -116,10 +121,10 @@ class PhoneClient(
             apply(webSocket, mine.onText(text))
         }
 
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = lost(webSocket, null, "closed $code")
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = lost(webSocket, null, "closed $code", null)
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
-            lost(webSocket, response?.code, "failed: ${t.javaClass.simpleName}")
+            lost(webSocket, response?.code, "failed: ${t.javaClass.simpleName}", t)
 
         private fun apply(webSocket: WebSocket, out: SessionOutput) {
             out.send.forEach { webSocket.send(it) }
@@ -127,6 +132,7 @@ class PhoneClient(
                 when (event) {
                     is SessionEvent.Ready -> {
                         attempt = 0
+                        tlsHints = 0
                         AgentStateStore.setConnectionState(ConnectionState.CONNECTED)
                         AgentStateStore.setStatus("Connected to ${event.serverName}")
                         AgentStateStore.setError(null)
@@ -144,13 +150,15 @@ class PhoneClient(
             if (out.close) webSocket.close(1000, "closing")
         }
 
-        private fun lost(webSocket: WebSocket, httpStatus: Int?, what: String) {
+        private fun lost(webSocket: WebSocket, httpStatus: Int?, what: String, failure: Throwable?) {
             synchronized(this@PhoneClient) {
                 if (stopped || session !== mine || socket !== webSocket) return
                 socket = null
                 AgentStateStore.addLog("Socket $what")
                 attempt += 1
-                val action = ConnectionPolicy.onFailure(httpStatus, attempt)
+                val unpinned = credential?.certSha256 == null
+                tlsHints = if (unpinned && TlsFailures.looksLikePlainHttpToTlsServer(failure)) tlsHints + 1 else 0
+                val action = ConnectionPolicy.onFailure(httpStatus, attempt, failure, tlsHints)
                 AgentStateStore.setConnectionState(ConnectionPolicy.stateAfter(action))
                 when (action) {
                     is FailureAction.Retry -> {
@@ -163,6 +171,17 @@ class PhoneClient(
                         stopped = true
                         AgentStateStore.setStatus("Pairing required")
                         AgentStateStore.setError(ConnectionPolicy.REPAIR_MESSAGE)
+                    }
+                    FailureAction.PinMismatch -> {
+                        // A different certificate is never retried: it is either a reinstall or someone else.
+                        stopped = true
+                        AgentStateStore.setStatus("Certificate does not match")
+                        AgentStateStore.setError(TlsFailures.MISMATCH_MESSAGE)
+                    }
+                    FailureAction.NeedsTlsRepair -> {
+                        stopped = true
+                        AgentStateStore.setStatus("Pairing required")
+                        AgentStateStore.setError(TlsFailures.RE_PAIR_FOR_TLS_MESSAGE)
                     }
                 }
             }

@@ -7,11 +7,15 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
+import android.net.http.SslCertificate
+import android.net.http.SslError
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -153,14 +157,15 @@ class KraveinWebController(
     private fun bind(newCredential: DeviceCredential) {
         val current = credential
         if (current == null || current.deviceId != newCredential.deviceId || current.host != newCredential.host ||
-            current.port != newCredential.port
+            current.port != newCredential.port || current.scheme != newCredential.scheme ||
+            current.certSha256 != newCredential.certSha256
         ) {
             if (webView != null) destroy()
             tokens.clear()
             lastUrl = null
         }
         credential = newCredential
-        navigation = NavigationPolicy(newCredential.host, newCredential.port)
+        navigation = NavigationPolicy(newCredential.host, newCredential.port, newCredential.scheme)
     }
 
     private fun refreshIfTokenStale() {
@@ -276,6 +281,31 @@ class KraveinWebController(
                 }
             } else {
                 _state.value = WebUiState.Offline("The PC answered with an error (${errorResponse.statusCode}).")
+            }
+        }
+
+        // The server's certificate is self-signed, so the WebView always reports it. proceed() only for the pinned
+        // certificate on the paired origin; everything else is cancelled and shown as an error, never a prompt.
+        override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
+            val der = derOf(error.certificate)
+            if (SslErrorPolicy.mayProceed(navigation, credential?.certSha256, error.url, der)) {
+                handler.proceed()
+            } else {
+                handler.cancel()
+                _state.value = WebUiState.Offline(SslErrorPolicy.MESSAGE)
+            }
+        }
+
+        private fun derOf(certificate: SslCertificate?): ByteArray? {
+            if (certificate == null) return null
+            return try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    certificate.x509Certificate?.encoded
+                } else {
+                    SslCertificate.saveState(certificate)?.getByteArray("x509-certificate")
+                }
+            } catch (_: Exception) {
+                null
             }
         }
 

@@ -27,7 +27,7 @@ object PairResponse {
         val id = (json.opt("device_id") as? String)?.takeIf { it.isNotBlank() } ?: return null
         val secret = (json.opt("device_secret") as? String)?.takeIf { it.isNotBlank() } ?: return null
         val name = (json.opt("name") as? String)?.takeIf { it.isNotBlank() } ?: fallbackName
-        return DeviceCredential(id, secret, name, offer.host, offer.port)
+        return DeviceCredential(id, secret, name, offer.host, offer.port, scheme = offer.scheme, certSha256 = offer.certSha256)
     }
 
     fun errorMessage(httpStatus: Int): String = when (httpStatus) {
@@ -37,13 +37,15 @@ object PairResponse {
 }
 
 /** Redeems a pairing offer for a device credential. Blocking: call it off the main thread. */
-class PairingClient(private val client: OkHttpClient = Http.client) {
+class PairingClient(
+    private val clientFor: (String, String?) -> OkHttpClient = { scheme, pin -> PinnedHttp.clientFor(scheme, pin) },
+) {
     fun redeem(offer: PairingOffer, deviceName: String): PairResult {
-        val url = HttpUrl.Builder().scheme("http").host(offer.host).port(offer.port).addPathSegments("phone/pair").build()
+        val url = HttpUrl.Builder().scheme(offer.scheme).host(offer.host).port(offer.port).addPathSegments("phone/pair").build()
         val body = JSONObject().put("code", offer.code).put("device_name", deviceName.take(80)).toString()
         val request = Request.Builder().url(url).post(body.toRequestBody("application/json".toMediaType())).build()
         return try {
-            client.newCall(request).execute().use { response ->
+            clientFor(offer.scheme, offer.certSha256).newCall(request).execute().use { response ->
                 // Bounded read: the reply is two short strings, anything bigger is not our server.
                 val text = response.peekBody(8192).string()
                 if (!response.isSuccessful) return PairResult.Failed(PairResponse.errorMessage(response.code))
@@ -51,7 +53,8 @@ class PairingClient(private val client: OkHttpClient = Http.client) {
                     ?: return PairResult.Failed("The PC sent a pairing reply this app cannot use.")
                 PairResult.Paired(credential)
             }
-        } catch (_: IOException) {
+        } catch (e: IOException) {
+            if (TlsFailures.isPinMismatch(e)) return PairResult.Failed(TlsFailures.MISMATCH_MESSAGE)
             PairResult.Failed("Cannot reach Kravein at ${offer.host}:${offer.port}. Is the phone on the same network as the PC?")
         }
     }

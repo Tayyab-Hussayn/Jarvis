@@ -45,16 +45,18 @@ object UiSessionResponse {
  * `POST /phone/ui-session` with the device credential. Like the socket it sends no `Origin` header (OkHttp never
  * adds one), which the phone endpoints require. Blocking: call it off the main thread.
  */
-class UiSessionClient(private val client: OkHttpClient = Http.client) {
+class UiSessionClient(
+    private val clientFor: (String, String?) -> OkHttpClient = { scheme, pin -> PinnedHttp.clientFor(scheme, pin) },
+) {
     fun fetch(credential: DeviceCredential): UiSessionResult {
-        val url = HttpUrl.Builder().scheme("http").host(credential.host).port(credential.port)
+        val url = HttpUrl.Builder().scheme(credential.scheme).host(credential.host).port(credential.port)
             .addPathSegments("phone/ui-session").build()
         val request = Request.Builder().url(url)
             .header("Authorization", credential.authorization())
             .post("".toRequestBody())
             .build()
         return try {
-            client.newCall(request).execute().use { response ->
+            clientFor(credential.scheme, credential.certSha256).newCall(request).execute().use { response ->
                 when {
                     response.code == 401 -> UiSessionResult.Refused
                     !response.isSuccessful -> UiSessionResult.Failed("The PC answered with an error (${response.code}).")
@@ -66,7 +68,8 @@ class UiSessionClient(private val client: OkHttpClient = Http.client) {
                     }
                 }
             }
-        } catch (_: IOException) {
+        } catch (e: IOException) {
+            if (TlsFailures.isPinMismatch(e)) return UiSessionResult.Failed(TlsFailures.MISMATCH_MESSAGE)
             UiSessionResult.Unreachable("Cannot reach Kravein at ${credential.host}:${credential.port}.")
         }
     }

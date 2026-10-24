@@ -20,9 +20,12 @@ data class PairingOffer(
     val port: Int,
     val code: String,
     val expiresAt: Long,
+    /** "http" or "https"; https always comes with [certSha256]. */
+    val scheme: String = "http",
+    val certSha256: String? = null,
 ) {
     // The code authorises pairing: keep it out of logs and crash reports.
-    override fun toString() = "PairingOffer(host=$host, port=$port, code=<redacted>, expiresAt=$expiresAt)"
+    override fun toString() = "PairingOffer(scheme=$scheme, host=$host, port=$port, code=<redacted>, expiresAt=$expiresAt)"
 }
 
 sealed interface OfferParse {
@@ -74,7 +77,15 @@ object PairingOfferParser {
         if (expiresAt <= nowEpochSeconds) {
             return OfferParse.Rejected("This pairing code has expired. Show a new QR code on your PC and scan it again.")
         }
-        return OfferParse.Ok(PairingOffer(host, port, code, expiresAt))
+        // Optional so offers from a server without TLS (`--no-tls`, loopback) keep working.
+        val scheme = if (json.has("scheme")) json.opt("scheme") as? String else "http"
+        val pin: String? = when (scheme) {
+            "http" -> null
+            "https" -> CertPin.normalize(json.opt("cert_sha256") as? String ?: "")
+                ?: return OfferParse.Rejected("The pairing code has no usable certificate fingerprint.")
+            else -> return OfferParse.Rejected("The pairing code uses a connection type this app does not know.")
+        }
+        return OfferParse.Ok(PairingOffer(host, port, code, expiresAt, scheme, pin))
     }
 }
 
@@ -85,9 +96,12 @@ data class DeviceCredential(
     val host: String,
     val port: Int,
     val pairedAt: String = Instant.now().toString(),
+    /** "https" with a [certSha256] pin, or "http". A credential stored before TLS existed reads back as http. */
+    val scheme: String = "http",
+    val certSha256: String? = null,
 ) {
     /** The only place the secret is placed in a header. */
     fun authorization(): String = "Device $deviceId:$deviceSecret"
 
-    override fun toString() = "DeviceCredential(deviceId=$deviceId, deviceName=$deviceName, host=$host, port=$port, secret=<redacted>)"
+    override fun toString() = "DeviceCredential(deviceId=$deviceId, deviceName=$deviceName, scheme=$scheme, host=$host, port=$port, secret=<redacted>)"
 }
