@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">Kravein Connect</string>
+    <string name="tile_label">Kravein</string>
     <string name="accessibility_service_description">Kravein Connect accessibility bridge for device control setup.</string>
 </resources>

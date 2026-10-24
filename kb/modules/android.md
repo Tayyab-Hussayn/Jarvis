@@ -17,6 +17,7 @@ Package `com.kravein.connect` under `android/app/src/main/java/com/kravein/conne
 - `ui/theme/` — `KraveinTokens.kt` (pure: the web aurora palette dark+light, radii, type scale, `background(dark)`, `NOTIFICATION_ACCENT`, WCAG `contrast`), `Theme.kt` (`KraveinConnectTheme` follows the system theme; `GradientButton`, `glassBorder`, `KraveinTheme.colors` for glass/danger). Res: `values{,-night}/colors.xml` + `themes.xml` (window ground = web `--bg`), `values-v31` splash attrs, `mipmap-anydpi-v26/ic_launcher` (adaptive + monochrome), `drawable/ic_stat_kravein` (status-bar glyph).
 - `ui/MainShell.kt` — bottom nav Kravein (WebView) · Phone (`ConnectedScreen`) · Settings (server, permissions, unpair, about); `ui/KraveinConnectApp.kt` holds onboarding and wires the shell.
 - `confirm/` — `Confirmations.kt` (pure: `PendingConfirmation`, `ConfirmationBook` open questions that outlive a socket, `ConfirmationText`, `ReplyOutcome`, `ConfirmationListener`); `ConfirmationNotifier` (HIGH channel `kravein_confirmations`, Approve/Decline via `PendingIntent.getForegroundService`, body opens the Kravein tab through `core/ShellNavigation`).
+- `web/ShareText.kt` (pure: clean/cap/encode shared text), `tile/` (`TileModel` pure, `KraveinTileService`).
 - `pairing/PairingStorage` — encrypted credential. `MainActivity`, `KraveinConnectForegroundService`, `accessibility/`.
 - `android/gradle/libs.versions.toml` — version catalog (AGP 9.4.1, Kotlin 2.4.21, same as `~/code/smart-sticky-wallpaper`).
 - Tests: `android/app/src/test/java/com/kravein/connect/{protocol,commands,network,pairing,web,confirm,ui}/`.
@@ -51,6 +52,13 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - The server answers a late/duplicate/settled reply with `error unknown_request`; the session turns that (for an id we answered) into `ReplyRejected` → "Not accepted", not a session error.
 - Notification expiry: `setTimeoutAfter(expires_at - now)`; a request already expired on arrival is dropped.
 - POST_NOTIFICATIONS: asked once (setup screen explains why; `UiPrefs.notificationsPrompted`); refusal never blocks setup or the service.
+
+## Share + Quick Settings tile (#59)
+- Share target: `MainActivity` has a `SEND text/plain` filter. `ShareText.clean` trims, drops blank, caps at 4000 chars (never splits a surrogate pair); `NavigationPolicy.authenticatedUrl(last, token, ask)` adds `ask=` (percent-encoded, `%20` for spaces) next to `token=`. `KraveinWebController.shareText` keeps the text in memory until a page load carries it once; a failed load keeps it for Retry.
+- `ask` and `token` are both stripped from the remembered `lastUrl`, so a rebuilt page never refills the composer. The shared text is never logged or stored; the extra is removed from the intent after reading, and `onCreate` only reads the intent when `savedInstanceState == null`.
+- Not paired: a Toast ("Pair this phone with Kravein first…"); the pairing screen is already showing.
+- Tile `tile/KraveinTileService` (+ pure `TileModel`): mirrors `AgentStateStore` only between `onStartListening`/`onStopListening` (no polling); tap opens `MainActivity` with `ACTION_OPEN_KRAVEIN` (PendingIntent overload on Android 14+). Subtitles need API 29.
+- Not verified on a device (no emulator here): share sheet entry, tile appearance in the shade.
 
 ## Design (#56)
 - Source of truth is `web/app/tokens.css`; `KraveinTokensTest` parses it (system property `kravein.tokens.css`, a task input) and fails when `KraveinTokens` or the `colors.xml` values drift. It also asserts WCAG AA on the text pairs in both themes. When web changes a token, change `KraveinTokens.kt` and `colors.xml` in the next android PR (the test tells you).

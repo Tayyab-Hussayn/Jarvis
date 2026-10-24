@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,6 +20,7 @@ import com.kravein.connect.pairing.PairingStorage
 import com.kravein.connect.ui.KraveinConnectApp
 import com.kravein.connect.ui.theme.KraveinConnectTheme
 import com.kravein.connect.web.KraveinWebController
+import com.kravein.connect.web.ShareText
 
 class MainActivity : ComponentActivity() {
     private lateinit var storage: PairingStorage
@@ -51,6 +53,7 @@ class MainActivity : ComponentActivity() {
         storage = PairingStorage(this)
         uiPrefs = UiPrefs(this)
         AgentStateStore.setCredential(storage.loadCredential())
+        if (savedInstanceState == null) handleIntent(intent)
         maybeStartService()
         ensureCameraPermission()
         // Light theme needs dark status/navigation icons; the window colours already come from the theme.
@@ -77,7 +80,27 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.action == ConfirmationNotifier.ACTION_OPEN_KRAVEIN) ShellNavigation.requestKraveinTab()
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        when (intent.action) {
+            ConfirmationNotifier.ACTION_OPEN_KRAVEIN -> ShellNavigation.requestKraveinTab()
+            Intent.ACTION_SEND -> {
+                // Another app's text: it goes to the composer only, and is dropped from the intent so a re-delivery
+                // (rotation-free recreation, task restore) cannot fill the composer a second time.
+                val text = ShareText.clean(intent.getCharSequenceExtra(Intent.EXTRA_TEXT))
+                intent.removeExtra(Intent.EXTRA_TEXT)
+                if (text == null) return
+                if (AgentStateStore.credential.value == null) {
+                    // The pairing screen is already what the user sees; say why their share went nowhere.
+                    Toast.makeText(this, "Pair this phone with Kravein first, then share again.", Toast.LENGTH_LONG).show()
+                    return
+                }
+                web.shareText(text)
+                ShellNavigation.requestKraveinTab()
+            }
+        }
     }
 
     override fun onStart() {

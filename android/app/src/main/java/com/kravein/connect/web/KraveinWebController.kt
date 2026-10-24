@@ -75,6 +75,7 @@ class KraveinWebController(
     private var lastUrl: String? = null
     private var loadJob: Job? = null
     private var retriedAfter401 = false
+    private var pendingAsk: String? = null
 
     /** The view for the tab; built on first use. It may still have a parent from an earlier composition. */
     fun viewFor(credential: DeviceCredential): WebView {
@@ -94,6 +95,18 @@ class KraveinWebController(
     fun reload() {
         retriedAfter401 = false
         load(forceNewToken = true)
+    }
+
+    /**
+     * Shared text for the composer. Held in memory only until a page load carries it (a load that fails keeps it for
+     * the Retry); a view that already exists is reloaded now, otherwise the tab's first load picks it up.
+     */
+    fun shareText(text: String) {
+        pendingAsk = text
+        if (webView != null) {
+            retriedAfter401 = false
+            load(forceNewToken = false)
+        }
     }
 
     fun canGoBack(): Boolean = webView?.canGoBack() == true
@@ -127,6 +140,7 @@ class KraveinWebController(
         destroy()
         tokens.clear()
         lastUrl = null
+        pendingAsk = null
         credential = null
         navigation = null
     }
@@ -171,7 +185,10 @@ class KraveinWebController(
             when (result) {
                 is UiSessionResult.Granted -> {
                     lastLoadedToken = result.token
-                    webView?.loadUrl(policy.authenticatedUrl(lastUrl, result.token.value))
+                    val view = webView
+                    // Consumed only once a view takes it, so the composer is filled once and never by a later reload.
+                    val ask = if (view != null) pendingAsk.also { pendingAsk = null } else null
+                    view?.loadUrl(policy.authenticatedUrl(lastUrl, result.token.value, ask))
                 }
                 UiSessionResult.Refused -> _state.value = WebUiState.NeedsPairing
                 is UiSessionResult.Unreachable -> _state.value = WebUiState.Offline(result.message)

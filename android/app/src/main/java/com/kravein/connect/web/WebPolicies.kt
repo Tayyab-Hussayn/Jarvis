@@ -75,12 +75,16 @@ class NavigationPolicy(host: String, private val port: Int) {
         }
     }
 
-    /** `/?token=…` for a fresh load; [lastUrl] is the page to come back to (its own token, if any, is dropped). */
-    fun authenticatedUrl(lastUrl: String?, token: String): String {
+    /**
+     * `/?token=…` for a fresh load; [lastUrl] is the page to come back to (its own token and `ask`, if any, are
+     * dropped so a rebuilt page never refills the composer). [ask] is shared text for the composer, already capped.
+     */
+    fun authenticatedUrl(lastUrl: String?, token: String, ask: String? = null): String {
         val path = lastUrl?.takeIf { isPairedOrigin(it) }?.let(::parse)
         val rawPath = path?.rawPath?.takeIf { it.startsWith("/") } ?: "/"
-        val kept = path?.rawQuery.orEmpty().split('&').filter { it.isNotEmpty() && !it.startsWith("token=") }
-        val query = (kept + ("token=" + java.net.URLEncoder.encode(token, "UTF-8"))).joinToString("&")
+        val kept = path?.rawQuery.orEmpty().split('&').filter { it.isNotEmpty() && !isSecretParam(it) }
+        val extra = listOfNotNull(ask?.let { "ask=" + ShareText.encode(it) }, "token=" + java.net.URLEncoder.encode(token, "UTF-8"))
+        val query = (kept + extra).joinToString("&")
         val fragment = path?.rawFragment?.let { "#$it" }.orEmpty()
         return "${origin()}$rawPath?$query$fragment"
     }
@@ -88,11 +92,14 @@ class NavigationPolicy(host: String, private val port: Int) {
     /** The same page without any token, for remembering where the user was. */
     fun withoutToken(url: String): String? {
         val uri = parse(url)?.takeIf { isPairedOrigin(url) } ?: return null
-        val kept = uri.rawQuery.orEmpty().split('&').filter { it.isNotEmpty() && !it.startsWith("token=") }
+        val kept = uri.rawQuery.orEmpty().split('&').filter { it.isNotEmpty() && !isSecretParam(it) }
         val query = if (kept.isEmpty()) "" else "?" + kept.joinToString("&")
         val fragment = uri.rawFragment?.let { "#$it" }.orEmpty()
         return "${origin()}${uri.rawPath.ifEmpty { "/" }}$query$fragment"
     }
+
+    // `token` is a credential and `ask` is the user's shared text: neither may be remembered in lastUrl.
+    private fun isSecretParam(pair: String) = pair.startsWith("token=") || pair.startsWith("ask=")
 
     private fun hostForUrl() = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
 
