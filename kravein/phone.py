@@ -387,11 +387,20 @@ _offer: _Offer | None = None
 _offer_lock = threading.Lock()
 
 
-def create_offer(host: str, port: int, *, ttl: float | None = None) -> dict[str, Any]:
+def create_offer(
+    host: str,
+    port: int,
+    *,
+    ttl: float | None = None,
+    scheme: str = "http",
+    cert_sha256: str | None = None,
+) -> dict[str, Any]:
     """Make a fresh pairing offer, replacing any outstanding one.
 
     The returned dict is the QR payload. The code is in it and nowhere else.
-    It is not stored and not logged.
+    It is not stored and not logged. Under TLS it also carries the scheme and
+    the certificate fingerprint the app must pin; plain http carries neither
+    fingerprint, and `v` is unchanged (the app accepts offers with or without).
     """
     global _offer
     ttl = float(ttl if ttl is not None else config.get("phone.offer_ttl_seconds", DEFAULT_OFFER_TTL))
@@ -401,14 +410,20 @@ def create_offer(host: str, port: int, *, ttl: float | None = None) -> dict[str,
     # `offer_host`, not `host`: the audit record already has a `host` field
     # (this machine's name) and a plain `host=` would overwrite it.
     audit.record("phone.offer_created", offer_host=host, port=port, ttl=ttl)
-    return {
+    offer = {
         "v": protocol_version(),
         "service": "kravein",
         "host": host,
         "port": int(port),
         "code": code,
         "expires_at": int(time.time() + ttl),
+        "scheme": "https" if scheme == "https" else "http",
     }
+    if offer["scheme"] == "https":
+        if not cert_sha256:
+            raise ValueError("an https offer needs the certificate fingerprint")
+        offer["cert_sha256"] = cert_sha256.lower()
+    return offer
 
 
 def redeem_offer(code: Any, device_name: Any) -> dict[str, str]:

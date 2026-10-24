@@ -97,6 +97,8 @@ def create_app(token: str | None = None) -> Any:
     # behind the dev server, where the request's own Host is used instead.
     app.state.public_host = None
     app.state.public_port = None
+    # SHA-256 of the served certificate; set by `serve()` under TLS only.
+    app.state.cert_sha256 = None
 
     # -- guards ----------------------------------------------------------
 
@@ -300,7 +302,12 @@ def create_app(token: str | None = None) -> Any:
     def api_phone_offer(request: Request) -> dict[str, Any]:
         host = app.state.public_host or (request.url.hostname or "127.0.0.1")
         port = app.state.public_port or (request.url.port or DEFAULT_PORT)
-        offer = phone.create_offer(host, port)
+        fingerprint = app.state.cert_sha256
+        offer = phone.create_offer(
+            host, port,
+            scheme="https" if fingerprint else "http",
+            cert_sha256=fingerprint,
+        )
         # A phone cannot reach a loopback address. Say so instead of handing
         # out a QR that can never work.
         return {"offer": offer, "reachable_from_lan": not _is_loopback(host)}
@@ -1214,6 +1221,7 @@ def serve(
     port: int = DEFAULT_PORT,
     *,
     open_browser: bool = True,
+    tls: bool = True,
 ) -> int:
     """Run the web server until interrupted."""
     try:
@@ -1254,8 +1262,20 @@ def serve(
         # hostname, not a wildcard — is what preserves the rebinding defence.
         webauth.allow_lan_host(host)
 
+    # TLS only when exposed on the LAN: loopback never leaves the machine, and
+    # a browser warning on a self-signed cert there would buy nothing.
+    use_tls = tls and not loopback
+    ssl_args: dict[str, Any] = {}
+    fingerprint = None
+    if use_tls:
+        cert_path, key_path, fingerprint, regenerated = webauth.ensure_tls_cert(host)
+        ssl_args = {"ssl_certfile": str(cert_path), "ssl_keyfile": str(key_path)}
+        if regenerated:
+            print(f"Generated a new certificate for {host}.")
+            print("  Its fingerprint changed: phones paired before must pair again.")
+
     token = webauth.issue_token()
-    url = f"http://{reachable}:{port}/?token={token}"
+    url = f"{'https' if use_tls else 'http'}://{reachable}:{port}/?token={token}"
 
     registry.load_skills()
     # Take the throwaway first CPU sample now rather than serving zeros to the
@@ -1264,8 +1284,11 @@ def serve(
     app = create_app(token)
     app.state.public_host = reachable
     app.state.public_port = port
+    app.state.cert_sha256 = fingerprint
 
     print(f"Kravein web UI on {url}")
+    if fingerprint:
+        print(f"Certificate SHA-256: {fingerprint}")
     print(f"Token stored at {webauth.token_path()}")
     if not WEB_DIST.is_dir():
         print("(frontend not built yet — API only)")
@@ -1278,7 +1301,11 @@ def serve(
         print()
         print("  LAN mode — reachable from other devices on this network.")
         print("  Anyone who has the URL above has full control of this machine.")
-        print("  Traffic is plain HTTP: do not use this on open or shared wifi.")
+        if use_tls:
+            print("  Traffic is encrypted with a self-signed certificate; paired phones")
+            print("  pin its fingerprint. A browser will warn about it once.")
+        else:
+            print("  Traffic is plain HTTP: do not use this on open or shared wifi.")
         print(f"  Revoke by restarting without --lan, or delete {webauth.token_path()}")
         print()
 
@@ -1287,6 +1314,6 @@ def serve(
 
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
 
-    audit.record("web.server_started", host=host, port=port)
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    audit.record("web.server_started", host=host, port=port, tls=use_tls)
+    uvicorn.run(app, host=host, port=port, log_level="warning", **ssl_args)
     return 0

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatCountdown, offerPayload, offerState, secondsLeft, type PhoneOffer } from "./phones.ts";
+import { formatCountdown, offerPayload, offerState, secondsLeft, shortFingerprint, type PhoneOffer } from "./phones.ts";
 import { qrMatrix } from "./qr.ts";
 
 const offer: PhoneOffer = {
@@ -13,6 +13,12 @@ test("QR payload is exactly the offer JSON", () => {
   assert.deepEqual(JSON.parse(offerPayload(offer)), offer);
   assert.deepEqual(Object.keys(JSON.parse(offerPayload(offer))).sort(),
     ["code", "expires_at", "host", "port", "service", "v"]);
+});
+
+test("a TLS offer's QR payload still equals the offer, fingerprint included", () => {
+  const tls: PhoneOffer = { ...offer, scheme: "https", cert_sha256: "ab".repeat(32) };
+  assert.deepEqual(JSON.parse(offerPayload(tls)), tls);
+  assert.equal(shortFingerprint(tls.cert_sha256!), "abab abab … abab");
 });
 
 test("countdown and expiry", () => {
