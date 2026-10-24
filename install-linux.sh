@@ -208,7 +208,7 @@ bold "6c. WhatsApp reminder channel (optional)"
 # Never `sudo systemctl --user`: that runs against root's (absent) session bus
 # rather than this user's, so it either fails outright or manages the wrong
 # manager. Every command here is deliberately unprivileged.
-if "$VENV_DIR/bin/python" -c "import neonize" >/dev/null 2>&1; then
+if "$VENV/bin/python" -c "import neonize" >/dev/null 2>&1; then
   mkdir -p "$JOBS_UNITS"
   # Copied, not symlinked: the unit is a template carrying %h/code/Kravein,
   # and the real path is substituted on the way in. A symlink would install the
@@ -219,7 +219,7 @@ if "$VENV_DIR/bin/python" -c "import neonize" >/dev/null 2>&1; then
 
   if systemctl --user enable --now kravein-whatsapp.service >/dev/null 2>&1; then
     ok "WhatsApp service installed and running"
-    echo "    Pair:    $VENV_DIR/bin/python -m kravein whatsapp link"
+    echo "    Pair:    $VENV/bin/python -m kravein whatsapp link"
     echo "    Status:  systemctl --user status kravein-whatsapp.service"
   else
     echo "    Installed the unit but could not start it. Check:"
@@ -228,8 +228,61 @@ if "$VENV_DIR/bin/python" -c "import neonize" >/dev/null 2>&1; then
   fi
 else
   echo "    neonize is not installed — the WhatsApp channel is unavailable."
-  echo "    Install it with: $VENV_DIR/bin/pip install neonize"
+  echo "    Install it with: $VENV/bin/pip install neonize"
   echo "    The routine engine works without it; notifications always fire first."
+fi
+
+# ---------------------------------------------------------------------------
+bold "6d. web UI on the LAN at login (optional, off by default)"
+
+# Opt-in and never silent: this exposes the assistant to every device on the
+# network, so it is only enabled after an explicit "y". The address comes from
+# the app's own detection (webauth.local_addresses) so the installer and
+# `serve --lan` cannot disagree about what counts as a private LAN address, and
+# docker/bridge interfaces are not offered. Several candidates are never
+# resolved by taking the first: the owner picks.
+WEB_ENV="$CONFIG_DIR/web.env"
+read -r -p "  Run the web UI on your LAN at login (phone access)? [y/N] " reply
+if [[ "${reply,,}" == "y" ]]; then
+  mapfile -t LAN_ADDRS < <("$VENV/bin/python" -c \
+    "from kravein import webauth; print(*webauth.local_addresses(), sep='\n')" 2>/dev/null || true)
+  LAN_HOST=""
+  if [[ ${#LAN_ADDRS[@]} -eq 0 || -z "${LAN_ADDRS[0]:-}" ]]; then
+    warn "no private LAN address found — connect to a network and re-run."
+  elif [[ ${#LAN_ADDRS[@]} -eq 1 ]]; then
+    LAN_HOST="${LAN_ADDRS[0]}"
+  else
+    echo "    More than one private address:"
+    for i in "${!LAN_ADDRS[@]}"; do echo "      $((i + 1))) ${LAN_ADDRS[$i]}"; done
+    read -r -p "  Which one? [number] " pick
+    if [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#LAN_ADDRS[@]} )); then
+      LAN_HOST="${LAN_ADDRS[$((pick - 1))]}"
+    else
+      warn "no valid choice — not enabling."
+    fi
+  fi
+
+  if [[ -n "$LAN_HOST" ]]; then
+    mkdir -p "$CONFIG_DIR" "$JOBS_UNITS"
+    # Owner-only before the content lands, so the file is never world-readable.
+    ( umask 077; printf 'KRAVEIN_LAN_HOST=%s\n' "$LAN_HOST" > "$WEB_ENV" )
+    chmod 600 "$WEB_ENV"
+    # Copied with the real repo path substituted, as the other units are.
+    sed "s|%h/code/Kravein|$REPO_DIR|g" \
+      "$REPO_DIR/systemd/kravein-web.service" > "$JOBS_UNITS/kravein-web.service"
+    systemctl --user daemon-reload
+    if systemctl --user enable --now kravein-web.service >/dev/null 2>&1; then
+      ok "web UI service enabled on $LAN_HOST:8787"
+      echo "    Status:   systemctl --user status kravein-web.service"
+      echo "    Disable:  systemctl --user disable --now kravein-web.service"
+      echo "    If the address changes (new network), edit $WEB_ENV and restart it."
+    else
+      echo "    Installed the unit but could not start it. Check:"
+      echo "      journalctl --user -u kravein-web.service -n 30"
+    fi
+  fi
+else
+  ok "skipped (run it by hand: $VENV/bin/python -m kravein serve --lan)"
 fi
 
 # ---------------------------------------------------------------------------

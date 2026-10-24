@@ -1,0 +1,33 @@
+[Unit]
+Description=Kravein web UI (LAN)
+Documentation=file:%h/code/Kravein/README-LINUX.md
+# The bind address is a LAN IP, which only exists once the network is up;
+# starting earlier fails with "cannot assign requested address".
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h/code/Kravein is a template path: install-linux.sh substitutes the real
+# checkout, so the unit works from wherever the repo was cloned.
+WorkingDirectory=%h/code/Kravein
+
+# KRAVEIN_LAN_HOST comes from web.env, written by the installer. The file is
+# required (no leading "-"): without it the host expands to nothing and
+# `--host` would swallow the next argument, so fail at start instead.
+# --host is explicit because with several private addresses `--lan` alone
+# refuses to guess which network to expose.
+EnvironmentFile=%h/.config/kravein/web.env
+ExecStart=%h/code/Kravein/.venv/bin/python -m kravein serve --lan --host ${KRAVEIN_LAN_HOST} --no-open
+
+# On-failure, not always: `systemctl --user stop` must stay stopped.
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kravein-web
+
+[Install]
+WantedBy=default.target
