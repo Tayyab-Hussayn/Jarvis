@@ -113,7 +113,7 @@ export function ModeToggle({
       <div
         role="radiogroup"
         aria-label="Chat mode"
-        className="relative flex rounded-[var(--radius-xl)] border border-[var(--border-strong)] bg-[var(--surface)] p-1.5"
+        className="relative flex glass rounded-[var(--radius-xl)] p-1.5"
         style={{ boxShadow: "var(--shadow-card)" }}
       >
         {/* The sliding indicator. One element that moves, rather than two that

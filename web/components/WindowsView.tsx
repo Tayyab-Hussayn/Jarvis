@@ -86,9 +86,9 @@ export function WindowsView({ run }: { run: RunSkill }) {
               {visible.map((win) => (
                 <div
                   key={win.id}
-                  className="rounded-[var(--radius-lg)] border bg-[var(--surface)] p-3.5"
+                  className="glass rounded-[var(--radius-lg)] p-3.5"
                   style={{
-                    borderColor: win.focused ? "var(--accent)" : "var(--border)",
+                    borderColor: win.focused ? "var(--accent)" : "var(--glass-border)",
                   }}
                 >
                   <div className="flex items-start justify-between gap-2">

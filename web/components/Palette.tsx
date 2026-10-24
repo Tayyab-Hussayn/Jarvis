@@ -190,7 +190,7 @@ export function Palette({
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh]"
-      style={{ background: "rgba(0,0,0,0.55)" }}
+      style={{ background: "var(--scrim)" }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) close();
       }}
@@ -201,8 +201,8 @@ export function Palette({
         aria-modal="true"
         aria-label="Run a skill"
         onKeyDown={onKeyDown}
-        className="w-full max-w-xl overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-strong)] bg-[var(--surface)]"
-        style={{ boxShadow: "var(--shadow-panel)" }}
+        className="glass glass-strong w-full max-w-xl overflow-hidden rounded-[var(--radius-lg)]"
+        style={{ boxShadow: "var(--shadow-panel), var(--glow-soft)", animation: "node-in var(--motion-base) var(--ease-out)" }}
       >
         {!chosen ? (
           <>

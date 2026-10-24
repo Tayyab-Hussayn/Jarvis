@@ -11,47 +11,73 @@
  */
 
 :root {
-  /* -- surfaces, back to front ------------------------------------- */
-  --bg: #0a0b0d;
-  --surface: #131519;
-  --surface-raised: #1a1d23;
-  --surface-sunken: #0e1013;
-  --border: #23272e;
-  --border-strong: #333a45;
+  color-scheme: dark;
 
-  /* The light panel that floats over the dark ground — the reference's
-     most recognisable move. Its own text scale, because inverting inside a
-     dark app is where contrast bugs breed. */
-  --panel: #f6f7f4;
-  --panel-border: #e2e5dc;
-  --panel-text: #101317;
-  --panel-muted: #5b626c;
-  --panel-faint: #878e98;
+  /* -- surfaces, back to front ------------------------------------- */
+  --bg: #04060c;
+  --surface: #0b1019;
+  --surface-raised: #121a28;
+  --surface-sunken: #070b13;
+  --border: #1b2638;
+  --border-strong: #2b3a54;
+
+  /* Glass: translucent fill + hairline + blur, for the chrome and cards that
+     float over the aurora ground. Falls back to --surface where backdrop-filter
+     is missing (the fill is opaque enough to read on its own). */
+  --glass: rgba(14, 21, 34, 0.72);
+  --glass-strong: rgba(18, 27, 43, 0.88);
+  --glass-border: rgba(140, 180, 255, 0.14);
+  --glass-highlight: rgba(255, 255, 255, 0.05);
+  --blur: 18px;
+  --scrim: rgba(2, 5, 12, 0.62);
+
+  /* Ambient background light behind everything. */
+  --aurora-1: rgba(56, 224, 255, 0.10);
+  --aurora-2: rgba(139, 123, 255, 0.12);
+
+  /* The light panel that floats over the dark ground. Its own text scale,
+     because inverting inside a dark app is where contrast bugs breed. */
+  --panel: #eef3fb;
+  --panel-border: #d3deee;
+  --panel-text: #0b1220;
+  --panel-muted: #4a5870;
+  --panel-faint: #5d6b83;
 
   /* -- text --------------------------------------------------------- */
-  --text: #edeff2;
-  --text-muted: #9ba3af;
-  --text-faint: #6b7280;
+  --text: #eaf0fb;
+  --text-muted: #a6b3c8;
+  --text-faint: #8493ab;
 
-  /* -- accent ------------------------------------------------------- */
-  --accent: #c0f53f;
-  --accent-hover: #cdff5c;
-  --accent-contrast: #0a0b0d;
-  --accent-dim: rgba(192, 245, 63, 0.12);
-  --accent-line: rgba(192, 245, 63, 0.35);
+  /* -- accent: electric cyan, with violet as the second light ------- */
+  --accent: #3de3ff;
+  --accent-hover: #7aeeff;
+  --accent-contrast: #031016;
+  --accent-dim: rgba(61, 227, 255, 0.12);
+  --accent-line: rgba(61, 227, 255, 0.38);
+  --accent-2: #9d8cff;
+  --accent-2-dim: rgba(157, 140, 255, 0.14);
+  --gradient-accent: linear-gradient(135deg, #3de3ff 0%, #7b8cff 100%);
+  --gradient-accent-contrast: #031016;
+
+  /* Soft glow: a coloured halo, never a hard shadow. */
+  --glow: 0 0 0 1px var(--accent-line), 0 0 18px rgba(61, 227, 255, 0.28);
+  --glow-soft: 0 0 14px rgba(61, 227, 255, 0.18);
+  --glow-2: 0 0 18px rgba(157, 140, 255, 0.28);
 
   /* -- danger, mapped to safety.Danger ------------------------------ *
-   * Deliberately no green. Lime already means "interactive"; a green
-   * SAFE would read as the same thing. SAFE is the default state and
-   * carries no colour, so the warm ramp reads purely as rising risk. */
+   * Deliberately no green. Cyan already means "interactive"; SAFE is the
+   * default state and carries no colour, so the warm ramp reads purely as
+   * rising risk. */
   --safe: var(--text-muted);
-  --moderate: #f5c242;
-  --destructive: #ff8a3d;
-  --critical: #ff5a5a;
-  --safe-dim: rgba(155, 163, 175, 0.1);
-  --moderate-dim: rgba(245, 194, 66, 0.13);
-  --destructive-dim: rgba(255, 138, 61, 0.13);
-  --critical-dim: rgba(255, 90, 90, 0.13);
+  --moderate: #ffc94d;
+  --destructive: #ff8f4a;
+  --critical: #ff6b7a;
+  --safe-dim: rgba(166, 179, 200, 0.1);
+  --moderate-dim: rgba(255, 201, 77, 0.13);
+  --destructive-dim: rgba(255, 143, 74, 0.14);
+  --critical-dim: rgba(255, 107, 122, 0.14);
+  /* Text on a solid --critical fill (the auto-approve banner). */
+  --critical-contrast: #1a0206;
 
   /* -- status ------------------------------------------------------- */
   --ok: var(--accent);
@@ -76,9 +102,10 @@
   --text-lg: 1.125rem;
   --text-xl: 1.5rem;
   --text-2xl: 2rem;
-  /* Hero numerals: the reference's "$31,211.00" treatment. */
+  /* Hero numerals. */
   --text-stat: 2.125rem;
   --tracking-stat: -0.03em;
+  --tracking-label: 0.1em;
 
   /* -- space -------------------------------------------------------- */
   --space-1: 0.25rem;
@@ -92,28 +119,29 @@
   /* -- shape -------------------------------------------------------- */
   --radius-sm: 8px;
   --radius: 12px;
+  --radius-md: 14px;
   --radius-lg: 18px;
   --radius-xl: 24px;
   --radius-full: 999px;
 
   /* -- elevation ---------------------------------------------------- */
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.55);
+  --shadow-card: 0 1px 0 var(--glass-highlight) inset, 0 6px 20px rgba(0, 0, 0, 0.35);
+  --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.6);
   --shadow-dock: 0 12px 32px rgba(0, 0, 0, 0.6);
 
   /* -- motion ------------------------------------------------------- */
   /* Semantics, not decoration: `fast` is feedback on a click, `base` is a
      panel changing, `slow` is something arriving on its own. */
-  --motion-fast: 90ms;
-  --motion-base: 180ms;
-  --motion-slow: 320ms;
+  --motion-fast: 110ms;
+  --motion-base: 200ms;
+  --motion-slow: 360ms;
   --ease: cubic-bezier(0.2, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* -- layout ------------------------------------------------------- */
   --rail-width: 60px;
   --rail-width-open: 208px;
   --content-max: 84rem;
-
 }
 
 /* Tailwind v4 reads its palette from these, so `bg-surface`, `text-muted`,
@@ -139,6 +167,8 @@
   --color-accent-hover: var(--accent-hover);
   --color-accent-contrast: var(--accent-contrast);
   --color-accent-dim: var(--accent-dim);
+  --color-accent-2: var(--accent-2);
+  --color-glass: var(--glass);
 
   --color-safe: var(--safe);
   --color-moderate: var(--moderate);
@@ -159,44 +189,68 @@
 }
 
 /*
- * Light theme, after the Cardiology reference's warm off-white canvas.
+ * Light theme: cool paper ground, deep teal accent.
  *
- * Bright lime fails contrast as text on a light ground, so it stays a *fill*
- * colour here and a darker olive carries any accent text. Getting this wrong
- * is the usual way a one-accent dark design breaks in light mode.
+ * Bright cyan fails contrast as text on a light ground, so the accent flips to
+ * a deep teal that carries both fills and text (>= 4.5:1 on every surface).
+ * Glass becomes frosted white; glows are dropped to hairlines because a halo on
+ * a light ground reads as a smudge.
  */
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #edebe4;
-    --surface: #f7f6f2;
+    color-scheme: light;
+
+    --bg: #eef2f9;
+    --surface: #f8faff;
     --surface-raised: #ffffff;
-    --surface-sunken: #e4e2da;
-    --border: #d9d6cc;
-    --border-strong: #bcb8ab;
+    --surface-sunken: #e4eaf4;
+    --border: #d5deec;
+    --border-strong: #b3c0d6;
 
-    --panel: #1a1d23;
-    --panel-border: #2b2f37;
-    --panel-text: #edeff2;
-    --panel-muted: #9ba3af;
-    --panel-faint: #6b7280;
+    --glass: rgba(255, 255, 255, 0.72);
+    --glass-strong: rgba(255, 255, 255, 0.92);
+    --glass-border: rgba(40, 70, 120, 0.14);
+    --glass-highlight: rgba(255, 255, 255, 0.9);
+    --scrim: rgba(16, 28, 52, 0.4);
+    --aurora-1: rgba(0, 150, 190, 0.10);
+    --aurora-2: rgba(110, 90, 230, 0.10);
 
-    --text: #14171c;
-    --text-muted: #565d68;
-    --text-faint: #838a95;
+    --panel: #101828;
+    --panel-border: #26334a;
+    --panel-text: #eaf0fb;
+    --panel-muted: #a6b3c8;
+    --panel-faint: #8493ab;
 
-    --accent: #4f6b00;
-    --accent-hover: #3e5400;
+    --text: #0c1424;
+    --text-muted: #44536b;
+    --text-faint: #566580;
+
+    --accent: #006b82;
+    --accent-hover: #00566a;
     --accent-contrast: #ffffff;
-    --accent-dim: rgba(79, 107, 0, 0.1);
-    --accent-line: rgba(79, 107, 0, 0.3);
+    --accent-dim: rgba(0, 107, 130, 0.1);
+    --accent-line: rgba(0, 107, 130, 0.34);
+    --accent-2: #5a45d6;
+    --accent-2-dim: rgba(90, 69, 214, 0.1);
+    --gradient-accent: linear-gradient(135deg, #006b82 0%, #4a47d0 100%);
+    --gradient-accent-contrast: #ffffff;
+
+    --glow: 0 0 0 1px var(--accent-line);
+    --glow-soft: none;
+    --glow-2: 0 0 0 1px rgba(90, 69, 214, 0.3);
 
     --safe: var(--text-muted);
-    --moderate: #9a6600;
-    --destructive: #b4460b;
-    --critical: #b3201f;
+    --moderate: #8a5a00;
+    --destructive: #a63f06;
+    --critical: #b3182f;
+    --safe-dim: rgba(68, 83, 107, 0.1);
+    --moderate-dim: rgba(138, 90, 0, 0.1);
+    --destructive-dim: rgba(166, 63, 6, 0.1);
+    --critical-dim: rgba(179, 24, 47, 0.1);
+    --critical-contrast: #ffffff;
 
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06);
-    --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.14);
-    --shadow-dock: 0 12px 32px rgba(0, 0, 0, 0.16);
+    --shadow-card: 0 1px 0 var(--glass-highlight) inset, 0 4px 16px rgba(20, 40, 80, 0.08);
+    --shadow-panel: 0 18px 48px rgba(20, 40, 80, 0.18);
+    --shadow-dock: 0 12px 32px rgba(20, 40, 80, 0.2);
   }
 }

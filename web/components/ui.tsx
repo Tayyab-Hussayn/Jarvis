@@ -31,14 +31,13 @@ export function Panel({
   return (
     <section
       className={classNames(
-        "rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)]",
+        "glass rounded-[var(--radius-lg)]",
         className,
       )}
-      style={{ boxShadow: "var(--shadow-card)" }}
     >
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
-          <h2 className="text-[length:var(--text-sm)] font-medium">{title}</h2>
+        <header className="flex items-center justify-between gap-3 border-b border-[var(--glass-border)] px-4 py-3">
+          <h2 className="text-[length:var(--text-sm)] font-semibold tracking-[-0.005em]">{title}</h2>
           {actions}
         </header>
       )}
@@ -110,8 +109,8 @@ export function Stat({
 }) {
   const colour = tone === "accent" ? "var(--accent)" : `var(--${tone})`;
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-4">
-      <div className="text-[length:var(--text-xs)] uppercase tracking-[0.08em] text-[var(--text-faint)]">
+    <div className="glass rounded-[var(--radius-lg)] p-4">
+      <div className="text-[length:var(--text-xs)] font-medium uppercase tracking-[var(--tracking-label)] text-[var(--text-faint)]">
         {label}
       </div>
       <div className="mt-1.5 flex items-baseline gap-1">
@@ -157,7 +156,8 @@ export function Stat({
                 style={{
                   width: `${Math.min(100, Math.max(0, percent))}%`,
                   background: colour,
-                  transition: `width var(--motion-base) var(--ease)`,
+                  boxShadow: `0 0 10px color-mix(in srgb, ${colour} 55%, transparent)`,
+                  transition: `width var(--motion-slow) var(--ease-out)`,
                 }}
               />
             </div>
@@ -236,7 +236,8 @@ export function Chip({
           ? tone
             ? "transparent"
             : colour
-          : "transparent",
+          : "var(--glass)",
+        boxShadow: active && !tone ? "var(--glow-soft)" : undefined,
       }}
     >
       {children}
@@ -288,11 +289,11 @@ export function Button({
 }) {
   const styles: Record<string, string> = {
     default:
-      "border-[var(--border-strong)] bg-[var(--surface-raised)] text-[var(--text)] hover:border-[var(--text-faint)]",
+      "glass border-[var(--glass-border)] text-[var(--text)] hover:border-[var(--accent-line)] hover:text-[var(--accent)]",
     primary:
-      "border-transparent bg-[var(--accent)] text-[var(--accent-contrast)] hover:bg-[var(--accent-hover)]",
+      "btn-primary",
     danger:
-      "border-[var(--critical)] bg-transparent text-[var(--critical)] hover:bg-[var(--critical-dim)]",
+      "border-[var(--critical)] bg-[var(--critical-dim)] text-[var(--critical)] hover:brightness-125",
     ghost:
       "border-transparent bg-transparent text-[var(--text-muted)] hover:bg-[var(--surface-raised)] hover:text-[var(--text)]",
   };
@@ -365,11 +366,11 @@ export function Input({
         if (event.key === "Enter" && onEnter) onEnter();
       }}
       className={classNames(
-        "rounded-[var(--radius-full)] border border-[var(--border-strong)] bg-[var(--surface-sunken)] px-3.5 py-1.5 text-[length:var(--text-sm)] outline-none placeholder:text-[var(--text-faint)] focus:border-[var(--accent)]",
+        "field-glow rounded-[var(--radius-full)] border border-[var(--border-strong)] bg-[var(--surface-sunken)] px-3.5 py-1.5 text-[length:var(--text-sm)] outline-none placeholder:text-[var(--text-faint)]",
         mono && "font-[family-name:var(--font-mono)]",
         className,
       )}
-      style={{ transition: `border-color var(--motion-fast) var(--ease)` }}
+      style={{ transition: `border-color var(--motion-fast) var(--ease), box-shadow var(--motion-base) var(--ease)` }}
     />
   );
 }
@@ -378,9 +379,14 @@ export function Input({
 
 export function Empty({ children }: { children: ReactNode }) {
   return (
-    <p className="py-10 text-center text-[length:var(--text-sm)] text-[var(--text-faint)]">
-      {children}
-    </p>
+    <div className="flex flex-col items-center gap-3 py-12 text-center">
+      <span
+        aria-hidden
+        className="h-8 w-8 rounded-full border border-dashed border-[var(--border-strong)]"
+        style={{ background: "radial-gradient(circle, var(--accent-dim), transparent 70%)" }}
+      />
+      <p className="text-[length:var(--text-sm)] text-[var(--text-faint)]">{children}</p>
+    </div>
   );
 }
 
@@ -395,7 +401,7 @@ export function SectionTitle({
 }) {
   return (
     <div className="mb-3 flex items-center gap-3">
-      <h2 className="text-[length:var(--text-lg)] font-semibold tracking-[-0.01em]">{children}</h2>
+      <h2 className="text-[length:var(--text-lg)] font-semibold tracking-[-0.015em]">{children}</h2>
       {count !== undefined && (
         <span
           className="rounded-[var(--radius-full)] px-2 py-0.5 text-[length:var(--text-xs)] font-semibold"

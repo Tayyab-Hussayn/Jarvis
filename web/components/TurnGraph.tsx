@@ -60,6 +60,31 @@ function buildNodes(message: Message, request: string): GraphNode[] {
   return nodes;
 }
 
+/** The agent has been asked and has produced nothing yet. */
+export function Thinking({ label = "Thinking" }: { label?: string }) {
+  return (
+    <span
+      role="status"
+      className="inline-flex items-center gap-2 text-[length:var(--text-sm)] text-[var(--text-muted)]"
+    >
+      <span aria-hidden className="inline-flex gap-1">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="h-1.5 w-1.5 rounded-full"
+            style={{
+              background: "var(--accent)",
+              boxShadow: "var(--glow-soft)",
+              animation: `think 1.1s ease-in-out ${i * 150}ms infinite`,
+            }}
+          />
+        ))}
+      </span>
+      {label}
+    </span>
+  );
+}
+
 /* -- nodes ------------------------------------------------------------ */
 
 function ToolNode({ tool }: { tool: ToolCallView }) {
@@ -71,8 +96,8 @@ function ToolNode({ tool }: { tool: ToolCallView }) {
 
   return (
     <div
-      className="w-[min(24rem,100%)] overflow-hidden rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-raised)]"
-      style={{ animation: "node-in var(--motion-base) var(--ease)" }}
+      className="glass w-[min(24rem,100%)] overflow-hidden rounded-[var(--radius)]"
+      style={{ animation: "node-in var(--motion-base) var(--ease-out)" }}
     >
       <button
         type="button"
@@ -85,6 +110,7 @@ function ToolNode({ tool }: { tool: ToolCallView }) {
           className="h-1.5 w-1.5 shrink-0 rounded-full"
           style={{
             background: tool.done ? "var(--accent)" : "var(--moderate)",
+            boxShadow: `0 0 8px ${tool.done ? "var(--accent)" : "var(--moderate)"}`,
             animation: tool.done ? undefined : "pulse 1.2s ease-in-out infinite",
           }}
         />
@@ -151,8 +177,13 @@ function Node({
     case "request":
       return (
         <div
-          className="w-[min(30rem,100%)] rounded-[var(--radius-lg)] px-4 py-2.5 text-[length:var(--text-sm)] whitespace-pre-wrap"
-          style={{ background: "var(--accent-dim)", color: "var(--text)" }}
+          className="w-[min(30rem,100%)] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-sm)] border px-4 py-2.5 text-[length:var(--text-sm)] whitespace-pre-wrap"
+          style={{
+            background: "var(--accent-dim)",
+            borderColor: "var(--accent-line)",
+            color: "var(--text)",
+            animation: "node-in var(--motion-base) var(--ease-out)",
+          }}
         >
           {node.text}
         </div>
@@ -171,8 +202,8 @@ function Node({
     case "answer":
       return (
         <div
-          className="w-[min(38rem,100%)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-[length:var(--text-base)]"
-          style={{ animation: "node-in var(--motion-base) var(--ease)" }}
+          className="glass w-[min(38rem,100%)] rounded-[var(--radius-lg)] px-4 py-3 text-[length:var(--text-base)]"
+          style={{ animation: "node-in var(--motion-slow) var(--ease-out)" }}
         >
           <Markdown>{node.text ?? ""}</Markdown>
         </div>
@@ -295,7 +326,7 @@ export function TurnGraph({
 
   if (nodes.length === 0) {
     return (
-      <p className="text-[length:var(--text-sm)] text-[var(--text-faint)]">Thinking…</p>
+      <Thinking />
     );
   }
 
@@ -323,6 +354,7 @@ export function TurnGraph({
                 stroke="var(--accent-line)"
                 strokeWidth="1.5"
                 strokeLinecap="round"
+                style={{ filter: "drop-shadow(0 0 3px var(--accent-line))" }}
               />
             );
           })}
@@ -344,6 +376,13 @@ export function TurnGraph({
           </div>
         ))}
       </div>
+
+      {message.pending && !message.text && !message.error && !message.cancelled &&
+        !(message.confirms ?? []).some((c) => c.status === "pending") && (
+          <div className={asGraph ? "ml-9 mt-4" : "mt-3"}>
+            <Thinking />
+          </div>
+        )}
 
       {!asGraph && nodes.length > COLLAPSE_AFTER && (
         <p className="mt-2 text-[length:var(--text-xs)] text-[var(--text-faint)]">

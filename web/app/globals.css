@@ -7,7 +7,13 @@ body {
 }
 
 body {
-  background: var(--bg);
+  background-color: var(--bg);
+  /* Ambient aurora: two soft lights pinned to the viewport, so the glass
+     surfaces have something to blur. Fixed, so it never scrolls or repaints. */
+  background-image:
+    radial-gradient(60rem 38rem at 12% -8%, var(--aurora-1), transparent 70%),
+    radial-gradient(52rem 36rem at 105% 8%, var(--aurora-2), transparent 70%);
+  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-base);
@@ -58,6 +64,62 @@ body {
   display: none;
 }
 
+/* -- surfaces ---------------------------------------------------------- */
+/* In @layer components so Tailwind utilities (border-x-0, hover:bg-*, rounded-*)
+   still override them; unlayered, `.glass { border }` silently beat every
+   utility on the same element. */
+@layer components {
+
+/* Frosted surface for chrome and cards floating over the aurora. The solid
+   `background` is the no-backdrop-filter fallback: --glass is translucent but
+   dark/light enough that text stays readable without the blur. */
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-card);
+}
+@supports (backdrop-filter: blur(1px)) {
+  .glass {
+    backdrop-filter: blur(var(--blur)) saturate(140%);
+    -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
+  }
+}
+.glass-strong {
+  background: var(--glass-strong);
+}
+
+.glow {
+  box-shadow: var(--glow);
+}
+
+/* Gradient text for the one hero headline; solid colour fallback first. */
+.text-gradient {
+  color: var(--accent);
+  background: var(--gradient-accent);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Solid-accent controls: the gradient fill with its contrast text. */
+.btn-primary {
+  background: var(--gradient-accent);
+  color: var(--gradient-accent-contrast);
+  border-color: transparent;
+}
+.btn-primary:not(:disabled):hover {
+  box-shadow: var(--glow);
+  filter: brightness(1.08);
+}
+
+/* Focus on inputs lights the field instead of just recolouring the border. */
+.field-glow:focus,
+.field-glow:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim), var(--glow-soft);
+}
+}
+
 /* -- animation ------------------------------------------------------- */
 
 @keyframes pulse {
@@ -101,6 +163,31 @@ body {
   }
   50% {
     height: 26px;
+  }
+}
+
+/* The agent is working: three dots rising in sequence. */
+@keyframes think {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* Slow breathing halo on the live-voice and thinking orbs. */
+@keyframes halo {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--accent-dim), var(--glow-soft);
+  }
+  50% {
+    box-shadow: 0 0 0 7px transparent, var(--glow);
   }
 }
 

@@ -147,7 +147,7 @@ export function SystemView({
           <Panel padded={false}>
             <div className="max-h-[46vh] overflow-auto">
               <table className="w-full text-left text-[length:var(--text-xs)]">
-                <thead className="sticky top-0 bg-[var(--surface)]">
+                <thead className="sticky top-0 bg-[var(--surface)] backdrop-blur">
                   <tr className="text-[var(--text-faint)]">
                     <th className="px-4 py-2 font-medium">Process</th>
                     <th className="px-3 py-2 font-medium">PID</th>

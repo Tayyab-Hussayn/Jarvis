@@ -41,11 +41,11 @@ export function AutoBanner({ policy }: { policy: PolicyState }) {
     <div
       role="alert"
       className="flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1 px-3 py-1.5 text-[length:var(--text-sm)] font-medium sm:px-4"
-      style={{ background: "var(--critical)", color: "#fff" }}
+      style={{ background: "var(--critical)", color: "var(--critical-contrast)" }}
     >
       <span>Auto-approve is ON — {formatClock(left)} left</span>
       <Button variant="ghost" disabled={busy} onClick={() => void turnOff()}>
-        <span style={{ color: "#fff" }}>{busy ? "Turning off…" : "Turn off"}</span>
+        <span style={{ color: "var(--critical-contrast)" }}>{busy ? "Turning off…" : "Turn off"}</span>
       </Button>
       {error && <span className="text-[length:var(--text-xs)]">Failed: {error}</span>}
     </div>
