@@ -13,7 +13,7 @@ updated: 2026-10-23
 - 2026-10-22: Android app #17 — moved to `android/` (`com.kravein.connect`), Gradle 9.8.1/AGP 9.4.1/Kotlin 2.4.21 on the shared platform, debug APK builds offline, 10 JVM tests.
 
 ## In flight
-- Owner reports 2026-10-24 fixed: stale confirm card + 14-day pairing #75; `kravein-web.service` user unit #74. Owner 2026-10-24: NO autostart, manual on/off via a `kravein` CLI → #76 engine (start/stop/status/pair/phones/open/logs), #77 qa (install wrapper + unit, never enable).
+- Owner reports 2026-10-24 fixed: stale confirm card + 14-day pairing #75; `kravein-web.service` user unit #74. Owner 2026-10-24: NO autostart, manual on/off via a `kravein` CLI → done: `kravein` CLI #79, installer wrapper + unit (never enabled) #78. Owner runs `./install-linux.sh` once. TODO lead/batch: add `kravein/service.py` to engine in roster.json.
 - Nothing assigned. Android full-client plan phases 1–6 done (#45 #47 #48 #52 #53 #55 #57 #60 #61 #64 #67 #68 #69; TLS #22 closed). Device test 2026-10-24 (adb, Vivo V2254): pairing over TLS + pinned phone channel OK; WebView fixed via loopback TLS pipe #71; full adb device pass 1–9 OK (chat, phone battery, confirm Approve/Decline, share, reminder). Open: Chromium renderer keeps ~130 MB after WebView destroy (PSS 210 MB open → 163 MB bg).
 - Remaining plan ideas (not started): home-screen widget, push-to-talk from the phone mic, offline message queue, notification mirroring, clipboard sync.
 - `kravein/web-dist/` is gitignored: run `cd web && npm run build` after a web merge.
