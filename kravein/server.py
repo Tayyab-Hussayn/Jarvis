@@ -79,7 +79,19 @@ def create_app(token: str | None = None) -> Any:
     from fastapi.staticfiles import StaticFiles
 
     expected = token or webauth.issue_token()
-    app = FastAPI(title="Kravein", docs_url=None, redoc_url=None)
+    @contextlib.asynccontextmanager
+    async def lifespan(_app):
+        # Reminders fire in the tick process; this thread hands them to phones.
+        stop = threading.Event()
+        threading.Thread(
+            target=phone.OutboxRelay().run, args=(stop,), name="phone-outbox", daemon=True
+        ).start()
+        try:
+            yield
+        finally:
+            stop.set()
+
+    app = FastAPI(title="Kravein", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.token = expected
     # The address a phone should dial, set by `serve()`. Unset under tests and
     # behind the dev server, where the request's own Host is used instead.

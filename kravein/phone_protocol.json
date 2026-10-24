@@ -81,6 +81,16 @@
         "outcome": {"type": "string", "required": true, "values": ["approved", "denied", "expired"]}
       }
     },
+    "notify": {
+      "direction": "server_to_phone",
+      "about": "A reminder or job fired on the server. request_id is unique per notification. No reply. Only sent to ready phones while phone.forward_notifications is on; entries older than 10 minutes are never delivered.",
+      "payload": {
+        "title": {"type": "string", "required": true, "max_length": 120},
+        "body": {"type": "string", "required": true, "max_length": 1000},
+        "kind": {"type": "string", "required": true, "values": ["reminder", "job"]},
+        "at": {"type": "integer", "required": true}
+      }
+    },
     "ping": {
       "direction": "both",
       "about": "Liveness. Always answered by pong with the same request_id.",
