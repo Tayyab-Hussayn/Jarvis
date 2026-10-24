@@ -29,7 +29,8 @@ def test_web_unit_runs_lan_serve_with_explicit_host():
     exec_start = _unit()["ExecStart"][0]
     assert exec_start.startswith("%h/code/Kravein/.venv/bin/python")
     assert exec_start.endswith(
-        "-m kravein serve --lan --host ${KRAVEIN_LAN_HOST} --port ${KRAVEIN_PORT} --no-open")
+        "-m kravein serve --lan --host ${KRAVEIN_LAN_HOST} --no-open")
+    assert "--port" not in exec_start and "KRAVEIN_PORT" not in INSTALLER.read_text()
 
 
 def test_web_unit_env_file_is_required_and_restart_on_failure():
@@ -140,23 +141,18 @@ def test_installer_filter_keeps_all_when_interface_unknown(tmp_path):
     assert _run_filter(tmp_path, "", ["10.0.0.5"]) == ["10.0.0.5"]
 
 
-def test_installer_writes_port_default_and_keeps_existing(tmp_path):
+def test_installer_writes_only_the_host_to_web_env(tmp_path):
     step = _web_step()
     block = step.split("mkdir -p \"$JOBS_UNITS\"")[1].split("# Copied with")[0]
     env = tmp_path / "web.env"
+    env.write_text("KRAVEIN_LAN_HOST=10.0.0.1\nKRAVEIN_PORT=8788\n")   # stale override
     script = tmp_path / "w.sh"
     script.write_text(
         'set -euo pipefail\nok(){ :; }\nLAN_HOST="192.168.1.20"\n'
         f'CONFIG_DIR="{tmp_path}"\nWEB_ENV="{env}"\n' + block)
-    run = lambda: subprocess.run(["bash", str(script)], check=True, capture_output=True)
-    run()
-    assert env.read_text() == "KRAVEIN_LAN_HOST=192.168.1.20\nKRAVEIN_PORT=8787\n"
-    env.write_text("KRAVEIN_LAN_HOST=10.0.0.1\nKRAVEIN_PORT=8788\n")
-    run()
-    assert env.read_text() == "KRAVEIN_LAN_HOST=192.168.1.20\nKRAVEIN_PORT=8788\n"
-    env.write_text("KRAVEIN_PORT=oops\n")          # junk falls back, never reaches --port
-    run()
-    assert env.read_text().endswith("KRAVEIN_PORT=8787\n")
+    subprocess.run(["bash", str(script)], check=True, capture_output=True)
+    # Port is fixed at 8787 by the owner: nothing but the host is written.
+    assert env.read_text() == "KRAVEIN_LAN_HOST=192.168.1.20\n"
     assert oct(env.stat().st_mode & 0o777) == "0o600"
 
 

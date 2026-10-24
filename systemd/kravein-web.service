@@ -12,13 +12,14 @@ Type=simple
 # checkout, so the unit works from wherever the repo was cloned.
 WorkingDirectory=%h/code/Kravein
 
-# KRAVEIN_LAN_HOST and KRAVEIN_PORT come from web.env, written by the installer.
-# The file is required (no leading "-"): without it the host expands to nothing
-# and `--host` would swallow the next argument, so fail at start instead.
+# KRAVEIN_LAN_HOST comes from web.env, written by the installer. The file is
+# required (no leading "-"): without it the host expands to nothing and
+# `--host` would swallow the next argument, so fail at start instead.
+# The port is always 8787 (owner rule: one server, one port).
 # --host is explicit because with several private addresses `--lan` alone
 # refuses to guess which network to expose.
 EnvironmentFile=%h/.config/kravein/web.env
-ExecStart=%h/code/Kravein/.venv/bin/python -m kravein serve --lan --host ${KRAVEIN_LAN_HOST} --port ${KRAVEIN_PORT} --no-open
+ExecStart=%h/code/Kravein/.venv/bin/python -m kravein serve --lan --host ${KRAVEIN_LAN_HOST} --no-open
 
 # On-failure, not always: `systemctl --user stop` must stay stopped.
 Restart=on-failure

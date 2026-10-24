@@ -14,6 +14,7 @@ complete.
 from __future__ import annotations
 
 import json
+import socket
 import ssl
 import time
 import urllib.error
@@ -24,7 +25,7 @@ from . import config, webauth
 from .platform import shell
 
 UNIT = "kravein-web.service"
-DEFAULT_PORT = 8787               # when web.env has no KRAVEIN_PORT
+PORT = 8787                       # fixed by the owner: one server, one port
 START_WAIT_SECONDS = 20.0
 
 
@@ -61,10 +62,28 @@ def lan_host() -> str:
     return _env_value("KRAVEIN_LAN_HOST")
 
 
-def port() -> int:
-    """The port the unit serves on; a missing or junk value means the default."""
-    value = _env_value("KRAVEIN_PORT")
-    return int(value) if value.isdigit() and 0 < int(value) < 65536 else DEFAULT_PORT
+def port_busy(port: int = PORT) -> bool:
+    """True when anything is listening on `port` on any local address.
+
+    Asked before binding rather than by catching the crash: a server bound to
+    the LAN address is invisible to a connect on 127.0.0.1, and the unit would
+    only report "failed" a few seconds later. Binding the wildcard address
+    conflicts with a listener on any specific address; SO_REUSEADDR keeps a
+    connection in TIME_WAIT from counting as a second server.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    with probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError:
+            return True
+    return False
+
+
+def already_running_message(port: int = PORT) -> str:
+    return (f"Kravein server is already running on port {port}. Close it first "
+            "(kravein stop, or stop that process) to start a new one.")
 
 
 def _installer_hint() -> str:
@@ -109,7 +128,7 @@ def _scheme() -> str:
 
 
 def base_url(host: str) -> str:
-    return f"{_scheme()}://{host}:{port()}"
+    return f"{_scheme()}://{host}:{PORT}"
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -194,6 +213,9 @@ def _device_line(dev: dict) -> str:
 
 def start() -> int:
     host = require_installed()
+    if port_busy():
+        print(already_running_message())
+        return 1
     res = _systemctl("start", UNIT)
     if not res.ok:
         print(f"Could not start {UNIT}: {res.output}")

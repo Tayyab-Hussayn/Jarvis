@@ -315,13 +315,9 @@ mkdir -p "$JOBS_UNITS"
 if [[ -n "$LAN_HOST" ]]; then
   mkdir -p "$CONFIG_DIR"
   # Owner-only before the content lands, so the file is never world-readable.
-  # An existing port is kept: the owner may have moved off 8787 because it was taken.
-  WEB_PORT=""
-  [[ -f "$WEB_ENV" ]] && WEB_PORT="$(sed -n 's/^KRAVEIN_PORT=//p' "$WEB_ENV" | head -n1)"
-  [[ "$WEB_PORT" =~ ^[0-9]+$ ]] || WEB_PORT="8787"
-  ( umask 077; printf 'KRAVEIN_LAN_HOST=%s\nKRAVEIN_PORT=%s\n' "$LAN_HOST" "$WEB_PORT" > "$WEB_ENV" )
+  ( umask 077; printf 'KRAVEIN_LAN_HOST=%s\n' "$LAN_HOST" > "$WEB_ENV" )
   chmod 600 "$WEB_ENV"
-  ok "web.env -> $LAN_HOST:$WEB_PORT"
+  ok "web.env -> $LAN_HOST"
 fi
 # Copied with the real repo path substituted, as the other units are.
 sed "s|%h/code/Kravein|$REPO_DIR|g" \
