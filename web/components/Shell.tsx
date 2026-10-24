@@ -122,9 +122,12 @@ function RailItem({
         // nothing louder for the things that actually matter.
         active
           ? "bg-[var(--accent-dim)] text-[var(--accent)]"
-          : "text-[var(--text-muted)] hover:bg-[var(--surface-raised)] hover:text-[var(--text)]",
+          : "text-[var(--text-muted)] hover:bg-[var(--glass-highlight)] hover:text-[var(--text)]",
       )}
-      style={{ transition: "background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease)" }}
+      style={{
+        transition: "background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease)",
+        boxShadow: active ? "inset 0 0 0 1px var(--accent-line), var(--glow-soft)" : undefined,
+      }}
     >
       <span
         aria-hidden
@@ -132,7 +135,8 @@ function RailItem({
         style={{
           height: active ? "18px" : "0px",
           background: "var(--accent)",
-          transition: "height var(--motion-base) var(--ease)",
+          boxShadow: active ? "var(--glow-soft)" : undefined,
+          transition: "height var(--motion-base) var(--ease-out)",
         }}
       />
       <Icon name={icon} size={19} className="shrink-0" />
@@ -173,7 +177,7 @@ export function Rail({
 }) {
   return (
     <nav
-      className="hidden shrink-0 flex-col border-r sm:flex border-[var(--border)] bg-[var(--surface)] px-2.5 py-3"
+      className="glass glass-strong hidden shrink-0 flex-col rounded-none border-y-0 border-l-0 px-2.5 py-3 sm:flex"
       style={{
         width: expanded ? "var(--rail-width-open)" : "var(--rail-width)",
         transition: "width var(--motion-base) var(--ease)",
@@ -186,15 +190,16 @@ export function Rail({
         <span
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[length:var(--text-xs)] font-bold"
           style={{
-            background: "transparent",
+            background: "var(--accent-dim)",
             color: "var(--accent)",
             border: "1.5px solid var(--accent)",
+            boxShadow: "var(--glow-soft)",
           }}
         >
-          B
+          K
         </span>
         {expanded && (
-          <span className="truncate text-[length:var(--text-sm)] font-semibold tracking-[-0.01em]">
+          <span className="text-gradient truncate text-[length:var(--text-base)] font-semibold tracking-[-0.02em]">
             Kravein
           </span>
         )}
@@ -282,14 +287,16 @@ export function NavDrawer({
         type="button"
         aria-label="Close menu"
         onClick={onClose}
-        className="absolute inset-0 bg-black/50"
+        className="absolute inset-0 backdrop-blur-sm"
+        style={{ background: "var(--scrim)" }}
       />
       <nav
         aria-label="Navigation drawer"
-        className="absolute inset-y-0 left-0 flex w-[min(18rem,85vw)] flex-col overflow-y-auto border-r border-[var(--border)] bg-[var(--surface)] px-3 py-3"
+        className="glass glass-strong absolute inset-y-0 left-0 flex w-[min(18rem,85vw)] flex-col overflow-y-auto rounded-none border-y-0 border-l-0 px-3 py-3"
+        style={{ animation: "panel-in var(--motion-base) var(--ease-out)" }}
       >
         <div className="mb-3 flex h-11 items-center justify-between px-1">
-          <span className="text-[length:var(--text-sm)] font-semibold">Kravein</span>
+          <span className="text-gradient text-[length:var(--text-base)] font-semibold tracking-[-0.02em]">Kravein</span>
           <button
             type="button"
             onClick={onClose}
@@ -426,7 +433,7 @@ export function TopBar({
 }) {
   const status = STATUS[connection];
   return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--border)] bg-[var(--surface)] px-3 sm:gap-4 sm:px-5">
+    <header className="glass glass-strong flex h-14 shrink-0 items-center gap-2 rounded-none border-x-0 border-t-0 px-3 sm:gap-4 sm:px-5">
       {onMenu && (
         <button
           type="button"
@@ -438,7 +445,7 @@ export function TopBar({
         </button>
       )}
       <div className="min-w-0">
-        <h1 className="truncate text-[length:var(--text-lg)] font-semibold tracking-[-0.01em]">
+        <h1 className="truncate text-[length:var(--text-lg)] font-semibold tracking-[-0.02em]">
           {title}
         </h1>
         {environment && (
@@ -498,6 +505,7 @@ export function TopBar({
                 ? "var(--border-strong)"
                 : "var(--border-strong)",
             background: voiceActive ? "var(--accent-dim)" : "transparent",
+            boxShadow: voiceActive ? "var(--glow-soft)" : undefined,
             color: voiceActive ? "var(--accent)" : "var(--text-muted)",
           }}
         >
@@ -538,6 +546,7 @@ export function TopBar({
           className="inline-block h-1.5 w-1.5 rounded-full"
           style={{
             background: status.colour,
+            boxShadow: `0 0 8px ${status.colour}`,
             animation:
               connection === "connecting" || connection === "reconnecting"
                 ? "pulse 1.2s ease-in-out infinite"

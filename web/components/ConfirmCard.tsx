@@ -56,10 +56,13 @@ export function ConfirmCard({
 
   return (
     <div
-      className="rounded-[var(--radius-lg)] border border-l-2 border-[var(--border)] bg-[var(--surface-raised)] p-3.5"
+      className="glass glass-strong rounded-[var(--radius-lg)] border-l-[3px] p-4"
       style={
         {
           borderLeftColor: colour,
+          boxShadow: pending
+            ? `var(--shadow-panel), 0 0 24px color-mix(in srgb, ${colour} 22%, transparent)`
+            : undefined,
           "--pulse-tint": `color-mix(in srgb, ${colour} 22%, transparent)`,
           animation: pending ? "await-answer 2.2s ease-in-out infinite" : undefined,
         } as React.CSSProperties
@@ -71,12 +74,12 @@ export function ConfirmCard({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <DangerBadge danger={confirm.danger} />
-            <span className="text-[length:var(--text-sm)] font-medium">
+            <span className="text-[length:var(--text-base)] font-semibold tracking-[-0.01em]">
               {confirm.action}
             </span>
           </div>
           {confirm.detail && (
-            <p className="mt-1.5 break-all font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-muted)]">
+            <p className="mt-2 break-all rounded-[var(--radius-sm)] bg-[var(--surface-sunken)] px-2.5 py-1.5 font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-muted)]">
               {confirm.detail}
             </p>
           )}

@@ -18,6 +18,7 @@ updated: 2026-10-24
 ```bash
 .venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 97+17 + 87
 cd web && npm test          # node --test lib/: phones, QR matrix, policy
+node web/scripts/check_contrast.mjs        # WCAG AA on token pairs, both themes
 cd web && npm run build
 .venv/bin/python tools/check_layout.py     # only when the UI changed
 PYTHONPATH=. .venv/bin/python web/scripts/check_phone_layout.py   # 390x844: no sideways scroll, targets >=40px, drawer, composer above keyboard
@@ -44,6 +45,29 @@ The Android app is a device Kravein controls. It connects to the same server and
 - **One write path:** `POST /api/settings` returns 400 for a `safety` that is not an object or that carries `confirmation_mode`/`allow_destructive`. The Settings list hides those two rows.
 - **UI invariant:** the selector and banner show only what the server last answered (`parsePolicy` rejects malformed replies); no optimistic state. The banner counts down locally from `seconds_left` re-anchored on each answer, polls every 5 s, and re-asks the server when its own countdown hits 0. Another tab's change or an expiry shows within 5 s.
 - `config._deep_merge` shares nested dicts with `DEFAULT_SETTINGS`, so writing the `safety` section mutates the defaults in-process; `test_policy_api.py` deep-copies them. Reported to the orchestrator (config.py is not ours).
+
+## Design tokens (#54, "aurora")
+Single source: `web/app/tokens.css` (CSS variables; Tailwind maps `bg-surface` etc. via `@theme inline`). No hex/rgba in components. Dark first; `prefers-color-scheme: light` overrides. The Android shell should copy these values.
+
+| Token | Dark | Light |
+|---|---|---|
+| `--bg` / `--surface` / `--surface-raised` / `--surface-sunken` | `#04060c` / `#0b1019` / `#121a28` / `#070b13` | `#eef2f9` / `#f8faff` / `#ffffff` / `#e4eaf4` |
+| `--border` / `--border-strong` | `#1b2638` / `#2b3a54` | `#d5deec` / `#b3c0d6` |
+| `--glass` / `--glass-strong` / `--glass-border` | `rgba(14,21,34,.72)` / `rgba(18,27,43,.88)` / `rgba(140,180,255,.14)` | white .72 / .92 / `rgba(40,70,120,.14)` |
+| `--blur` | 18px (+ saturate 140%) | same |
+| `--text` / `--text-muted` / `--text-faint` | `#eaf0fb` / `#a6b3c8` / `#8493ab` | `#0c1424` / `#44536b` / `#566580` |
+| `--accent` (cyan→teal) / `--accent-contrast` | `#3de3ff` / `#031016` | `#006b82` / `#ffffff` |
+| `--accent-2` (violet) | `#9d8cff` | `#5a45d6` |
+| `--gradient-accent` | `135deg #3de3ff → #7b8cff` | `135deg #006b82 → #4a47d0` |
+| `--glow` / `--glow-soft` | 1px accent-line ring + 18px cyan halo / 14px halo | hairline ring / none |
+| danger `--moderate` / `--destructive` / `--critical` | `#ffc94d` / `#ff8f4a` / `#ff6b7a` | `#8a5a00` / `#a63f06` / `#b3182f` |
+| radii `--radius-sm/--radius/-md/-lg/-xl` | 8 / 12 / 14 / 18 / 24 px, `-full` 999 | same |
+| type | Inter stack (never `system-ui`); xs .6875 sm .8125 base .9375 lg 1.125 xl 1.5 2xl 2 stat 2.125 rem; label tracking .1em | same |
+| motion | fast 110 / base 200 / slow 360 ms; `--ease` (.2,0,.2,1), `--ease-out` (.16,1,.3,1) | same |
+
+- Classes (globals.css, `@layer components` so Tailwind utilities still win): `.glass`, `.glass-strong`, `.glow`, `.text-gradient`, `.btn-primary`, `.field-glow`. Keyframes `think` (agent thinking dots, `Thinking` in `TurnGraph.tsx`), `halo`, `node-in`, `view-in`. The reduced-motion rule in globals.css zeroes all animation.
+- Contrast: `node web/scripts/check_contrast.mjs` reads tokens.css and fails below WCAG AA (4.5:1) for every text pair in both themes; run it after any token change.
+- Why `@layer components`: an unlayered `.glass { border }` silently overrode every Tailwind utility (`border-x-0`, `hover:bg-*`) on the same element.
 
 ## Gotchas
 - **Phone width (<640px, Android WebView):** the rail is `hidden sm:flex`; `NavDrawer` (Shell.tsx, opened by the top bar's menu button) replaces it. Touch targets are enforced by one `@media (max-width: 639px)` rule in `globals.css` (min 40px on buttons/inputs), not per component. `layout.tsx` sets `interactiveWidget: "resizes-content"` so the on-screen keyboard shrinks the layout instead of covering the composer. Desktop is unchanged above the breakpoint.

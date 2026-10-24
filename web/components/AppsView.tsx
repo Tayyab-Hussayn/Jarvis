@@ -97,7 +97,7 @@ export function AppsView({ run }: { run: RunSkill }) {
               {visible.slice(0, 120).map((app) => (
                 <div
                   key={app.name}
-                  className="flex items-center gap-3 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5"
+                  className="flex items-center gap-3 glass rounded-[var(--radius)] px-3 py-2.5"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[length:var(--text-sm)]">{app.name}</div>
