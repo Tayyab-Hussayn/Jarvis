@@ -51,7 +51,7 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - Web page (#91) streams PCM over `/ws`; the app only provides `getUserMedia` and the speaker. `onPermissionRequest` grants AUDIO_CAPTURE only for the paired/pipe origin and only with RECORD_AUDIO held; otherwise `deny()` (page sees NotAllowedError). A missing permission first shows a rationale dialog (`mic_rationale_*`), then the system prompt; "Not now" leaves the page with the clean error.
 - Audio focus (`USAGE_ASSISTANT`/speech, `GAIN_TRANSIENT`) is taken when `AudioRecordingCallback` reports this app recording and released when it stops or the WebView is destroyed. Replies play on the media stream (speaker, or headset/BT when connected).
 - Background: the simple safe choice, no notification-backed session. `onStop` with an open mic loads `about:blank` (closes capture); `onStart` reloads the page.
-- Device test: see PR #92 notes.
+- Device-verified 2026-10-24 (Vivo V2254, `kravein serve --lan` TLS): rationale + system prompt, refusal → clean page error, `web.voice_start audio=device` + `voice.live_start` in the audit, focus on the stack while recording (`dumpsys audio`), Home → rec stop + focus released + `web.voice_stop`, and the owner heard Kravein's reply from the phone speaker. A transient Live `1011` once hit the first attempt (server side).
 
 ## Confirmation notifications (#51)
 - Frames: `confirm_request` (action, detail, danger destructive|critical, expires_at) → notification; `confirm_reply{approve}` back with the same request_id; `confirm_closed{outcome}` removes it. A phone that connects while one is pending also receives it (server side, #52).
