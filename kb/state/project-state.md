@@ -37,7 +37,7 @@ updated: 2026-10-23
 
 - Voice transcript in English via Whisper translate #101 (base model downloads on first use). Stuck "running" cards → "unknown" + auto-reconnect #104. Nothing in flight.
 
-- Dynamic LAN address + mDNS `_kravein._tcp` #107 (owner re-runs installer: web.env → auto). Android rediscovers the PC by mDNS #108 (not yet device-tested on another network). Hybrid native app: native Chat merged #113 (device-tested; PSS 115 MB with Chat). Plan items 8–10: resumable sessions merged #111 (resume via /ws?resume=, voice grace 60 s, not across server restart), native voice + background + resume + bubble merged #119 (open: owner heard 2–3 overlapping voices once, not reproduced — waiting on owner details); declined-target retry ends the turn #117. Owner's phone has 3 pairings — remove the 2 old ones after the device test.
+- Dynamic LAN address + mDNS `_kravein._tcp` #107 (owner re-runs installer: web.env → auto). Android rediscovers the PC by mDNS #108 (not yet device-tested on another network). Hybrid native app: native Chat merged #113 (device-tested; PSS 115 MB with Chat). Plan items 8–10: resumable sessions merged #111 (resume via /ws?resume=, voice grace 60 s, not across server restart), native voice + background + resume + bubble merged #119 (open: owner heard 2–3 overlapping voices once, not reproduced); #120 android device pass of #119 open items + overlap hunt — paused by owner 2026-10-25, WIP on agent/android; declined-target retry ends the turn #117. Owner's phone has 3 pairings — remove the 2 old ones after the device test.
 
 ## Blockers
 - None.
