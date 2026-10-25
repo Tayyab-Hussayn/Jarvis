@@ -61,11 +61,14 @@ export function clearToken(): void {
   sessionStorage.removeItem(TOKEN_KEY);
 }
 
-export function wsUrl(): string {
+export function wsUrl(resume = ""): string {
   const base = API_BASE || window.location.origin;
   const url = new URL("/ws", base);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("token", getToken());
+  // Ask for the previous session back (#110). Unknown or expired is not an
+  // error: the server answers with a fresh one.
+  if (resume) url.searchParams.set("resume", resume);
   return url.toString();
 }
 

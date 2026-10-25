@@ -22,7 +22,9 @@ drops, resolves to ``False``. The default is deny at every exit from
 from __future__ import annotations
 
 import asyncio
+import collections
 import itertools
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
@@ -78,6 +80,20 @@ class _Pending:
     event: threading.Event = field(default_factory=threading.Event)
     approved: bool = False
     by: str = ""
+    # What the card shows, kept so a client that resumes the session can be
+    # shown the same question again.
+    frame: dict[str, Any] = field(default_factory=dict)
+    expires_at: float = 0.0
+
+
+# Frames that make up the conversation a resuming client is shown again.
+# Confirmations are deliberately absent: a card is only meaningful while it is
+# open, so the open ones are re-sent from `Session._pending` instead.
+RECORDED = frozenset({
+    "user_turn", "turn_start", "thinking", "tool_call", "tool_result",
+    "answer", "turn_end", "error", "voice_state",
+})
+DEFAULT_REPLAY_FRAMES = 600
 
 
 class Session:
@@ -101,6 +117,14 @@ class Session:
         self._pending_lock = threading.Lock()
         self._closed = threading.Event()
         self.turn_id: str = ""
+        # No client attached: frames are recorded for replay but not queued,
+        # so a dropped client cannot fill the queue and lose live frames.
+        self.attached = True
+        self._transcript: "collections.deque[dict[str, Any]]" = collections.deque(
+            maxlen=max(
+                50, int(config.get("web.replay_frames", DEFAULT_REPLAY_FRAMES))
+            )
+        )
         self.confirm_timeout = (
             confirm_timeout
             if confirm_timeout is not None
@@ -121,13 +145,86 @@ class Session:
             self._closed.set()
 
     def _offer(self, payload: dict[str, Any]) -> None:
-        """Enqueue on the loop thread, dropping rather than blocking it."""
+        """Record and enqueue on the loop thread, dropping rather than blocking it.
+
+        Recording happens here, on the loop, so the transcript and the queue
+        see frames in one order and `attach()` can drain one and snapshot the
+        other without a frame falling between them.
+        """
+        self._record(payload)
+        if not self.attached:
+            return
         try:
             self._queue.put_nowait(payload)
         except asyncio.QueueFull:
             # A slow or wedged client must never stall the agent. Losing a
             # progress frame is survivable; blocking the event loop is not.
             pass
+
+    def _record(self, payload: dict[str, Any]) -> None:
+        if payload.get("t") not in RECORDED:
+            return
+        # Panel runs (`p…`) are not conversation; the page never showed them
+        # in the transcript and must not start to after a reload.
+        if str(payload.get("id") or "").startswith("p"):
+            return
+        # Streaming partials replace each other; keeping every one would push
+        # the real turns out of the bounded transcript.
+        phase = str(payload.get("phase") or "")
+        if (
+            payload["t"] == "voice_state" and phase.endswith("_partial")
+            and self._transcript
+            and self._transcript[-1].get("t") == "voice_state"
+            and self._transcript[-1].get("phase") == phase
+        ):
+            self._transcript[-1] = payload
+            return
+        self._transcript.append(payload)
+
+    def record_user_turn(self, turn_id: str, text: str) -> None:
+        """Remember what the user typed. Only the client knows it otherwise.
+        Event loop only."""
+        self._record(frame("user_turn", id=turn_id, text=text))
+
+    def clear_transcript(self) -> None:
+        """`reset` starts a new conversation; nothing older may come back."""
+        self._transcript.clear()
+
+    def detach(self) -> None:
+        """The client is gone but the session lives on. Event loop only."""
+        self.attached = False
+        self._drain()
+
+    def attach(self, prelude: "list[dict[str, Any]]") -> None:
+        """A client (re)connected: drop what was queued for the old one, then
+        queue ``prelude`` ahead of anything new. Event loop only, and the
+        caller must not await between this and starting its pump."""
+        self._drain()
+        self.attached = True
+        for payload in prelude:
+            self._offer(payload)
+
+    def replay_frames(self) -> "list[dict[str, Any]]":
+        return list(self._transcript)
+
+    def pending_confirm_frames(self) -> "list[dict[str, Any]]":
+        """The open confirmation cards, with the time each still has left."""
+        now = time.time()
+        with self._pending_lock:
+            open_ = [
+                (cid, p) for cid, p in self._pending.items() if not p.event.is_set()
+            ]
+        return [
+            {**p.frame, "timeout": max(1.0, p.expires_at - now)}
+            for _, p in open_
+        ]
+
+    def _drain(self) -> None:
+        while True:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
 
     async def next_frame(self) -> dict[str, Any]:
         """Await the next outbound frame. Event loop only."""
@@ -145,11 +242,17 @@ class Session:
             return False
 
         confirm_id = f"c{next(_confirm_ids)}"
-        pending = _Pending()
         info = {
             "action": action, "detail": detail, "danger": danger.name,
             "expires_at": time.time() + self.confirm_timeout,
         }
+        pending = _Pending(
+            frame=frame(
+                "confirm_request", id=self.turn_id, confirm_id=confirm_id,
+                action=action, detail=detail, danger=danger.name,
+            ),
+            expires_at=info["expires_at"],
+        )
         with self._pending_lock:
             self._pending[confirm_id] = pending
         with _open_lock:
@@ -350,3 +453,48 @@ def observer_for(session: Session) -> Any:
             session.emit("error", id=turn, message=text)
 
     return observe
+
+
+# ---------------------------------------------------------------------------
+# Resumable sessions
+# ---------------------------------------------------------------------------
+
+MAX_HELD_SESSIONS = 16
+
+
+class SessionStore:
+    """Server-side sessions that outlive a socket, keyed by an unguessable id.
+
+    The id is a capability *and* is bound to the principal that created it
+    (the browser token, or one phone's UI token), so a leaked id is useless to
+    anyone else, and an id that is unknown, expired or someone else's is
+    indistinguishable to the caller: a clean new session, never an error.
+    Event loop only. Items need ``id`` and ``principal`` attributes.
+    """
+
+    def __init__(self) -> None:
+        self._items: "dict[str, Any]" = {}
+
+    @staticmethod
+    def new_id() -> str:
+        return secrets.token_urlsafe(24)
+
+    def add(self, item: Any) -> None:
+        self._items[item.id] = item
+
+    def get(self, session_id: str, principal: str) -> Any:
+        item = self._items.get(session_id) if session_id else None
+        if item is None or not secrets.compare_digest(
+            str(item.principal), str(principal)
+        ):
+            return None
+        return item
+
+    def drop(self, session_id: str) -> None:
+        self._items.pop(session_id, None)
+
+    def items(self) -> "list[Any]":
+        return list(self._items.values())
+
+    def __len__(self) -> int:
+        return len(self._items)

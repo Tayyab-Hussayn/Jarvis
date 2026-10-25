@@ -32,6 +32,7 @@ import type {
 } from "./protocol";
 import { settleConfirm } from "./confirm";
 import { planRetry, settleOnClose } from "./connection";
+import { SESSION_LOST_NOTE, loadSessionId, maxTurnSeq, saveSessionId } from "./resume";
 import { isVoiceLive } from "./protocol";
 import { captureToken, getToken, wsUrl } from "./session";
 import {
@@ -46,7 +47,8 @@ export type Connection =
   | "open"
   | "reconnecting"
   | "offline"
-  | "unauthorized";
+  | "unauthorized"
+  | "replaced";
 
 export interface Hello {
   assistantName: string;
@@ -132,6 +134,11 @@ export function useKravein() {
   // Turns that currently have a message in `messages` to attach frames to.
   // A confirmation for anything else has nowhere to render inline.
   const liveTurns = useRef(new Set<string>());
+
+  // `handle` calls itself to replay, and reopening the mic needs the socket.
+  // Refs keep both out of each other's dependency lists.
+  const handleRef = useRef<((frame: ServerFrame) => void) | null>(null);
+  const reopenMicRef = useRef<(() => void) | null>(null);
 
   const isPanelTurn = (id: string | undefined) => Boolean(id?.startsWith("p"));
 
@@ -228,6 +235,16 @@ export function useKravein() {
 
       switch (frame.t) {
         case "hello":
+          if (frame.session_id) saveSessionId(frame.session_id);
+          if (frame.resumed === false) {
+            // The server has no such conversation (expired, or it restarted):
+            // keep what the user can see, but say the model does not have it.
+            setMessages((current) =>
+              current.length
+                ? [...current, { id: `note-${Date.now()}`, role: "assistant", text: SESSION_LOST_NOTE }]
+                : current,
+            );
+          }
           setHello({
             assistantName: frame.assistant_name,
             skills: frame.skills,
@@ -251,6 +268,44 @@ export function useKravein() {
         case "audio_clear":
           deviceRef.current?.clear();
           break;
+
+        case "user_turn":
+          // Only inside a replay; live, the page added it when it sent.
+          setMessages((current) => [
+            ...current,
+            { id: `${frame.id}-user`, role: "user", text: frame.text },
+          ]);
+          break;
+
+        case "replay": {
+          // Rebuild from the server's record. This also replaces any card the
+          // dead socket left "running" or "denied" with what really happened.
+          setMessages([]);
+          setPanelConfirms([]);
+          setVoiceNotes([]);
+          liveTurns.current.clear();
+          voiceTurn.current = null;
+          for (const past of frame.frames) handleRef.current?.(past);
+          seqRef.current = Math.max(seqRef.current, maxTurnSeq(frame.frames));
+          setBusy(frame.busy);
+          setCancelling(false);
+          if (frame.voice.active) {
+            setVoicePhase((phase) => (phase === "off" || phase === "error" ? "idle" : phase));
+            if (frame.voice.mode === "live" || frame.voice.mode === "local") {
+              setVoiceMode(frame.voice.mode);
+            }
+            // Our microphone died with the old socket. Reopen it if the
+            // browser allows; if not, end the session rather than leave the
+            // server listening to a client that cannot speak.
+            if (frame.voice.audio === "device" && !deviceRef.current) {
+              reopenMicRef.current?.();
+            }
+          } else {
+            setVoicePhase("off");
+            setVoiceStopping(false);
+          }
+          break;
+        }
 
         case "turn_start":
           setBusy(true);
@@ -637,6 +692,7 @@ export function useKravein() {
     },
     [patchTurn, releaseDevice],
   );
+  handleRef.current = handle;
 
   /* -- stopping invariants -------------------------------------------- */
 
@@ -673,7 +729,7 @@ export function useKravein() {
 
     let socket: WebSocket;
     try {
-      socket = new WebSocket(wsUrl());
+      socket = new WebSocket(wsUrl(loadSessionId()));
     } catch {
       setConnection("offline");
       return;
@@ -685,6 +741,29 @@ export function useKravein() {
     socket.onopen = () => {
       attemptsRef.current = 0;
       setConnection("open");
+      reopenMicRef.current = () => {
+        void DeviceAudio.start(
+          (frame) => {
+            if (socket.readyState === WebSocket.OPEN) socket.send(frame);
+          },
+          () => socket.bufferedAmount,
+        ).then(
+          (device) => {
+            if (socketRef.current !== socket || socket.readyState !== WebSocket.OPEN) {
+              device.stop();
+              return;
+            }
+            deviceRef.current = device;
+          },
+          () => {
+            // No microphone to give the resumed session: end it, say why.
+            setVoiceNotes(["Voice stopped: the microphone could not be reopened."]);
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ t: "voice_stop" } satisfies ClientFrame));
+            }
+          },
+        );
+      };
       pingTimerRef.current = setInterval(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ t: "ping" } satisfies ClientFrame));
