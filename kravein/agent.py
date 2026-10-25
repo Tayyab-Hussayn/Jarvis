@@ -18,7 +18,7 @@ from typing import Any, Callable
 from . import audit, config, registry, toolselect
 from .llm import LLMError, ToolCall, client
 from .platform import detect
-from .safety import Confirmer, confirmer_scope
+from .safety import Confirmer, confirmer_scope, retried_declined_target
 
 # Called with (kind, text) — or (kind, text, data) for observers that want the
 # structured form. kind is one of: thinking, tool, tool_result, answer, error.
@@ -122,6 +122,9 @@ class Turn:
     @property
     def ok(self) -> bool:
         return not self.error
+
+
+DECLINED_REPLY = "Okay, I won't do that."
 
 
 class Agent:
@@ -368,7 +371,16 @@ class Agent:
                     if reply.text:
                         self._emit("thinking", reply.text)
 
+                    declined = False
                     for call in reply.tool_calls:
+                        if declined:
+                            self.messages.append({
+                                "role": "tool",
+                                "name": call.name,
+                                "tool_call_id": call.id or call.name,
+                                "content": "Not run — the user already declined that.",
+                            })
+                            continue
                         if cancelled():
                             # The assistant's tool-call message is already in
                             # history, so every call it named needs a result or
@@ -389,6 +401,21 @@ class Agent:
                             "tool_call_id": call.id or call.name,
                             "content": result,
                         })
+                        declined = declined or retried_declined_target()
+
+                    if declined:
+                        # The owner said no. Another round would only let the
+                        # model try a workaround, so end the turn here.
+                        turn.reply = DECLINED_REPLY
+                        self.messages.append(
+                            {"role": "assistant", "content": turn.reply}
+                        )
+                        self._emit("answer", turn.reply)
+                        audit.record(
+                            "safety.declined_turn_stop", source=self.source,
+                            at="agent_loop", iterations=iteration,
+                        )
+                        return turn
 
                     if cancelled():
                         return give_up("after_tools")

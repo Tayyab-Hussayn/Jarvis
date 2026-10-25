@@ -28,7 +28,7 @@ from typing import Any, Callable, Protocol
 from . import audit, config, registry
 from .agent import SYSTEM_PROMPT
 from .platform import detect
-from .safety import Confirmer, confirmer_scope
+from .safety import Confirmer, TurnMemory, confirmer_scope
 
 # Matches the original's constants exactly.
 LIVE_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
@@ -390,6 +390,9 @@ class LiveSession:
         # told apart from one that simply is not over yet.
         self._audio_bytes = 0
         self._tool_called = False
+        # Each tool call gets its own confirmer_scope, so the owner's "no" has
+        # to be carried across the calls of one model turn explicitly.
+        self._memory = TurnMemory()
         # The user's own audio for the turn in progress, kept so Whisper can
         # write the English transcript (see `_english_heard`).
         self._mic = bytearray()
@@ -517,6 +520,7 @@ class LiveSession:
     def _reset_turn(self) -> None:
         self._audio_bytes = 0
         self._tool_called = False
+        self._memory = TurnMemory()
 
     def _end_turn(self) -> bool:
         """Flush the transcripts, and say so when the model gave nothing back.
@@ -703,7 +707,7 @@ class LiveSession:
 
     def _run_tool(self, name: str, args: dict) -> str:
         self._emit("tool", f"{name}({', '.join(f'{k}={v!r}' for k, v in list(args.items())[:3])})")
-        with confirmer_scope(self.confirmer):
+        with confirmer_scope(self.confirmer, self._memory):
             return registry.dispatch(name, args, source="voice-live")
 
     async def _receive(self, audio_queue: asyncio.Queue) -> None:
