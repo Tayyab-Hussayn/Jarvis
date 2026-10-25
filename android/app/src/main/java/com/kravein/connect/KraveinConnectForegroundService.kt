@@ -7,6 +7,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -21,6 +23,7 @@ import com.kravein.connect.ui.theme.KraveinTokens
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
 import com.kravein.connect.commands.CommandRouter
+import com.kravein.connect.network.NsdPcDiscovery
 import com.kravein.connect.network.PhoneClient
 import com.kravein.connect.pairing.PairingStorage
 import kotlinx.coroutines.CoroutineScope
@@ -52,7 +55,14 @@ class KraveinConnectForegroundService : Service() {
             override fun onClosed(requestId: String, outcome: Outcome) = notifier.cancel(requestId)
 
             override fun onReplyRejected(requestId: String) = notifier.showResult(requestId, ConfirmationText.REJECTED)
-        }, noticeNotifier)
+        }, noticeNotifier, NsdPcDiscovery(this)) { moved ->
+            // Only while this device is still the paired one: an unpair between the connect and this call must
+            // not bring the credential back.
+            if (storage.loadCredential()?.deviceId == moved.deviceId) {
+                storage.saveCredential(moved)
+                AgentStateStore.setCredential(moved)
+            }
+        }
         createNotificationChannel()
         try {
             val notification = buildNotification("Kravein Connect", "Starting connection")
@@ -68,10 +78,27 @@ class KraveinConnectForegroundService : Service() {
             stopSelf()
             return
         }
+        watchNetwork()
         scope.launch {
             AgentStateStore.connectionState.collect {
                 updateNotification()
             }
+        }
+    }
+
+    // Event-driven, not polling: a different default network is the moment the PC may have become reachable (or not).
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = client.networkChanged()
+    }
+    private var watchingNetwork = false
+
+    private fun watchNetwork() {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        try {
+            manager.registerDefaultNetworkCallback(networkCallback)
+            watchingNetwork = true
+        } catch (_: RuntimeException) {
+            // No callback: the failed-connection path still searches, only the early nudge is lost.
         }
     }
 
@@ -149,6 +176,9 @@ class KraveinConnectForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        if (watchingNetwork) {
+            (getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).unregisterNetworkCallback(networkCallback)
+        }
         client.disconnect()
         super.onDestroy()
     }

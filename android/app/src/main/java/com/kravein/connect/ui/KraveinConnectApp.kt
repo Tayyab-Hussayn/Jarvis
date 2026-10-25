@@ -63,10 +63,12 @@ import com.kravein.connect.ui.theme.KraveinTheme
 import com.kravein.connect.ui.theme.KraveinTokens
 import com.kravein.connect.ui.theme.glassBorder
 import com.kravein.connect.core.DeviceCredential
+import com.kravein.connect.core.DiscoveryStatus
 import com.kravein.connect.core.OfferParse
 import com.kravein.connect.core.PairingOffer
 import com.kravein.connect.core.PairingOfferParser
 import com.kravein.connect.core.UiPrefs
+import com.kravein.connect.network.DiscoveryText
 import com.kravein.connect.network.PairResult
 import com.kravein.connect.network.PairingClient
 import kotlinx.coroutines.Dispatchers
@@ -129,6 +131,7 @@ fun KraveinConnectApp(
     val connectionState by AgentStateStore.connectionState.collectAsState()
     val credential by AgentStateStore.credential.collectAsState()
     val status by AgentStateStore.statusText.collectAsState()
+    val discovery by AgentStateStore.discovery.collectAsState()
     val lastError by AgentStateStore.lastError.collectAsState()
     val logs by AgentStateStore.logs.collectAsState()
 
@@ -313,6 +316,7 @@ fun KraveinConnectApp(
                                 state = connectionState,
                                 logs = logs,
                                 status = status,
+                                discovery = discovery,
                                 onToggleConnection = {
                                     if (connectionState == ConnectionState.DISCONNECTED) {
                                         onStartService()
@@ -525,6 +529,7 @@ private fun ConnectedScreen(
     state: ConnectionState,
     logs: List<String>,
     status: String,
+    discovery: DiscoveryStatus,
     onToggleConnection: () -> Unit,
 ) {
     Column(
@@ -547,6 +552,12 @@ private fun ConnectedScreen(
             Text("${credential.host}:${credential.port}", fontWeight = FontWeight.Bold)
             Text(credential.deviceName, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (discovery != DiscoveryStatus.IDLE) {
+                Text(DiscoveryText.SEARCHING, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (discovery == DiscoveryStatus.NOT_FOUND) {
+                Text(DiscoveryText.NOT_FOUND_HINT, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         Spacer(Modifier.height(16.dp))
         GradientButton(onClick = onToggleConnection, modifier = Modifier.fillMaxWidth()) {

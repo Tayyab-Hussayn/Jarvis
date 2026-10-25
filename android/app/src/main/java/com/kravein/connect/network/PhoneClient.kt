@@ -9,6 +9,7 @@ import com.kravein.connect.notice.NoticeListener
 import com.kravein.connect.core.AgentStateStore
 import com.kravein.connect.core.ConnectionState
 import com.kravein.connect.core.DeviceCredential
+import com.kravein.connect.core.DiscoveryStatus
 import okhttp3.HttpUrl
 import okhttp3.Request
 import okhttp3.Response
@@ -28,6 +29,8 @@ class PhoneClient(
     private val helloInfo: (DeviceCredential) -> HelloInfo,
     private val confirmations: ConfirmationListener = ConfirmationListener.None,
     private val notices: NoticeListener = NoticeListener.None,
+    private val discovery: PcDiscovery = PcDiscovery.None,
+    private val hosts: HostListener = HostListener.None,
 ) {
     /** Open questions survive a reconnect; a tap while the socket is down must still be answered honestly. */
     val book = ConfirmationBook()
@@ -53,21 +56,31 @@ class PhoneClient(
     private var attempt = 0
     private var stopped = true
 
+    // The stored address plus any rediscovered one being tried; see HostRecovery.
+    private var recovery: HostRecovery? = null
+    private var ready = false
+    private var searching = false
+    private var seen: List<DiscoveredService> = emptyList()
+
     @Synchronized
     fun connect(credential: DeviceCredential) {
         this.credential = credential
         stopped = false
         attempt = 0
         tlsHints = 0
+        recovery = HostRecovery(credential)
+        stopSearch()
         open(credential)
     }
 
     @Synchronized
     fun disconnect() {
         stopped = true
+        stopSearch()
         socket?.close(1000, "Disconnected by user")
         socket = null
         session = null
+        ready = false
         AgentStateStore.setConnectionState(ConnectionState.DISCONNECTED)
         AgentStateStore.setStatus("Disconnected")
     }
@@ -92,7 +105,65 @@ class PhoneClient(
         }
     }
 
+    /**
+     * The network changed (Wi-Fi switch, VPN, airplane mode off): an earlier "not found" may now be wrong, so retry
+     * the stored address right away and search again. Does nothing while connected — a dead socket fails by itself
+     * and then searches — and never polls.
+     */
+    @Synchronized
+    fun networkChanged() {
+        val current = recovery ?: return
+        if (stopped || ready) return
+        current.networkChanged()
+        attempt = 0
+        stopSearch()
+        startSearch()
+        open(current.active())
+    }
+
+    private fun startSearch() {
+        val current = recovery ?: return
+        // Without a pin there is nothing to match a broadcast against (see HostRecovery.candidates).
+        if (searching || current.stored.certSha256 == null) return
+        searching = true
+        seen = emptyList()
+        AgentStateStore.setDiscovery(DiscoveryStatus.SEARCHING)
+        scheduler.schedule({
+            synchronized(this) {
+                if (searching && recovery?.trial == null) AgentStateStore.setDiscovery(DiscoveryStatus.NOT_FOUND)
+            }
+        }, NOT_FOUND_AFTER_MS, TimeUnit.MILLISECONDS)
+        discovery.start { found -> onServices(found) }
+    }
+
+    /** Connected (or given up): stop listening to the network, it costs battery. */
+    private fun stopSearch() {
+        if (searching) discovery.stop()
+        searching = false
+        seen = emptyList()
+        AgentStateStore.setDiscovery(DiscoveryStatus.IDLE)
+    }
+
+    @Synchronized
+    private fun onServices(found: List<DiscoveredService>) {
+        if (stopped || !searching) return
+        seen = found
+        tryNextCandidate()
+    }
+
+    /** Opens the next rediscovered address, if any. Returns whether one was started. */
+    private fun tryNextCandidate(): Boolean {
+        val current = recovery ?: return false
+        val candidate = current.nextCandidate(seen) ?: return false
+        AgentStateStore.addLog("Trying ${candidate.host}:${candidate.port} found on this network")
+        AgentStateStore.setDiscovery(DiscoveryStatus.SEARCHING)
+        attempt = 0
+        open(candidate)
+        return true
+    }
+
     private fun open(credential: DeviceCredential) {
+        ready = false
         socket?.cancel()
         val url = HttpUrl.Builder().scheme(credential.scheme).host(credential.host).port(credential.port).addPathSegments("phone/ws").build()
         val request = Request.Builder().url(url).header("Authorization", credential.authorization()).build()
@@ -106,10 +177,28 @@ class PhoneClient(
     private fun scheduleReconnect(delayMs: Long) {
         scheduler.schedule({
             synchronized(this) {
-                val current = credential
-                if (!stopped && current != null) open(current)
+                // A trial or a fresh attempt may already be running (found service, network change).
+                val current = recovery
+                if (!stopped && current != null && socket == null) open(current.active())
             }
         }, delayMs, TimeUnit.MILLISECONDS)
+    }
+
+    /** The welcomed socket [mine] is the live one: save a rediscovered address and stop searching. */
+    private fun connected(mine: PhoneSession) {
+        if (session !== mine) return
+        ready = true
+        val moved = recovery?.trialSucceeded()
+        if (moved != null) {
+            credential = moved
+            AgentStateStore.addLog("Found the PC again at ${moved.host}:${moved.port}")
+            hosts.onHostChanged(moved)
+        }
+        stopSearch()
+    }
+
+    private companion object {
+        const val NOT_FOUND_AFTER_MS = 10_000L
     }
 
     private inner class Listener(private val mine: PhoneSession) : WebSocketListener() {
@@ -131,6 +220,7 @@ class PhoneClient(
             for (event in out.events) {
                 when (event) {
                     is SessionEvent.Ready -> {
+                        synchronized(this@PhoneClient) { connected(mine) }
                         attempt = 0
                         tlsHints = 0
                         AgentStateStore.setConnectionState(ConnectionState.CONNECTED)
@@ -154,7 +244,17 @@ class PhoneClient(
             synchronized(this@PhoneClient) {
                 if (stopped || session !== mine || socket !== webSocket) return
                 socket = null
+                ready = false
                 AgentStateStore.addLog("Socket $what")
+                if (recovery?.trial != null) {
+                    // A rediscovered address that does not work (wrong certificate, refusal, silence) never ends the
+                    // pairing: the stored address stays as it was and the search goes on.
+                    recovery?.trialFailed()
+                    if (tryNextCandidate()) return
+                    AgentStateStore.setStatus("Reconnecting")
+                    scheduleReconnect(ConnectionPolicy.backoffMs(1))
+                    return
+                }
                 attempt += 1
                 val unpinned = credential?.certSha256 == null
                 tlsHints = if (unpinned && TlsFailures.looksLikePlainHttpToTlsServer(failure)) tlsHints + 1 else 0
@@ -163,23 +263,28 @@ class PhoneClient(
                 when (action) {
                     is FailureAction.Retry -> {
                         AgentStateStore.setStatus("Reconnecting in ${action.delayMs / 1000}s")
-                        scheduleReconnect(action.delayMs)
+                        startSearch()
+                        // A service may already be known (search left running between attempts).
+                        if (!tryNextCandidate()) scheduleReconnect(action.delayMs)
                     }
                     FailureAction.NeedsPairing -> {
                         // Stop reconnecting: the credential will not start working by itself. The stored
                         // credential stays until a new pairing replaces it.
                         stopped = true
+                        stopSearch()
                         AgentStateStore.setStatus("Pairing required")
                         AgentStateStore.setError(ConnectionPolicy.REPAIR_MESSAGE)
                     }
                     FailureAction.PinMismatch -> {
                         // A different certificate is never retried: it is either a reinstall or someone else.
                         stopped = true
+                        stopSearch()
                         AgentStateStore.setStatus("Certificate does not match")
                         AgentStateStore.setError(TlsFailures.MISMATCH_MESSAGE)
                     }
                     FailureAction.NeedsTlsRepair -> {
                         stopped = true
+                        stopSearch()
                         AgentStateStore.setStatus("Pairing required")
                         AgentStateStore.setError(TlsFailures.RE_PAIR_FOR_TLS_MESSAGE)
                     }

@@ -14,6 +14,9 @@ enum class ConnectionState {
     NEEDS_PAIRING,
 }
 
+/** What the Phone tab says about the search for the PC after its address stopped answering. */
+enum class DiscoveryStatus { IDLE, SEARCHING, NOT_FOUND }
+
 /** What `POST /api/phone/offer` puts in the QR code. The code is single-use and expires, so it is never stored. */
 data class PairingOffer(
     val host: String,
@@ -38,6 +41,9 @@ object PairingOfferParser {
     private const val OFFER_VERSION = 1
     private val HOST = Regex("^[A-Za-z0-9._-]{1,253}$")
     private val IPV6 = Regex("^[0-9A-Fa-f:]{2,45}$")
+
+    /** Whether [host] is safe to put into a URL (also used for addresses found by mDNS). */
+    fun isUsableHost(host: String): Boolean = HOST.matches(host) || IPV6.matches(host)
 
     /** The manual-entry form: same rules as a scanned code, so the host is checked the same way. */
     fun fromParts(host: String, port: String, code: String, nowEpochSeconds: Long): OfferParse {
