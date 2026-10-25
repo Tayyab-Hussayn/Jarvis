@@ -18,6 +18,12 @@ def installed(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "unit_path", lambda: unit)
     monkeypatch.setattr(service, "web_env_path", lambda: env)
     monkeypatch.setattr(service, "_scheme", lambda: "https")
+    # The configured address must look held, or current_host() (#105) treats it
+    # as stale and resolves to whatever this dev machine really has.
+    from kravein import discovery
+    monkeypatch.setattr(discovery, "interface_addresses",
+                        lambda: [("wlan0", "192.168.1.20")])
+    monkeypatch.setattr(discovery, "default_route_interface", lambda *a: "wlan0")
     # The real probe binds 0.0.0.0:8787, so the owner's running server would
     # make every start() test report "already running". Tests that want a busy
     # port override this themselves.

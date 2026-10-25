@@ -36,7 +36,7 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from . import audit, config, events, phone, registry, safety, webauth
+from . import audit, config, discovery, events, phone, registry, safety, webauth
 from .agent import Agent
 from .platform import detect
 from .safety import confirmer_scope
@@ -1450,8 +1450,13 @@ def serve(
     *,
     open_browser: bool = True,
     tls: bool = True,
+    follow: str | None = None,
 ) -> int:
-    """Run the web server until interrupted."""
+    """Run the web server until interrupted.
+
+    `follow` (`auto` or an address) makes a LAN server track the machine's
+    address: when the network changes the listener is restarted on the new one.
+    """
     try:
         import uvicorn
     except ImportError:
@@ -1543,5 +1548,57 @@ def serve(
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
 
     audit.record("web.server_started", host=host, port=port, tls=use_tls)
-    uvicorn.run(app, host=host, port=port, log_level="warning", **ssl_args)
-    return 0
+    if loopback:
+        uvicorn.run(app, host=host, port=port, log_level="warning", **ssl_args)
+        return 0
+    return _serve_following(uvicorn, app, host, port, ssl_args, fingerprint, follow)
+
+
+def _serve_following(uvicorn, app, host, port, ssl_args, fingerprint, follow) -> int:
+    """Run the LAN listener, rebinding when the machine's address changes.
+
+    The certificate and token stay the same (phones pin the fingerprint, not
+    the address); only the bind address, the Host allowlist and the mDNS
+    announcement move. Restarting uvicorn in-process, instead of exiting and
+    leaning on systemd, keeps `kravein serve --lan` working the same by hand.
+    """
+    import time
+
+    advertiser = discovery.Advertiser(port, fingerprint)
+    try:
+        while True:
+            moved: dict[str, Any] = {}
+            server = uvicorn.Server(
+                uvicorn.Config(app, host=host, port=port, log_level="warning", **ssl_args)
+            )
+
+            def on_change(new: Optional[str], server=server, moved=moved) -> None:
+                moved["to"] = new
+                server.should_exit = True
+
+            watcher = None
+            if follow:
+                watcher = discovery.AddressWatcher(follow, host, on_change)
+                watcher.start()
+            advertiser.advertise(host)
+            try:
+                server.run()
+            finally:
+                if watcher:
+                    watcher.stop()
+                advertiser.close()
+            if "to" not in moved:
+                return 0
+            audit.record("web.address_changed", old=host, new=moved["to"])
+            new = moved["to"]
+            while new is None:                    # no network: wait for one
+                print("Network address lost; waiting for one...")
+                time.sleep(discovery.POLL_SECONDS)
+                new = discovery.pick_address(follow)
+            print(f"Network address changed: {host} -> {new}")
+            host = new
+            webauth.clear_lan_hosts()
+            webauth.allow_lan_host(host)
+            app.state.public_host = host
+    except KeyboardInterrupt:
+        return 0
