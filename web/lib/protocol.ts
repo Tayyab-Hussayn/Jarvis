@@ -10,7 +10,15 @@ export type Danger = "SAFE" | "MODERATE" | "DESTRUCTIVE" | "CRITICAL";
 /* -- server -> client ------------------------------------------------ */
 
 export type ServerFrame =
-  | { t: "hello"; assistant_name: string; skills: number; provider: string; model: string; environment: string; local_client?: boolean }
+  | { t: "hello"; assistant_name: string; skills: number; provider: string; model: string; environment: string; local_client?: boolean; session_id?: string; resumed?: boolean; session_ttl_minutes?: number }
+  // Sent right after a *resumed* hello: the conversation as the server holds it
+  // (`frames` are ordinary frames plus `user_turn`), whether a turn is still
+  // running, and the voice session if one survived. Open confirmations follow
+  // as normal `confirm_request` frames.
+  | { t: "replay"; frames: ServerFrame[]; busy: boolean; voice: { active: boolean; mode: string; audio: string } }
+  // Only inside `replay.frames`: what the user typed (live, the page adds it
+  // locally when it sends).
+  | { t: "user_turn"; id: string; text: string }
   | { t: "turn_start"; id: string; skill?: string }
   | { t: "thinking"; id: string; text: string }
   | { t: "tool_call"; id: string; call_id: string; name: string; args: Record<string, unknown>; display: string }

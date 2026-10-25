@@ -226,6 +226,19 @@ def ui_token_expiry(supplied: str | None) -> float | None:
     return found
 
 
+def ui_token_device(supplied: str | None) -> str | None:
+    """The device a live UI token was issued to, or None."""
+    if not supplied:
+        return None
+    found: str | None = None
+    with _ui_lock:
+        now = _now()
+        for token, (device, exp, _cb) in _ui_tokens.items():
+            if secrets.compare_digest(str(supplied), token) and exp > now:
+                found = device
+    return found
+
+
 def token_accepted(supplied: str | None, expected: str) -> bool:
     """The browser token or a live UI token — wherever the browser token works."""
     return verify_token(supplied, expected) or verify_ui_token(supplied)

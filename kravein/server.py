@@ -97,9 +97,14 @@ def create_app(token: str | None = None) -> Any:
             yield
         finally:
             stop.set()
+            # Nothing may keep a microphone or a blocked confirmation alive
+            # past the server; sessions are not persisted across a restart.
+            for held in _app.state.sessions.items():
+                held.expire("shutdown")
 
     app = FastAPI(title="Kravein", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.token = expected
+    app.state.sessions = events.SessionStore()
     # The address a phone should dial, set by `serve()`. Unset under tests and
     # behind the dev server, where the request's own Host is used instead.
     app.state.public_host = None
@@ -447,26 +452,56 @@ def create_app(token: str | None = None) -> Any:
                     await socket.close(code=1008)
 
             ui_watch = asyncio.create_task(watch_ui_token())
-        session = events.Session(loop)
-        events.register(session)
-        agent = Agent(
-            source="web",
-            observer=events.observer_for(session),
-            confirmer=session.confirm,
-        )
-        # One turn at a time. A second `ask` mid-turn is rejected outright
-        # rather than queued — queuing would let a user stack destructive
-        # requests behind a confirmation they have not answered yet.
-        busy = threading.Event()
-
-        audit.record("web.connected")
+        # Who is asking. A resumable session belongs to this principal only:
+        # the browser token, or one specific phone's UI token.
+        device = webauth.ui_token_device(supplied)
+        principal = f"device:{device}" if device else "browser"
+        store: events.SessionStore = app.state.sessions
+        held = None
+        resume_id = socket.query_params.get("resume") or ""
+        if resume_id:
+            held = store.get(resume_id, principal)
+            if held is None:
+                # Unknown, expired and someone else's look the same to the
+                # caller. The audit log keeps no id, only that it happened.
+                audit.record("web.resume_refused", principal=principal)
+        if held is not None:
+            await held.take_over()
+            audit.record("web.resumed", principal=principal)
+        else:
+            held = _Held(store.new_id(), principal, loop, store)
+            store.add(held)
+            events.register(held.session)
+            audit.record("web.connected", principal=principal)
+        client = _Client(socket)
+        held.client = client
+        session = held.session
+        agent = held.agent
+        busy = held.busy
+        stop_turn = held.stop_turn
+        voice_box = held.voice_box
+        voice_turn = held.voice_turn
+        audio_out = held.audio_out
         peer = socket.client.host if socket.client else ""
         # Whether this page is on the laptop itself. The phone app also loads
         # 127.0.0.1 (a loopback pipe on the phone), so the page cannot tell;
         # the server sees the phone's LAN address and can.
-        session.emit(
-            "hello", **_hello_payload(), local_client=_is_loopback_peer(peer)
-        )
+        prelude = [events.frame(
+            "hello", **_hello_payload(), local_client=_is_loopback_peer(peer),
+            session_id=held.id, resumed=held.resumed,
+            session_ttl_minutes=_session_ttl() / 60.0,
+        )]
+        if held.resumed:
+            # The conversation as the server holds it; the client rebuilds
+            # from this, so cards its dead socket left "running" are replaced
+            # by what really happened. Then any card still waiting for an
+            # answer, because the worker is blocked on it.
+            prelude.append(events.frame(
+                "replay", frames=session.replay_frames(),
+                busy=busy.is_set(), voice=held.voice_info(),
+            ))
+            prelude.extend(session.pending_confirm_frames())
+        session.attach(prelude)
 
         # The JSON pump and the audio sender both write to this socket.
         send_lock = asyncio.Lock()
@@ -479,8 +514,7 @@ def create_app(token: str | None = None) -> Any:
                     await socket.send_text(json.dumps(payload, default=str))
 
         pump_task = asyncio.create_task(pump())
-
-        audio_out = _AudioOut()
+        client.tasks.append(pump_task)
 
         async def audio_sender() -> None:
             """Write device-voice audio to the socket, in order. A slow client
@@ -494,12 +528,7 @@ def create_app(token: str | None = None) -> Any:
                         await socket.send_bytes(item)
 
         audio_task = asyncio.create_task(audio_sender())
-
-        # One stop flag per turn. The agent loop runs on a worker thread, so
-        # cancelling the asyncio task around it does not reach the loop — the
-        # thread carries on through every remaining tool round. This is the
-        # signal it actually checks.
-        stop_turn = threading.Event()
+        client.tasks.append(audio_task)
 
         async def run_turn(turn_id: str, text: str) -> None:
             session.turn_id = turn_id
@@ -577,15 +606,11 @@ def create_app(token: str | None = None) -> Any:
         #
         # (This is exactly the assumption that breaks for remote access, which
         # is why phone support stays a separate piece of work.)
-        voice_box: dict[str, Any] = {"session": None, "thread": None, "net": None}
-
         def voice_observer(kind: str, text: str) -> None:
             # Voice turns deliberately never enter `messages` — the text
             # console keeps its own history and must not be rewritten by a
             # parallel spoken conversation.
             session.emit("voice_state", phase=kind, text=text)
-
-        voice_turn = {"n": 0}
 
         def voice_confirmer(action: str, detail: str, danger: Any) -> bool:
             """Confirm a destructive voice action in the browser, not out loud.
@@ -670,6 +695,10 @@ def create_app(token: str | None = None) -> Any:
                             observer=voice_observer, confirmer=voice_confirmer
                         )
                     voice_box["session"] = live
+                    voice_box["info"] = {
+                        "mode": "live",
+                        "audio": "device" if net is not None else "laptop",
+                    }
                     session.emit(
                         "voice_state", phase="started", text="live",
                         audio="device" if net is not None else "laptop",
@@ -681,6 +710,7 @@ def create_app(token: str | None = None) -> Any:
                         confirmer=voice_confirmer,
                     )
                     voice_box["session"] = convo
+                    voice_box["info"] = {"mode": "local", "audio": "laptop"}
                     session.emit("voice_state", phase="started", text="local")
                     convo.run()
             except Exception as exc:
@@ -698,6 +728,7 @@ def create_app(token: str | None = None) -> Any:
                 voice_box["session"] = None
                 voice_box["thread"] = None
                 voice_box["net"] = None
+                voice_box["info"] = None
                 if net is not None:
                     # Playback the client still holds is stale once we stop.
                     with contextlib.suppress(RuntimeError):
@@ -705,24 +736,8 @@ def create_app(token: str | None = None) -> Any:
                 session.emit("voice_state", phase="stopped", text="")
 
         def stop_voice() -> bool:
-            """Ask the voice loop to end. Returns whether one was running."""
-            active = voice_box.get("session")
-            running = active is not None or voice_box.get("thread") is not None
-            if active is not None:
-                with contextlib.suppress(Exception):
-                    active.stop()
-            net = voice_box.get("net")
-            if net is not None:
-                # Also covers a stop that lands before the session exists.
-                with contextlib.suppress(Exception):
-                    net.close()
-            with contextlib.suppress(Exception):
-                from .platform import tts as _tts
+            return _stop_voice(voice_box)
 
-                _tts.stop()
-            return running
-
-        turn_task: asyncio.Task | None = None
         try:
             while True:
                 message = await socket.receive()
@@ -764,7 +779,8 @@ def create_app(token: str | None = None) -> Any:
                         )
                         continue
                     busy.set()
-                    turn_task = asyncio.create_task(run_turn(turn_id, text))
+                    session.record_user_turn(turn_id, text)
+                    held.turn_task = asyncio.create_task(run_turn(turn_id, text))
 
                 elif kind == "run":
                     skill = str(msg.get("skill") or "").strip()
@@ -781,7 +797,7 @@ def create_app(token: str | None = None) -> Any:
                         )
                         continue
                     busy.set()
-                    turn_task = asyncio.create_task(run_skill(turn_id, skill, args))
+                    held.turn_task = asyncio.create_task(run_skill(turn_id, skill, args))
 
                 elif kind == "voice_start":
                     from . import voice as voice_mod
@@ -878,6 +894,7 @@ def create_app(token: str | None = None) -> Any:
                         )
                         continue
                     agent.reset()
+                    session.clear_transcript()
                     session.emit("reset_ok")
 
                 else:
@@ -886,26 +903,20 @@ def create_app(token: str | None = None) -> Any:
         except WebSocketDisconnect:
             pass
         finally:
-            # Releasing the session first unblocks any worker parked on a
-            # confirmation — it resolves to deny, and the turn unwinds.
-            # A voice session holds the microphone and can be mid-utterance;
-            # leaving it running after the browser closes would keep recording
-            # with nothing listening.
-            stop_voice()
-            events.unregister(session)
-            session.close()
+            # A dropped socket is a detach, not the end: the session, its
+            # agent history and any running turn stay for a while so the
+            # client can resume. Only this socket's own tasks end here. A
+            # newer socket may already have taken the session over, in which
+            # case there is nothing left to detach.
             if ui_watch is not None:
                 ui_watch.cancel()
-            pump_task.cancel()
-            audio_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pump_task
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await audio_task
-            if turn_task is not None:
-                turn_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await turn_task
+            await client.stop_tasks()
+            if held.client is client:
+                held.client = None
+                session.detach()
+                audio_out.discard()
+                held.schedule_expiry()
+                audit.record("web.detached", principal=principal)
             audit.record("web.disconnected")
 
     # -- static ----------------------------------------------------------
@@ -964,11 +975,181 @@ class _AudioOut:
         self._items.append(_CLEAR)
         self._ready.set()
 
+    def discard(self) -> None:
+        """Drop queued audio with no marker: nobody is listening to tell."""
+        self._items.clear()
+
     async def get(self) -> Any:
         while not self._items:
             self._ready.clear()
             await self._ready.wait()
         return self._items.popleft()
+
+
+# ---------------------------------------------------------------------------
+# Resumable sessions
+# ---------------------------------------------------------------------------
+
+DEFAULT_SESSION_TTL_MINUTES = 240.0
+DEFAULT_VOICE_GRACE_SECONDS = 60.0
+
+
+def _session_ttl() -> float:
+    """Seconds a session with no client is kept."""
+    try:
+        minutes = float(config.get("web.session_ttl_minutes", DEFAULT_SESSION_TTL_MINUTES))
+    except (TypeError, ValueError):
+        minutes = DEFAULT_SESSION_TTL_MINUTES
+    return max(0.0, minutes) * 60.0
+
+
+def _voice_grace() -> float:
+    try:
+        return max(
+            0.0, float(config.get("web.voice_grace_seconds", DEFAULT_VOICE_GRACE_SECONDS))
+        )
+    except (TypeError, ValueError):
+        return DEFAULT_VOICE_GRACE_SECONDS
+
+
+def _stop_voice(voice_box: dict[str, Any]) -> bool:
+    """Ask a voice loop to end. Returns whether one was running."""
+    active = voice_box.get("session")
+    running = active is not None or voice_box.get("thread") is not None
+    if active is not None:
+        with contextlib.suppress(Exception):
+            active.stop()
+    net = voice_box.get("net")
+    if net is not None:
+        # Also covers a stop that lands before the session exists.
+        with contextlib.suppress(Exception):
+            net.close()
+    with contextlib.suppress(Exception):
+        from .platform import tts as _tts
+
+        _tts.stop()
+    return running
+
+
+class _Client:
+    """One attached websocket and the tasks that serve it."""
+
+    def __init__(self, socket: Any) -> None:
+        self.socket = socket
+        self.tasks: "list[asyncio.Task]" = []
+
+    async def stop_tasks(self) -> None:
+        for task in self.tasks:
+            task.cancel()
+        for task in self.tasks:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self.tasks.clear()
+
+
+class _Held:
+    """Everything a session is, apart from the socket it is currently on.
+
+    Created by the first connection and kept (detached) when the socket drops,
+    so a client that comes back with the id carries on: same agent history,
+    same running turn, same voice session, same transcript.
+    """
+
+    def __init__(
+        self, session_id: str, principal: str, loop: asyncio.AbstractEventLoop,
+        store: "events.SessionStore",
+    ) -> None:
+        self.id = session_id
+        self.principal = principal
+        self.loop = loop
+        self.store = store
+        self.session = events.Session(loop)
+        self.agent = Agent(
+            source="web",
+            observer=events.observer_for(self.session),
+            confirmer=self.session.confirm,
+        )
+        # One turn at a time. A second `ask` mid-turn is rejected outright
+        # rather than queued — queuing would let a user stack destructive
+        # requests behind a confirmation they have not answered yet.
+        self.busy = threading.Event()
+        # One stop flag per turn. The agent loop runs on a worker thread, so
+        # cancelling the asyncio task around it does not reach the loop — the
+        # thread carries on through every remaining tool round. This is the
+        # signal it actually checks.
+        self.stop_turn = threading.Event()
+        self.voice_box: dict[str, Any] = {
+            "session": None, "thread": None, "net": None, "info": None,
+        }
+        self.voice_turn = {"n": 0}
+        self.audio_out = _AudioOut()
+        self.turn_task: "asyncio.Task | None" = None
+        self.client: "_Client | None" = None
+        self.resumed = False
+        self._timers: "list[asyncio.TimerHandle]" = []
+
+    def voice_info(self) -> dict[str, Any]:
+        info = self.voice_box.get("info") or {}
+        return {
+            "active": self.voice_box.get("thread") is not None,
+            "mode": info.get("mode", ""),
+            "audio": info.get("audio", ""),
+        }
+
+    async def take_over(self) -> None:
+        """A new socket claims this session. A socket still attached (a second
+        tab, or an old one the server has not noticed is dead) is closed so
+        two pumps never drain one queue."""
+        self.cancel_timers()
+        old = self.client
+        self.client = None  # its own finally then has nothing to detach
+        if old is not None:
+            await old.stop_tasks()
+            with contextlib.suppress(Exception):
+                await old.socket.close(code=CLOSE_REPLACED)
+            self.session.detach()
+        self.audio_out.discard()
+        self.resumed = True
+
+    def cancel_timers(self) -> None:
+        for timer in self._timers:
+            timer.cancel()
+        self._timers.clear()
+
+    def schedule_expiry(self) -> None:
+        """Start the clocks for a session with no client."""
+        self.cancel_timers()
+        self._timers.append(self.loop.call_later(_session_ttl(), self.expire, "ttl"))
+        if self.voice_box.get("thread") is not None:
+            self._timers.append(
+                self.loop.call_later(_voice_grace(), self._voice_grace_over)
+            )
+
+    def _voice_grace_over(self) -> None:
+        # A client that came back cancelled this timer; this guards the race
+        # where it fired just before.
+        if self.client is None and _stop_voice(self.voice_box):
+            audit.record("web.voice_grace_expired")
+
+    def expire(self, reason: str) -> None:
+        """End the session for good. Loop thread. Idempotent."""
+        if self.client is not None and reason != "shutdown":
+            return
+        self.cancel_timers()
+        # The microphone first: nothing may keep recording with nobody there.
+        _stop_voice(self.voice_box)
+        self.stop_turn.set()
+        # Closing the session denies any confirmation a worker is parked on.
+        self.session.close()
+        events.unregister(self.session)
+        self.store.drop(self.id)
+        task = self.turn_task
+        if task is not None:
+            task.cancel()
+        audit.record("web.session_expired", reason=reason)
+
+
+CLOSE_REPLACED = 4001  # another socket resumed this session
 
 
 def _is_loopback_peer(host: str) -> bool:

@@ -33,10 +33,12 @@ export function settleOnClose(messages: Message[]): Message[] {
 }
 
 export const CLOSE_POLICY_VIOLATION = 1008;
+/** Another socket resumed this session (a second tab); do not fight for it. */
+export const CLOSE_REPLACED = 4001;
 
 export interface RetryPlan {
   /** What the connection badge shows while waiting. */
-  state: "reconnecting" | "offline" | "unauthorized";
+  state: "reconnecting" | "offline" | "unauthorized" | "replaced";
   /** Ms until the next attempt; null = do not retry. */
   delay: number | null;
   attempts: number;
@@ -53,6 +55,9 @@ export function planRetry(
   base = 500,
   max = 15_000,
 ): RetryPlan {
+  if (closeCode === CLOSE_REPLACED) {
+    return { state: "replaced", delay: null, attempts };
+  }
   if (closeCode === CLOSE_POLICY_VIOLATION) {
     return { state: "unauthorized", delay: null, attempts };
   }

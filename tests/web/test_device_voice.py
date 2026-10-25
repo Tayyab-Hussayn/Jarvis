@@ -178,13 +178,22 @@ def test_stop_releases_everything_and_late_audio_is_ignored(client):
         assert FakeLive.instances[0].heard == []
 
 
-def test_socket_drop_ends_the_session_and_leaves_no_thread(client):
-    with _connect(client) as ws:
-        _next(ws)
-        _start_device(ws)
-        fake = FakeLive.instances[0]
-    # Leaving the context closed the socket with the session still running.
-    assert fake.finished.wait(3)
+def test_socket_drop_ends_the_session_after_the_grace_and_leaves_no_thread(
+    client, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from kravein import server
+
+    # A drop no longer stops voice at once (#110); it does when the grace ends.
+    # One portal for the whole test, or the timer's loop dies with the socket.
+    monkeypatch.setattr(server, "_voice_grace", lambda: 0.2)
+    with TestClient(client.app, base_url="http://127.0.0.1:8787") as shared:
+        with _connect(shared) as ws:
+            _next(ws)
+            _start_device(ws)
+            fake = FakeLive.instances[0]
+        assert fake.finished.wait(3)
     assert fake.stopped.is_set()
     assert _wait(_no_voice_threads)
 
