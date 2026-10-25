@@ -154,7 +154,9 @@ fun ChatScreen(
                             last = index == rows.lastIndex,
                             reduced = reduced,
                             onConfirm = onConfirm,
-                            modifier = if (reduced) Modifier else Modifier.animateItem(),
+                            modifier = if (reduced) Modifier else // No fade-out: the "Working…" row is replaced by the answer in the same spot, and its fading copy
+                            // stayed drawn under the answer on the device.
+                            Modifier.animateItem(fadeOutSpec = null),
                         )
                     }
                 }

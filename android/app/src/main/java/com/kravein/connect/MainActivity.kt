@@ -49,6 +49,9 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handleIntent(intent)
         maybeStartService()
         ensureCameraPermission()
+        // Compose must receive the insets itself (keyboard included); otherwise the system resizes the window on
+        // some devices and the nav bar rides up above the keys with no inset for us to react to.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         // Light theme needs dark status/navigation icons; the window colours already come from the theme.
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
         WindowCompat.getInsetsController(window, window.decorView).apply {

@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,6 +45,10 @@ class WebActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Before the first WebView of this process. The main process may hold the default Chromium data directory
+        // (the onboarding background is a WebView); two processes on one directory crash with "Using WebView from
+        // more than one process at once". This process is only ever the web UI, so it gets its own directory.
+        WebView.setDataDirectorySuffix("kravein_web")
         super.onCreate(savedInstanceState)
         // This process has its own copy of every singleton, so it reads the credential itself (encrypted storage).
         val credential = PairingStorage(this).loadCredential()

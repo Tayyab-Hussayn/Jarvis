@@ -211,7 +211,9 @@ fun KraveinConnectApp(
     val nowSeconds = { System.currentTimeMillis() / 1000 }
 
     val route by navController.currentBackStackEntryAsState()
-    val inShell = route?.destination?.route == "home"
+    // No route yet (first frame) counts as the shell: a paired launch must not start Chromium just to draw the
+    // onboarding background for one frame and then keep it resident.
+    val inShell = route == null || route?.destination?.route == "home"
 
     Box(modifier = Modifier.fillMaxSize()) {
         // The 3D background is a second, always-animating WebView: only the onboarding screens get it, never the

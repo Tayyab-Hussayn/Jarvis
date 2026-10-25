@@ -2,6 +2,10 @@ package com.kravein.connect.ui
 
 import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -69,11 +73,13 @@ fun MainShell(
     val showChat by ShellNavigation.showKravein.collectAsState()
     val seen = remember { showChat }
     LaunchedEffect(showChat) { if (showChat != seen) tab = ShellTab.CHAT }
+    val imeUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
+            // Hidden while the keyboard is up: otherwise imePadding lifts the bar above the keys and it eats the screen.
             // Glass chrome with a hairline on top, like the web rail.
-            NavigationBar(containerColor = KraveinTheme.colors.glassStrong, modifier = Modifier.topHairline(KraveinTheme.colors.glassBorder)) {
+            if (!imeUp) NavigationBar(containerColor = KraveinTheme.colors.glassStrong, modifier = Modifier.topHairline(KraveinTheme.colors.glassBorder)) {
                 ShellTab.entries.forEach { item ->
                     NavigationBarItem(
                         selected = tab == item,
@@ -92,7 +98,8 @@ fun MainShell(
             }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        // consumeWindowInsets: the tab's own imePadding must not add the bar/system inset a second time.
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             when (tab) {
                 ShellTab.CHAT -> chatTab()
                 ShellTab.PHONE -> phoneTab()
