@@ -76,6 +76,14 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Canvas
+import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.Stroke
+import com.kravein.connect.chat.VoicePhase
+import com.kravein.connect.chat.VoiceUi
+import com.kravein.connect.voice.VoiceHub
+import com.kravein.connect.voice.VoiceView
 import com.kravein.connect.chat.Block
 import com.kravein.connect.chat.ChatState
 import com.kravein.connect.chat.ChatTimeline
@@ -114,11 +122,38 @@ fun ChatScreen(
     onDismissLoose: (String) -> Unit,
     onRetry: () -> Unit,
     onPairAgain: () -> Unit,
+    voiceStatus: VoiceHub.Status,
+    micRationale: Int,
+    onMic: () -> Unit,
+    onVoiceMute: () -> Unit,
+    onVoiceStop: () -> Unit,
+    onRequestMic: () -> Unit,
 ) {
     val rows = remember(state.messages) { ChatTimeline.rows(state.messages) }
     val listState = rememberLazyListState()
     var draft by remember { mutableStateOf("") }
     val reduced = reducedMotion()
+
+    // The reason comes before the system prompt; the counter ticks each time the mic is needed and not granted.
+    var showRationale by remember { mutableStateOf(false) }
+    var seenRationale by remember { mutableStateOf(micRationale) }
+    LaunchedEffect(micRationale) {
+        if (micRationale != seenRationale) { seenRationale = micRationale; showRationale = true }
+    }
+    if (showRationale) {
+        AlertDialog(
+            onDismissRequest = { showRationale = false },
+            title = { Text("Let Kravein listen?") },
+            text = {
+                Text(
+                    "Voice uses this phone's microphone and speaker. The microphone is open only while a voice session " +
+                        "runs, and a notification with Mute and Stop stays visible the whole time, even if you leave the app.",
+                )
+            },
+            confirmButton = { TextButton(onClick = { showRationale = false; onRequestMic() }) { Text("Continue") } },
+            dismissButton = { TextButton(onClick = { showRationale = false }) { Text("Not now") } },
+        )
+    }
 
     // A shared text pre-fills the composer; it is never sent by itself.
     LaunchedEffect(prefill) {
@@ -174,7 +209,64 @@ fun ChatScreen(
                 }
             }
         }
-        Composer(draft, { draft = it }, state, onSend = { onSend(draft); draft = "" }, onStop = onStop)
+        VoiceStrip(state.voice, voiceStatus, reduced, onVoiceMute, onVoiceStop)
+        Composer(draft, { draft = it }, state, onSend = { onSend(draft); draft = "" }, onStop = onStop, onMic = onMic)
+    }
+}
+
+/** The voice session's state under the timeline: an orb that breathes while listening and pulses while speaking. */
+@Composable
+private fun VoiceStrip(voice: VoiceUi, status: VoiceHub.Status, reduced: Boolean, onMute: () -> Unit, onStop: () -> Unit) {
+    val live = voice.phase.live
+    if (!live && voice.phase != VoicePhase.ERROR) {
+        // A failure or an end explained in a line, until tapped away or the next session starts.
+        val note = voice.notes.lastOrNull().orEmpty()
+        var dismissed by remember(note) { mutableStateOf(false) }
+        if (note.isNotBlank() && !dismissed) {
+            Text(
+                note, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().clickable { dismissed = true }.padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+        return
+    }
+    val label = VoiceView.label(voice.phase, status.muted, status.reconnecting, voice.isStopping)
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            .background(KraveinTheme.colors.glass, RoundedCornerShape(14.dp))
+            .border(BorderStroke(1.dp, KraveinTheme.colors.glassBorder), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .semantics { contentDescription = "Voice session: $label" },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        VoiceOrb(voice.phase, muted = status.muted, reduced = reduced)
+        Column(Modifier.weight(1f)) {
+            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            val detail = if (voice.phase == VoicePhase.ERROR) voice.notes.lastOrNull().orEmpty()
+            else if (voice.audio == "laptop") "Using your PC's microphone" else ""
+            if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        // Mute only exists for the phone's own microphone.
+        if (status.active) TextButton(onClick = onMute) { Text(if (status.muted) "Unmute" else "Mute") }
+        OutlinedButton(onClick = onStop, enabled = !voice.isStopping) { Text(if (voice.isStopping) "Stopping…" else "End") }
+    }
+}
+
+@Composable
+private fun VoiceOrb(phase: VoicePhase, muted: Boolean, reduced: Boolean) {
+    val accent = MaterialTheme.colorScheme.primary
+    val accent2 = KraveinTheme.colors.accent2
+    val still = reduced || muted
+    val transition = rememberInfiniteTransition(label = "voice-orb")
+    val speed = if (phase == VoicePhase.SPEAKING) 700 else 2200
+    val t = if (still) 0f else transition.animateFloat(0f, 1f, infiniteRepeatable(tween(speed), RepeatMode.Reverse), label = "orb").value
+    val grow = if (phase == VoicePhase.SPEAKING) 0.3f else 0.18f
+    Canvas(Modifier.size(34.dp).alpha(if (muted) 0.45f else 1f)) {
+        val c = center
+        val base = size.minDimension * 0.30f
+        if (!still) drawCircle(accent.copy(alpha = (1f - t) * 0.5f), radius = base + t * size.minDimension * grow, center = c, style = Stroke(2.dp.toPx()))
+        drawCircle(Brush.radialGradient(listOf(accent2, accent), center = c - Offset(base * 0.3f, base * 0.3f), radius = base * 1.6f), radius = base, center = c)
     }
 }
 
@@ -187,6 +279,7 @@ private fun ChatHeader(state: ChatState, onNew: () -> Unit, onRetry: () -> Unit)
             Link.RECONNECTING -> "Reconnecting…" to KraveinTheme.colors.moderate
             Link.OFFLINE -> "Offline — retrying" to KraveinTheme.colors.destructive
             Link.UNAUTHORIZED -> "Not paired" to KraveinTheme.colors.destructive
+            Link.REPLACED -> "Open in another window" to KraveinTheme.colors.moderate
         }
         Box(Modifier.size(8.dp).background(color, CircleShape))
         Spacer(Modifier.width(8.dp))
@@ -195,6 +288,7 @@ private fun ChatHeader(state: ChatState, onNew: () -> Unit, onRetry: () -> Unit)
             Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (state.link == Link.OFFLINE || state.link == Link.RECONNECTING) TextButton(onClick = onRetry) { Text("Retry now") }
+        if (state.link == Link.REPLACED) TextButton(onClick = onRetry) { Text("Use here") }
         TextButton(onClick = onNew, enabled = !state.busy && state.messages.isNotEmpty()) { Text("New") }
     }
 }
@@ -212,7 +306,7 @@ private fun EmptyChat(state: ChatState) {
 }
 
 @Composable
-private fun Composer(draft: String, onDraft: (String) -> Unit, state: ChatState, onSend: () -> Unit, onStop: () -> Unit) {
+private fun Composer(draft: String, onDraft: (String) -> Unit, state: ChatState, onSend: () -> Unit, onStop: () -> Unit, onMic: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.Bottom,
@@ -228,6 +322,12 @@ private fun Composer(draft: String, onDraft: (String) -> Unit, state: ChatState,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { if (draft.isNotBlank() && !state.busy) onSend() }),
         )
+        // Voice starts from here; once it runs, the strip above is where it is controlled.
+        if (!state.voice.phase.live && draft.isBlank() && !state.busy) {
+            IconButton(onClick = onMic, enabled = state.link == Link.OPEN) {
+                MicGlyph(if (state.link == Link.OPEN) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         if (state.busy) {
             OutlinedButton(onClick = onStop, enabled = !state.cancelling) { Text(if (state.cancelling) "Stopping…" else "Stop") }
         } else {
@@ -235,6 +335,20 @@ private fun Composer(draft: String, onDraft: (String) -> Unit, state: ChatState,
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = if (draft.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+    }
+}
+
+/** A microphone drawn with the canvas: the extended icon set is a large dependency for one glyph. */
+@Composable
+private fun MicGlyph(color: Color) {
+    Canvas(Modifier.size(24.dp).semantics { contentDescription = "Talk to Kravein" }) {
+        val w = size.width
+        val h = size.height
+        val stroke = 2.dp.toPx()
+        drawRoundRect(color, Offset(w * 0.36f, h * 0.08f), androidx.compose.ui.geometry.Size(w * 0.28f, h * 0.5f), androidx.compose.ui.geometry.CornerRadius(w * 0.14f))
+        drawArc(color, 0f, 180f, false, Offset(w * 0.24f, h * 0.22f), androidx.compose.ui.geometry.Size(w * 0.52f, h * 0.46f), style = Stroke(stroke))
+        drawLine(color, Offset(w * 0.5f, h * 0.68f), Offset(w * 0.5f, h * 0.88f), stroke)
+        drawLine(color, Offset(w * 0.36f, h * 0.88f), Offset(w * 0.64f, h * 0.88f), stroke)
     }
 }
 

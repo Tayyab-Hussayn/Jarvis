@@ -62,10 +62,25 @@ class PairingStorage(context: Context) {
     }
 
     fun clearCredential() {
-        prefs.edit().remove(KEY).apply()
+        // A resumable conversation belongs to the pairing; whoever pairs next must not inherit it.
+        val editor = prefs.edit().remove(KEY)
+        prefs.all.keys.filter { it.startsWith(SESSION_PREFIX) }.forEach { editor.remove(it) }
+        editor.apply()
+    }
+
+    /** The resumable-session handle (#111), per device. A bearer of that conversation, so it lives here, encrypted. */
+    fun loadSessionId(deviceId: String): String? = prefs.getString(SESSION_PREFIX + deviceId, null)
+
+    fun saveSessionId(deviceId: String, sessionId: String) {
+        prefs.edit().putString(SESSION_PREFIX + deviceId, sessionId).apply()
+    }
+
+    fun clearSessionId(deviceId: String) {
+        prefs.edit().remove(SESSION_PREFIX + deviceId).apply()
     }
 
     private companion object {
         const val KEY = "phone_credential"
+        const val SESSION_PREFIX = "chat_session_"
     }
 }

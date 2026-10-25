@@ -9,6 +9,11 @@ object ChatRetry {
     /** 1008 is the server's policy-violation close: the UI token was refused. */
     const val CLOSE_POLICY_VIOLATION = 1008
 
+    /** Another socket resumed this session (`server.CLOSE_REPLACED`); retrying would only take it back and forth. */
+    const val CLOSE_REPLACED = 4001
+
+    fun retriesAfter(closeCode: Int): Boolean = closeCode != CLOSE_REPLACED
+
     data class Plan(val link: Link, val delayMs: Long, val attempts: Int)
 
     /**

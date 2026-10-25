@@ -20,6 +20,7 @@ import com.kravein.connect.pairing.PairingStorage
 import com.kravein.connect.ui.KraveinConnectApp
 import com.kravein.connect.ui.theme.KraveinConnectTheme
 import com.kravein.connect.chat.ChatHub
+import com.kravein.connect.voice.VoiceHub
 import com.kravein.connect.web.ShareText
 
 class MainActivity : ComponentActivity() {
@@ -29,6 +30,11 @@ class MainActivity : ComponentActivity() {
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
         // The UI will react by showing the scanner if permission is granted.
+    }
+
+    // Voice: the Chat explained why first; the answer goes straight back to the voice side, which starts or says why not.
+    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        VoiceHub.onMicResult(granted)
     }
 
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -68,6 +74,7 @@ class MainActivity : ComponentActivity() {
                         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                     },
                     onStartService = { maybeStartService() },
+                    onRequestMicPermission = { micPermission.launch(Manifest.permission.RECORD_AUDIO) },
                 )
             }
         }

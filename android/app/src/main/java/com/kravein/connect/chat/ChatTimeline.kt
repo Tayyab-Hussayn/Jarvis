@@ -30,7 +30,8 @@ object ChatTimeline {
     fun rows(messages: List<ChatMessage>): List<TimelineRow> {
         val out = ArrayList<TimelineRow>()
         for (m in messages) when (m) {
-            is ChatMessage.User -> out += TimelineRow.Request(m.id, m.text)
+            // A spoken turn exists before the first word is transcribed; an empty request is not a node.
+            is ChatMessage.User -> if (m.text.isNotBlank()) out += TimelineRow.Request(m.id, m.text)
             is ChatMessage.Assistant -> {
                 val thought = m.thinking.joinToString("\n\n").trim()
                 if (thought.isNotEmpty()) out += TimelineRow.Thinking("${m.id}-think", thought, live = m.pending && m.text.isEmpty())
