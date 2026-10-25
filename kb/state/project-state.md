@@ -37,7 +37,7 @@ updated: 2026-10-23
 
 - Voice transcript in English via Whisper translate #101 (base model downloads on first use). Stuck "running" cards → "unknown" + auto-reconnect #104. Nothing in flight.
 
-- Dynamic LAN address + mDNS `_kravein._tcp` #107 (owner re-runs installer: web.env → auto). Android rediscovers the PC by mDNS #108 (not yet device-tested on another network). Hybrid native app: #109 android native Chat built + committed locally on agent/android (d11d4c0+), JVM/build green; waiting on a device test (Wi-Fi had client isolation; laptop on phone hotspot works for Kravein, but wireless adb needs USB once → `adb tcpip`). Then native voice. Owner's phone has 3 pairings — remove the 2 old ones after the device test. Session ended 2026-10-25 (laptop shutdown).
+- Dynamic LAN address + mDNS `_kravein._tcp` #107 (owner re-runs installer: web.env → auto). Android rediscovers the PC by mDNS #108 (not yet device-tested on another network). Hybrid native app: #109 android native Chat built + committed locally on agent/android (d11d4c0+), JVM/build green; waiting on a device test (Wi-Fi had client isolation; laptop on phone hotspot works for Kravein, but wireless adb needs USB once → `adb tcpip`). Then (plan items 8–10): #110 web resumable sessions (running), native voice with background continuation, floating bubble. Owner's phone has 3 pairings — remove the 2 old ones after the device test. Session ended 2026-10-25 (laptop shutdown).
 
 ## Blockers
 - None.
