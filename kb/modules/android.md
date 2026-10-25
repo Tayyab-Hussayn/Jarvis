@@ -1,7 +1,7 @@
 ---
 type: module
 owner: android
-updated: 2026-10-24
+updated: 2026-10-25
 ---
 
 # android
@@ -15,7 +15,9 @@ Package `com.kravein.connect` under `android/app/src/main/java/com/kravein/conne
 - `network/Http` — the one shared `OkHttpClient`; pairing, `UiSessionClient` (`POST /phone/ui-session` → `UiToken`, 401 = `Refused`) and the phone socket derive from it.
 - `web/` — `WebPolicies.kt` (pure: `UiTokenHolder` in-memory token cache with refresh margin, `NavigationPolicy` paired-origin allow-list + token-free URL rebuild, `PagePermissionPolicy` mic/camera, `VoiceSessionPolicy` (mic active → audio focus; open mic at background → stop) in `VoiceSessionPolicy.kt`, `WebViewLifecyclePolicy` create-on-first-show / destroy after 5 min idle); `KraveinWebController` (the hardened WebView, 401 → new token + reload, Offline/NeedsPairing state, driven by Activity `onStart/onStop`).
 - `ui/theme/` — `KraveinTokens.kt` (pure: the web aurora palette dark+light, radii, type scale, `background(dark)`, `NOTIFICATION_ACCENT`, WCAG `contrast`), `Theme.kt` (`KraveinConnectTheme` follows the system theme; `GradientButton`, `glassBorder`, `KraveinTheme.colors` for glass/danger). Res: `values{,-night}/colors.xml` + `themes.xml` (window ground = web `--bg`), `values-v31` splash attrs, `mipmap-anydpi-v26/ic_launcher` (adaptive + monochrome), `drawable/ic_stat_kravein` (status-bar glyph).
-- `ui/MainShell.kt` — bottom nav Kravein (WebView) · Phone (`ConnectedScreen`) · Settings (server, permissions, unpair, about); `ui/KraveinConnectApp.kt` holds onboarding and wires the shell.
+- `chat/` (#109, native Chat, speaks `/ws` exactly like `web/lib/useKravein.ts`) — pure: `ChatFrames` (strict parse of server frames, builders; unknown frame kinds -> `Ignored`, bad ones -> `Malformed` and dropped), `ChatModel`, `ChatReducer` (turn/timeline state machine: `confirm_resolved` closes cards, `onDisconnected` turns running cards into UNKNOWN and denies pending confirms, cancel flag cleared by `cancelled`), `ChatTimeline` (rows for the connecting-line), `ChatRetry` (backoff 0.5 s..15 s), `Markdown` (bold/code/lists/fences/http(s) links only). Glue: `ChatClient` (UI token via `UiSessionClient`, `WS /ws?token=` over `PinnedHttp`, ping 25 s, reconnect; 401 on ui-session = unpaired), `ChatHub` (process singleton; socket open only while app visible AND paired; shared-text prefill).
+- `ui/ChatScreen.kt` — LazyColumn timeline with the drawn connecting line, pulse on live nodes (off when animator scale = 0), tool cards, inline confirm card, Stop, composer. `ui/MainShell.kt` — bottom nav Chat (default) · Phone · More · Settings; `ui/KraveinConnectApp.kt` holds onboarding and wires the shell.
+- `web/WebActivity` (+ `ui/WebScreen.kt`, `WebProcessPolicy`) — the WebView in `android:process=":web"`, opened from the More tab; the process kills itself 2 min after the activity stops (the only way to free Chromium's renderer).
 - `confirm/` — `Confirmations.kt` (pure: `PendingConfirmation`, `ConfirmationBook` open questions that outlive a socket, `ConfirmationText`, `ReplyOutcome`, `ConfirmationListener`); `ConfirmationNotifier` (HIGH channel `kravein_confirmations`, Approve/Decline via `PendingIntent.getForegroundService`, body opens the Kravein tab through `core/ShellNavigation`).
 - `notice/` — `Notice.kt` (pure: `Notice`, `NoticeKind` reminder|job, `NoticeDedupe`, `NoticeListener`), `NoticeNotifier` (DEFAULT channel `kravein_reminders` "Kravein reminders", tap → Kravein tab).
 - `web/ShareText.kt` (pure: clean/cap/encode shared text), `tile/` (`TileModel` pure, `KraveinTileService`).
@@ -40,7 +42,7 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - Result data (JSON only says "object"): `get_battery {percent, charging}`, `volume_get/set {percent}`, `get_device_info {model, os_version, app_version}`, `flashlight_* {flashlight}`, `launch_app {package}`, `open_url {url}`.
 - Vocabulary guard: `PhoneProtocolJsonTest` reads the JSON via the `kravein.protocol.json` system property (set in `app/build.gradle.kts`, also a task input) and fails if commands, args, frames, error codes or limits differ.
 
-## Web UI tab (#44)
+## Web UI tab (#44; since #109 it is the More tab, in the `:web` process)
 - `POST /phone/ui-session` with the device header → `{token, expires_at, ttl_seconds}`; the page loads at `/?token=…`. The token is memory-only; the web UI moves it into sessionStorage and strips it from the URL, so `lastUrl` kept for rebuilds is token-free.
 - Hardening: JS on, no `addJavascriptInterface`, file/content access off, `shouldOverrideUrlLoading` sends other hosts to the system browser, `shouldInterceptRequest` answers 403 for any sub-resource outside the paired origin. Mic/camera only for the paired origin and only with the Android permission held (else it asks, the page retries).
 - Cleartext: the paired host is only known at runtime, so a static network-security-config cannot name it; the manifest keeps `usesCleartextTraffic` (LAN IP, TLS is #22) and the WebView enforces paired-origin-only. WebSocket traffic from the page is not visible to `shouldInterceptRequest`.
@@ -109,6 +111,8 @@ Needs gitignored `android/local.properties` with `sdk.dir=/home/krawin/Android/S
 - Old gateway protocol (`kravein_connect`: pair_request/authenticate/chat/mDNS discovery) is gone; stale `device_credential`/`last_pairing_offer` prefs are wiped on first start.
 
 ## Gotchas (device)
+- `:web` is a second process with its own copy of every singleton (`AgentStateStore`, `ChatHub`): `WebActivity` reads the credential from `PairingStorage` itself. Unpair does not reach it; it exits when started without a credential.
+- Tool results carry no failure flag on the wire, so a chat tool card is RUNNING / DONE / UNKNOWN (lost on disconnect); `ToolStatus.FAILED` exists but nothing sets it yet.
 - A WebView with no `layoutParams` is measured wrap-content-like and every `vh`/`dvh` unit is 0, so the web UI's `h-dvh` root collapsed and the tab was blank (DOM full, height 0). `build()` sets MATCH_PARENT.
 - Closing an `SSLSocket` writes close_notify = network I/O. `LoopbackTlsPipe.close()` runs from `onDestroy` on the main thread, so it closes the sockets on a background thread (StrictMode crash `NetworkOnMainThreadException` otherwise).
 - Debug builds enable WebView debugging (`FLAG_DEBUGGABLE` only): `adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`, then `curl localhost:9333/json` and the CDP websocket read the page console/DOM.

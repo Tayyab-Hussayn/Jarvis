@@ -1,7 +1,6 @@
 package com.kravein.connect
 
 import android.Manifest
-import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -20,7 +19,7 @@ import com.kravein.connect.core.UiPrefs
 import com.kravein.connect.pairing.PairingStorage
 import com.kravein.connect.ui.KraveinConnectApp
 import com.kravein.connect.ui.theme.KraveinConnectTheme
-import com.kravein.connect.web.KraveinWebController
+import com.kravein.connect.chat.ChatHub
 import com.kravein.connect.web.ShareText
 
 class MainActivity : ComponentActivity() {
@@ -42,29 +41,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val pagePermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
-        // The page asks again on its next attempt; nothing to do with the answer here.
-    }
-
-    private lateinit var web: KraveinWebController
-
-    /** The page asked for the microphone: say why before the system prompt. "Not now" leaves the page with a clean error. */
-    private fun askPagePermissions(permissions: Array<String>) {
-        if (Manifest.permission.RECORD_AUDIO !in permissions) {
-            pagePermissions.launch(permissions)
-            return
-        }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.mic_rationale_title)
-            .setMessage(R.string.mic_rationale_body)
-            .setPositiveButton(R.string.mic_rationale_continue) { _, _ -> pagePermissions.launch(permissions) }
-            .setNegativeButton(R.string.mic_rationale_not_now, null)
-            .show()
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        web = KraveinWebController(applicationContext, requestRuntimePermissions = ::askPagePermissions)
         storage = PairingStorage(this)
         uiPrefs = UiPrefs(this)
         AgentStateStore.setCredential(storage.loadCredential())
@@ -87,7 +65,6 @@ class MainActivity : ComponentActivity() {
                         notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                     },
                     onStartService = { maybeStartService() },
-                    web = web,
                 )
             }
         }
@@ -112,7 +89,8 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this, "Pair this phone with Kravein first, then share again.", Toast.LENGTH_LONG).show()
                     return
                 }
-                web.shareText(text)
+                // Lands in the native composer; it is never sent without the user pressing Send.
+                ChatHub.offer(text)
                 ShellNavigation.requestKraveinTab()
             }
         }
@@ -120,18 +98,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        web.onStart()
+        // The chat socket is open only while the app is visible.
+        ChatHub.onVisible(true)
     }
 
     override fun onStop() {
-        web.onStop()
+        ChatHub.onVisible(false)
         super.onStop()
-    }
-
-    override fun onDestroy() {
-        // Config changes are handled in the manifest, so this is a real exit and the WebView must not leak.
-        if (isFinishing) web.close()
-        super.onDestroy()
     }
 
     private fun maybeStartService() {
