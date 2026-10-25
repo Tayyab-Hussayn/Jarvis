@@ -48,6 +48,15 @@ class SessionResumeTest {
         assertTrue(ChatRetry.retriesAfter(0))
     }
 
+    // The half-open socket: writes still succeed, nothing ever arrives. It must be declared dead, not "connected".
+    @Test fun aSocketThatHasGoneQuietIsDeadAfterTwoPingIntervalsAndMore() {
+        assertFalse(ChatRetry.isDead(lastInboundAt = 0, now = ChatRetry.DEAD_AFTER_MS))
+        assertTrue(ChatRetry.isDead(lastInboundAt = 0, now = ChatRetry.DEAD_AFTER_MS + 1))
+        // A healthy socket hears a pong every interval, so it is never near the limit.
+        assertTrue(ChatRetry.DEAD_AFTER_MS >= 2 * ChatRetry.PING_INTERVAL_MS)
+        assertFalse(ChatRetry.isDead(lastInboundAt = 100_000, now = 100_000 + ChatRetry.PING_INTERVAL_MS))
+    }
+
     @Test fun theSocketStaysOpenForVisibleAppOrLiveVoiceButNeverUnpaired() {
         assertTrue(LinkPolicy.shouldBeOpen(paired = true, appVisible = true, voiceHolds = false))
         assertTrue(LinkPolicy.shouldBeOpen(paired = true, appVisible = false, voiceHolds = true))

@@ -115,10 +115,54 @@ class VoiceControllerTest {
         assertTrue(c.active)
     }
 
-    @Test fun replayWithoutVoiceStopsAServiceThatThoughtItWasLive() {
+    @Test fun replayWithoutVoiceStopsAServiceThatThoughtItWasLiveAndSaysWhy() {
         val c = started()
-        assertEquals(listOf(VoiceEffect.StopService), c.onReplay(ReplayVoice.NONE, canStartService = true))
+        val effects = c.onReplay(ReplayVoice.NONE, canStartService = true)
+        assertEquals(VoiceEffect.StopService, effects.first())
+        assertTrue(effects.last() is VoiceEffect.EndedHere)
         assertFalse(c.active)
+    }
+
+    // ---- the silent stall: "Listening" while nothing listens ----
+
+    @Test fun aWatchdogFailureEndsTheSessionWithTheReasonAndReleasesTheMicrophone() {
+        val c = started()
+        val note = VoiceWatchdog.Reason.NOT_RESPONDING.note
+        assertEquals(listOf(VoiceEffect.SendStop, VoiceEffect.StopService, VoiceEffect.EndedHere(note)), c.onFailure(note))
+        assertFalse(c.active)
+    }
+
+    @Test fun aFailureForASessionThatIsAlreadyOverDoesNothingTwice() {
+        val c = started()
+        c.onFailure("x")
+        assertEquals(emptyList(), c.onFailure("x"))
+    }
+
+    @Test fun aWatchdogFailureCanBeFollowedByARestart() {
+        val c = started()
+        c.onFailure(VoiceWatchdog.Reason.CAPTURE_STALLED.note)
+        assertEquals(listOf(VoiceEffect.StartSession, VoiceEffect.StartService), c.onUserStart(true, true))
+        assertTrue(c.active)
+    }
+
+    // Exactly one live session per phone: a resume re-attaches, it never asks the server for a second one.
+    @Test fun noReplayAndNoReconnectEverStartsASecondSession() {
+        for (active in listOf(true, false)) for (voice in listOf(device, ReplayVoice.NONE, ReplayVoice(true, "live", "laptop"))) for (canStart in listOf(true, false)) {
+            val c = VoiceController()
+            if (active) c.onUserStart(true, true)
+            c.onLink(open = false, now = 0)
+            c.onLink(open = true, now = 1)
+            val effects = c.onReplay(voice, canStart)
+            assertFalse(VoiceEffect.StartSession in effects, "active=$active voice=$voice canStart=$canStart")
+        }
+    }
+
+    @Test fun aSecondStartTapWhileLiveOrReconnectingSendsNothing() {
+        val c = started()
+        c.onLink(open = false, now = 0)
+        assertEquals(emptyList(), c.onUserStart(true, linkOpen = false))
+        c.onLink(open = true, now = 5)
+        assertEquals(emptyList(), c.onUserStart(true, linkOpen = true))
     }
 
     @Test fun aLaptopVoiceSessionIsNeverOurMicrophone() {

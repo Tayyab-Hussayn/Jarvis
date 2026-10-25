@@ -56,6 +56,9 @@ class ChatClient(
     private var attempts = 0
     private var running = false
 
+    /** When anything last arrived on the socket (any frame, any audio chunk). Read by the ping task. */
+    @Volatile private var lastInboundAt = 0L
+
     /** Connect (or keep connected). Safe to call on every foreground. */
     @Synchronized
     fun start(credential: DeviceCredential) {
@@ -233,8 +236,16 @@ class ChatClient(
                 if (socket !== webSocket) return
                 attempts = 0
                 _state.update { ChatReducer.onLink(it, Link.OPEN) }
+                lastInboundAt = now()
                 ping = worker.scheduleWithFixedDelay(
-                    { synchronized(this@ChatClient) { socket?.send(ChatFrames.ping()) } },
+                    {
+                        synchronized(this@ChatClient) {
+                            val ws = socket ?: return@synchronized
+                            // A socket that accepts our pings and answers nothing is not connected. Cancelling it
+                            // goes through `onFailure`, which reconnects and resumes the session.
+                            if (ChatRetry.isDead(lastInboundAt, now())) ws.cancel() else ws.send(ChatFrames.ping())
+                        }
+                    },
                     ChatRetry.PING_INTERVAL_MS, ChatRetry.PING_INTERVAL_MS, TimeUnit.MILLISECONDS,
                 )
             }
@@ -243,6 +254,7 @@ class ChatClient(
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             if (!current(webSocket)) return
+            lastInboundAt = now()
             val frame = ChatFrames.parse(text)
             // A frame we cannot parse is not worth tearing the socket down for.
             if (frame == ServerFrame.Malformed) return
@@ -253,7 +265,9 @@ class ChatClient(
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             // Model audio. Anything that is not a sane PCM chunk is not our server and is dropped.
-            if (!current(webSocket) || bytes.size == 0 || bytes.size > MAX_AUDIO_CHUNK_BYTES) return
+            if (!current(webSocket)) return
+            lastInboundAt = now()
+            if (bytes.size == 0 || bytes.size > MAX_AUDIO_CHUNK_BYTES) return
             voiceSink?.onAudio(bytes.toByteArray())
         }
 

@@ -4,7 +4,16 @@ package com.kravein.connect.chat
 object ChatRetry {
     const val BASE_MS = 500L
     const val MAX_MS = 15_000L
-    const val PING_INTERVAL_MS = 25_000L
+    const val PING_INTERVAL_MS = 15_000L
+
+    /**
+     * Inbound silence after which the link is dead. The server answers every ping, so a healthy socket is never quiet
+     * for two intervals; a Wi-Fi radio that slept in the background leaves a half-open socket that still accepts
+     * writes, and without this the chat (and a voice session on it) would sit "connected" and deaf for good.
+     */
+    const val DEAD_AFTER_MS = 40_000L
+
+    fun isDead(lastInboundAt: Long, now: Long): Boolean = now - lastInboundAt > DEAD_AFTER_MS
 
     /** 1008 is the server's policy-violation close: the UI token was refused. */
     const val CLOSE_POLICY_VIOLATION = 1008

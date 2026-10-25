@@ -96,9 +96,18 @@ class VoiceController {
             ours && canStartService -> { active = true; muted = false; listOf(VoiceEffect.StartService) }
             // The server is listening to a microphone we cannot give it: end it rather than leave it waiting.
             ours -> listOf(VoiceEffect.SendStop, VoiceEffect.Note("Voice stopped: the microphone could not be reopened."))
-            active -> { release(); listOf(VoiceEffect.StopService) }
+            // The server ended it while we were away (past its grace period). Say so: a microphone service that just
+            // vanishes would look like the app crashed.
+            active -> { release(); listOf(VoiceEffect.StopService, VoiceEffect.EndedHere("Voice ended while the phone was offline. Tap the mic to restart.")) }
             else -> emptyList()
         }
+    }
+
+    /** The watchdog found a session that says it is listening and is not. Ends it visibly, with the reason. */
+    fun onFailure(note: String): List<VoiceEffect> {
+        if (!active) return emptyList()
+        release()
+        return listOf(VoiceEffect.SendStop, VoiceEffect.StopService, VoiceEffect.EndedHere(note))
     }
 
     /** The chat socket opened or closed. Returns the time at which a still-down link must end the session, if any. */
@@ -113,7 +122,7 @@ class VoiceController {
         val lost = lostAt ?: return emptyList()
         if (!active || now - lost < RECONNECT_LIMIT_MS) return emptyList()
         release()
-        return listOf(VoiceEffect.StopService, VoiceEffect.EndedHere("Voice stopped: Kravein could not be reached."))
+        return listOf(VoiceEffect.StopService, VoiceEffect.EndedHere("Voice stopped: Kravein could not be reached. Tap the mic to restart."))
     }
 
     private fun release() {

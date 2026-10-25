@@ -24,7 +24,11 @@ object VoiceHub : ChatClient.VoiceSink {
     /** What the screens, the notification and the bubble show about the local side of voice. */
     data class Status(val active: Boolean = false, val muted: Boolean = false, val reconnecting: Boolean = false)
 
+    private const val HEALTH_PERIOD_MS = 5_000L
+
     private val controller = VoiceController()
+    private val watchdog = VoiceWatchdog()
+    private var ticker: ScheduledFuture<*>? = null
     private val worker = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "kravein-voice").apply { isDaemon = true } }
     private var deadline: ScheduledFuture<*>? = null
     private var linkOpen = false
@@ -39,8 +43,17 @@ object VoiceHub : ChatClient.VoiceSink {
 
     @Volatile private var app: Context? = null
 
-    /** Set by the service while it runs; receives model audio. */
-    @Volatile var audio: VoiceAudio? = null
+    /** The one player this phone may have; receives model audio. Replacing it releases the old one first. */
+    private val player = SinglePlayer<VoiceAudio> { it.stop() }
+
+    /** Empty the slot, stopping whatever was playing. Called before a service builds a new player. */
+    fun releaseAudio() = player.replace(null)
+
+    /** The service built [audio]; it becomes the only player. */
+    fun attachAudio(audio: VoiceAudio) = player.replace(audio)
+
+    /** The service that owned [audio] is going away; a successor's player is left alone. */
+    fun detachAudio(audio: VoiceAudio) = player.clearIf(audio)
 
     fun install(context: Context) {
         app = context.applicationContext
@@ -64,20 +77,31 @@ object VoiceHub : ChatClient.VoiceSink {
         else ChatHub.client.voiceEnded("Voice needs the microphone. You can allow it in the app's permissions.")
     }
 
+    // -- health (audio thread, service) ---------------------------------------------------------------------------
+
+    /** One captured microphone frame. Called on the capture thread, so it only touches the watchdog. */
+    fun onMic(speech: Boolean) = watchdog.onMicFrame(System.currentTimeMillis(), speech)
+
+    /** Android's own report that it is (or no longer is) silencing our capture. */
+    fun onMicSilenced(silenced: Boolean) = watchdog.onMicSilenced(System.currentTimeMillis(), silenced)
+
     // -- ChatClient.VoiceSink (OkHttp threads) --------------------------------------------------------------------
 
     override fun onFrame(frame: ServerFrame, state: ChatState) {
+        // Anything the voice side says proves the session is alive; the watchdog only fires when speech goes unanswered.
+        if (frame is ServerFrame.VoiceState || frame == ServerFrame.AudioClear) watchdog.onServerActivity()
         run {
             when (frame) {
                 is ServerFrame.Replay -> apply(controller.onReplay(frame.voice, canStartService()))
-                ServerFrame.AudioClear -> audio?.clear()
+                ServerFrame.AudioClear -> player.player?.clear()
                 else -> apply(controller.onFrame(frame, state))
             }
         }
     }
 
     override fun onAudio(pcm: ByteArray) {
-        audio?.play(pcm)
+        watchdog.onServerActivity()
+        player.player?.play(pcm)
     }
 
     override fun onLink(open: Boolean) = run {
@@ -118,6 +142,21 @@ object VoiceHub : ChatClient.VoiceSink {
     private fun publish() {
         _status.value = Status(controller.active, controller.muted, reconnecting = controller.active && !linkOpen)
         ChatHub.setVoiceHolds(controller.active)
+        // The health check runs only while a session does: no timer for an idle app.
+        if (controller.active && ticker == null) {
+            watchdog.start(System.currentTimeMillis())
+            ticker = worker.scheduleWithFixedDelay({ run { checkHealth() } }, HEALTH_PERIOD_MS, HEALTH_PERIOD_MS, TimeUnit.MILLISECONDS)
+        } else if (!controller.active) {
+            ticker?.cancel(false)
+            ticker = null
+        }
+    }
+
+    /** A session that says "Listening" while nothing listens ends here, visibly, with the reason. */
+    private fun checkHealth() {
+        if (!controller.active) return
+        val verdict = watchdog.check(System.currentTimeMillis())
+        if (verdict is VoiceWatchdog.Verdict.Failed) apply(controller.onFailure(verdict.reason.note))
     }
 
     private fun apply(effects: List<VoiceEffect>) {
@@ -130,9 +169,13 @@ object VoiceHub : ChatClient.VoiceSink {
                 ChatHub.client.voiceEnded("Not connected to Kravein.")
             }
             VoiceEffect.SendStop -> ChatHub.client.stopVoice()
-            VoiceEffect.StartService -> VoiceService.start(ctx)
+            VoiceEffect.StartService -> { VoiceNotice.clear(ctx); VoiceService.start(ctx) }
             VoiceEffect.StopService -> VoiceService.stop(ctx)
-            is VoiceEffect.EndedHere -> ChatHub.client.voiceEnded(effect.note)
+            is VoiceEffect.EndedHere -> {
+                ChatHub.client.voiceEnded(effect.note)
+                // With the app in front the strip already says it; out of sight, a notification is the only trace.
+                if (!ChatHub.foreground.value) VoiceNotice.postStopped(ctx, effect.note)
+            }
             is VoiceEffect.Note -> ChatHub.client.voiceEnded(effect.text)
         }
     }

@@ -48,6 +48,7 @@ class VoiceService : Service() {
     private var focus: AudioFocusRequest? = null
     private var bubble: BubbleOverlay? = null
     private var begun = false
+    private var recordingCallback: AudioManager.AudioRecordingCallback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -78,10 +79,13 @@ class VoiceService : Service() {
             fail("Voice could not start: Android did not allow a microphone service.")
             return
         }
+        // Whatever played before is stopped before anything new is built: one speaker per phone, always.
+        VoiceHub.releaseAudio()
         val voice = VoiceAudio(
             send = { frame, length -> ChatHub.client.sendAudio(frame, length) },
             live = { ChatHub.client.state.value.voice.phase != VoicePhase.OFF },
             muted = { VoiceHub.status.value.muted },
+            onMic = VoiceHub::onMic,
         )
         try {
             voice.start()
@@ -91,9 +95,28 @@ class VoiceService : Service() {
             return
         }
         audio = voice
-        VoiceHub.audio = voice
+        VoiceHub.attachAudio(voice)
         requestFocus()
+        watchSilencing(voice)
         render()
+    }
+
+    /**
+     * Android can keep delivering frames while replacing them with zeros (another app took the microphone, a call, an
+     * OEM background rule). The frames look fine, so only the platform's own report reveals it; the watchdog ends the
+     * session if it lasts. API 29+, where `isClientSilenced` exists.
+     */
+    private fun watchSilencing(voice: VoiceAudio) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        val manager = getSystemService(AudioManager::class.java)
+        val callback = object : AudioManager.AudioRecordingCallback() {
+            override fun onRecordingConfigChanged(configs: MutableList<android.media.AudioRecordingConfiguration>) {
+                val mine = configs.firstOrNull { it.clientAudioSessionId == voice.sessionId } ?: return
+                VoiceHub.onMicSilenced(mine.isClientSilenced)
+            }
+        }
+        manager.registerAudioRecordingCallback(callback, null)
+        recordingCallback = callback
     }
 
     private fun fail(note: String) {
@@ -195,7 +218,7 @@ class VoiceService : Service() {
         // focus to them never ends the session — opening an app is exactly what voice is for.
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(
-                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANT).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build(),
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build(),
             )
             .setOnAudioFocusChangeListener { }
             .build()
@@ -208,7 +231,9 @@ class VoiceService : Service() {
         scope.cancel()
         bubble?.remove()
         bubble = null
-        VoiceHub.audio = null
+        audio?.let(VoiceHub::detachAudio)
+        recordingCallback?.let { getSystemService(AudioManager::class.java).unregisterAudioRecordingCallback(it) }
+        recordingCallback = null
         audio?.stop()
         audio = null
         focus?.let { getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }
