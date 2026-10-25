@@ -125,7 +125,9 @@ The principles behind all of them:
 - **A prompt instruction is not enforcement.** Three times a model worked around a sentence in the
   system prompt. Anything that must hold goes in code, with a test.
 - **Every failure path of a confirmation denies.** Timeouts, dropped sockets, cancels, unknown ids,
-  unattended sessions. Nothing may approve its own destructive action.
+  unattended sessions. Nothing may approve its own destructive action. (Since #111 a dropped socket
+  keeps the confirmation open until its own timeout so a resumed client can answer — it still
+  denies then, and nothing approves while detached.)
 - **Never resolve an ambiguous target by taking the first match** — refuse and list candidates, and
   make every confirmation name what it acts on.
 - **Verify the effect, not the acknowledgement.** Hyprland answering `ok`, ydotool exiting 0 and a
