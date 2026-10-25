@@ -16,10 +16,12 @@ WorkingDirectory=%h/code/Kravein
 # required (no leading "-"): without it the host expands to nothing and
 # `--host` would swallow the next argument, so fail at start instead.
 # The port is always 8787 (owner rule: one server, one port).
-# --host is explicit because with several private addresses `--lan` alone
-# refuses to guess which network to expose.
+# KRAVEIN_LAN_HOST is `auto` (or an address, kept only while this machine
+# still holds it): --follow re-binds when the laptop changes network, so a
+# stale address never strands the server. With several private addresses the
+# default-route one wins; with no way to tell, it refuses and is retried.
 EnvironmentFile=%h/.config/kravein/web.env
-ExecStart=%h/code/Kravein/.venv/bin/python -m kravein serve --lan --host ${KRAVEIN_LAN_HOST} --no-open
+ExecStart=%h/code/Kravein/.venv/bin/python -m kravein serve --lan --follow --host ${KRAVEIN_LAN_HOST} --no-open
 
 # On-failure, not always: `systemctl --user stop` must stay stopped.
 Restart=on-failure

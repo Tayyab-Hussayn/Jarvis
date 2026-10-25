@@ -37,6 +37,8 @@ updated: 2026-10-23
 
 - Voice transcript in English via Whisper translate #101 (base model downloads on first use). Stuck "running" cards → "unknown" + auto-reconnect #104. Nothing in flight.
 
+- Dynamic LAN address + mDNS `_kravein._tcp` #107 (owner re-runs installer: web.env → auto). #106 android: rediscover PC by mDNS after IP change.
+
 ## Blockers
 - None.
 

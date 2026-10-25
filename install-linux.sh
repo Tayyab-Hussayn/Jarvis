@@ -263,62 +263,20 @@ case ":$PATH:" in
      echo "    echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.profile" ;;
 esac
 
-# The LAN address comes from the app's own detection (webauth.local_addresses)
-# so the installer and `serve --lan` cannot disagree about what counts as a
-# private address, and docker/bridge interfaces are not offered. Several
-# candidates are never resolved by taking the first: an address already in
-# web.env is kept if still valid, otherwise the owner picks.
+# The server follows the network (KRAVEIN_LAN_HOST=auto): it binds whatever
+# private, non-virtual address the laptop has now and re-binds when that
+# changes, so nothing here has to pick one — an address written into web.env
+# went stale on every other Wi-Fi. The list below is only a courtesy check.
 WEB_ENV="$CONFIG_DIR/web.env"
-mapfile -t LAN_ADDRS < <("$VENV/bin/python" -c \
-  "from kravein import webauth; print(*webauth.local_addresses(), sep='\n')" 2>/dev/null || true)
-# --- lan filter begin
-# Container and VM bridges hold private addresses too (docker0 is 172.17.0.1)
-# but no phone can reach the server through them; offering one as choice 1 got
-# it picked on the owner's machine. Dropped by interface name; without `ip`
-# nothing is dropped, which only means the owner sees the full list.
-filter_lan_addrs() {
-  local addr iface
-  for addr in "$@"; do
-    iface="$(ip -4 -o addr show 2>/dev/null | awk -v a="$addr" '{split($4, p, "/"); if (p[1] == a) {print $2; exit}}')"
-    case "$iface" in
-      docker*|br-*|veth*|virbr*|vmnet*|vboxnet*|lxcbr*|lxdbr*|podman*|cni*|flannel*|cali*|tun*|tap*) continue ;;
-    esac
-    printf '%s\n' "$addr"
-  done
-}
-# --- lan filter end
-mapfile -t LAN_ADDRS < <(filter_lan_addrs "${LAN_ADDRS[@]}")
-LAN_HOST=""
-CURRENT_HOST=""
-[[ -f "$WEB_ENV" ]] && CURRENT_HOST="$(sed -n 's/^KRAVEIN_LAN_HOST=//p' "$WEB_ENV" | head -n1)"
-if [[ ${#LAN_ADDRS[@]} -eq 0 || -z "${LAN_ADDRS[0]:-}" ]]; then
-  warn "no private LAN address found — web.env not written; connect to a network and re-run."
-elif [[ ${#LAN_ADDRS[@]} -eq 1 ]]; then
-  LAN_HOST="${LAN_ADDRS[0]}"
-else
-  for addr in "${LAN_ADDRS[@]}"; do
-    [[ "$addr" == "$CURRENT_HOST" ]] && LAN_HOST="$addr"
-  done
-  if [[ -z "$LAN_HOST" ]]; then
-    echo "    More than one private address:"
-    for i in "${!LAN_ADDRS[@]}"; do echo "      $((i + 1))) ${LAN_ADDRS[$i]}"; done
-    read -r -p "  Which one? [number] " pick
-    if [[ "$pick" =~ ^[0-9]+$ ]] && (( pick >= 1 && pick <= ${#LAN_ADDRS[@]} )); then
-      LAN_HOST="${LAN_ADDRS[$((pick - 1))]}"
-    else
-      warn "no valid choice — web.env not written."
-    fi
-  fi
-fi
-
-mkdir -p "$JOBS_UNITS"
-if [[ -n "$LAN_HOST" ]]; then
-  mkdir -p "$CONFIG_DIR"
-  # Owner-only before the content lands, so the file is never world-readable.
-  ( umask 077; printf 'KRAVEIN_LAN_HOST=%s\n' "$LAN_HOST" > "$WEB_ENV" )
-  chmod 600 "$WEB_ENV"
-  ok "web.env -> $LAN_HOST"
-fi
+"$VENV/bin/python" -c \
+  "from kravein import discovery; a = discovery.interface_addresses(); print(*(f'{i} {ip}' for i, ip in a), sep='\n') if a else exit(1)" \
+  >/dev/null 2>&1 \
+  || warn "no private LAN address right now — the server will wait for a network."
+mkdir -p "$JOBS_UNITS" "$CONFIG_DIR"
+# Owner-only before the content lands, so the file is never world-readable.
+( umask 077; printf 'KRAVEIN_LAN_HOST=auto\n' > "$WEB_ENV" )
+chmod 600 "$WEB_ENV"
+ok "web.env -> auto (follows the network)"
 # Copied with the real repo path substituted, as the other units are.
 sed "s|%h/code/Kravein|$REPO_DIR|g" \
   "$REPO_DIR/systemd/kravein-web.service" > "$JOBS_UNITS/kravein-web.service"

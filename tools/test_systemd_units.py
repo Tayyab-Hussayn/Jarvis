@@ -25,11 +25,13 @@ def _unit() -> dict[str, list[str]]:
     return keys
 
 
-def test_web_unit_runs_lan_serve_with_explicit_host():
+def test_web_unit_runs_lan_serve_following_the_network():
+    # --follow (#105): KRAVEIN_LAN_HOST is `auto` or a preference, and the
+    # server re-binds when the laptop changes network.
     exec_start = _unit()["ExecStart"][0]
     assert exec_start.startswith("%h/code/Kravein/.venv/bin/python")
     assert exec_start.endswith(
-        "-m kravein serve --lan --host ${KRAVEIN_LAN_HOST} --no-open")
+        "-m kravein serve --lan --follow --host ${KRAVEIN_LAN_HOST} --no-open")
     assert "--port" not in exec_start and "KRAVEIN_PORT" not in INSTALLER.read_text()
 
 
@@ -81,7 +83,7 @@ def test_installer_web_step_installs_but_never_enables():
 
 def test_installer_wrapper_execs_venv_python_and_warns_off_path(tmp_path):
     step = _web_step()
-    block = step.split("# The LAN address")[0]     # wrapper + PATH check only
+    block = step.split("# The server follows the network")[0]   # wrapper + PATH check only
     assert 'exec "%s/bin/python" -m kravein "$@"' in block
     assert "is not on your PATH" in block
     script = tmp_path / "wrap.sh"
@@ -106,53 +108,24 @@ def test_installer_wrapper_execs_venv_python_and_warns_off_path(tmp_path):
     assert wrapper.read_text() == "#!/bin/sh\necho mine\n"
 
 
-def _run_filter(tmp_path, ip_output, addrs):
-    """Run the installer's filter_lan_addrs against a fake `ip`."""
+# The docker/bridge address filter moved out of the installer into
+# kravein/discovery.py (#105); tests/engine/test_discovery.py covers it
+# (virtual interfaces, loopback, link-local).
+
+
+def test_installer_writes_auto_and_nothing_else_to_web_env(tmp_path):
     step = _web_step()
-    func = step.split("# --- lan filter begin")[1].split("# --- lan filter end")[0]
-    fake = tmp_path / "bin"
-    fake.mkdir(exist_ok=True)
-    ip = fake / "ip"
-    ip.write_text(f"#!/bin/sh\ncat <<'EOF'\n{ip_output}\nEOF\n")
-    ip.chmod(0o755)
-    script = tmp_path / "filter.sh"
-    script.write_text("set -euo pipefail\n" + func + f'filter_lan_addrs {" ".join(addrs)}\n')
-    out = subprocess.run(["bash", str(script)], capture_output=True, text=True,
-                         env={"PATH": f"{fake}:/usr/bin:/bin"}, check=True).stdout
-    return out.split()
-
-
-IP_OUT = (
-    "2: wlan0    inet 192.168.1.20/24 brd 192.168.1.255 scope global wlan0\n"
-    "3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\n"
-    "4: br-1a2b3c    inet 172.18.0.1/16 scope global br-1a2b3c\n"
-    "5: virbr0    inet 192.168.122.1/24 scope global virbr0\n"
-)
-
-
-def test_installer_drops_docker_and_bridge_addresses(tmp_path):
-    kept = _run_filter(tmp_path, IP_OUT,
-                       ["172.17.0.1", "172.18.0.1", "192.168.1.20", "192.168.122.1"])
-    assert kept == ["192.168.1.20"]
-
-
-def test_installer_filter_keeps_all_when_interface_unknown(tmp_path):
-    # An address `ip` does not list is kept: filtering must never leave the owner with nothing.
-    assert _run_filter(tmp_path, "", ["10.0.0.5"]) == ["10.0.0.5"]
-
-
-def test_installer_writes_only_the_host_to_web_env(tmp_path):
-    step = _web_step()
-    block = step.split("mkdir -p \"$JOBS_UNITS\"")[1].split("# Copied with")[0]
+    block = step.split('mkdir -p "$JOBS_UNITS" "$CONFIG_DIR"')[1].split("# Copied with")[0]
     env = tmp_path / "web.env"
-    env.write_text("KRAVEIN_LAN_HOST=10.0.0.1\nKRAVEIN_PORT=8788\n")   # stale override
+    env.write_text("KRAVEIN_LAN_HOST=10.0.0.1\nKRAVEIN_PORT=8788\n")   # stale address + override
     script = tmp_path / "w.sh"
     script.write_text(
-        'set -euo pipefail\nok(){ :; }\nLAN_HOST="192.168.1.20"\n'
-        f'CONFIG_DIR="{tmp_path}"\nWEB_ENV="{env}"\n' + block)
+        'set -euo pipefail\nok(){ :; }\n'
+        f'JOBS_UNITS="{tmp_path}/units"\nCONFIG_DIR="{tmp_path}"\nWEB_ENV="{env}"\n' + block)
     subprocess.run(["bash", str(script)], check=True, capture_output=True)
-    # Port is fixed at 8787 by the owner: nothing but the host is written.
-    assert env.read_text() == "KRAVEIN_LAN_HOST=192.168.1.20\n"
+    # Port is fixed at 8787 by the owner; the address follows the network, so
+    # an address written by an older install is replaced, not kept.
+    assert env.read_text() == "KRAVEIN_LAN_HOST=auto\n"
     assert oct(env.stat().st_mode & 0o777) == "0o600"
 
 

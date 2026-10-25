@@ -609,6 +609,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="bind this machine's private LAN address so a phone "
                             "on the same network can reach it (HTTPS with a "
                             "self-signed certificate unless --no-tls)")
+    serve.add_argument("--follow", action="store_true",
+                       help="with --lan, follow this machine's address: --host is "
+                            "a preference (`auto`, or an address; one no longer "
+                            "held counts as auto) and the listener moves when "
+                            "the network changes. `--host auto` implies it")
     serve.add_argument("--no-tls", action="store_true",
                        help="with --lan, serve plain HTTP instead of HTTPS")
     serve.add_argument("--port", type=int, default=8787)
@@ -811,7 +816,7 @@ def main(argv: list[str] | None = None) -> int:
         return _whatsapp_command(args.action)
 
     if command == "serve":
-        from . import service, webauth
+        from . import discovery, service, webauth
         from .server import serve as serve_web
 
         if service.port_busy(args.port):
@@ -819,7 +824,22 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         host = args.host
-        if getattr(args, "lan", False):
+        follow = None
+        if getattr(args, "lan", False) and (
+            args.follow or args.host == discovery.AUTO
+        ):
+            follow = args.host if args.host != "127.0.0.1" else discovery.AUTO
+            host = discovery.pick_address(follow)
+            if host is None:
+                # Under systemd this exits non-zero and is retried every few
+                # seconds, which is the "wait for a network" behaviour.
+                print(red("No usable private LAN address right now "
+                          "(or several with no default route)."))
+                for iface, ip in discovery.interface_addresses():
+                    print(f"  {ip}  ({iface})")
+                return 1
+            print(f"Serving on {host} ({'auto' if follow == discovery.AUTO else 'preferred'}).")
+        elif getattr(args, "lan", False):
             # Resolve here rather than passing a sentinel down, so the address
             # actually being exposed is printed before anything binds.
             addresses = webauth.local_addresses()
@@ -832,7 +852,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return serve_web(
             host=host, port=args.port, open_browser=not args.no_open,
-            tls=not getattr(args, "no_tls", False),
+            tls=not getattr(args, "no_tls", False), follow=follow,
         )
 
     parser.print_help()
