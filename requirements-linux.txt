@@ -73,6 +73,10 @@ send2trash>=1.8
 fastapi>=0.110
 uvicorn[standard]>=0.27
 cryptography>=42.0
+# mDNS (`_kravein._tcp`) so a phone finds the server after the laptop changes
+# network. Pure Python, LGPL-2.1, the mDNS engine of Home Assistant; the
+# server runs without it (discovery just stays off).
+zeroconf>=0.132
 qrcode[pil]>=7.4
 python-multipart>=0.0.9
 

@@ -97,7 +97,25 @@ def require_installed() -> str:
             "The web service is not installed (no kravein-web unit or web.env). Run:\n"
             f"  {_installer_hint()}"
         )
-    return lan_host()
+    return current_host()
+
+
+def current_host() -> str:
+    """The address the server is on *now*: web.env may say `auto`, or name an
+    address this machine no longer holds (the server follows the network and
+    re-binds within seconds, so the CLI must look where it is today)."""
+    from . import discovery
+
+    configured = lan_host()
+    try:
+        resolved = discovery.pick_address(configured)
+    except Exception:
+        resolved = None
+    if resolved:
+        return resolved
+    if configured == discovery.AUTO:
+        raise ServiceError("No usable private LAN address right now. Connect to a Wi-Fi/Ethernet network.")
+    return configured
 
 
 def _systemctl(*args: str, timeout: float = 30) -> shell.Result:
@@ -268,6 +286,8 @@ def status() -> int:
         print("  kravein start")
         return 3
     line = f"Kravein web server: running at {base_url(host)}"
+    if lan_host() == "auto":
+        line += "  [address follows the network]"
     if state["uptime"] is not None:
         line += f"  (up {_duration(state['uptime'])})"
     print(line)
@@ -285,6 +305,8 @@ def status() -> int:
     if mode == "auto":
         extra = f" (auto-approve ON, {_duration(policy.get('seconds_left', 0))} left)"
     print(f"confirmations: {mode}{extra}")
+    # Said plainly: a private LAN address is not reachable from mobile data.
+    print("reach: phones on the same Wi-Fi/LAN only (found automatically over mDNS)")
     return 0
 
 
