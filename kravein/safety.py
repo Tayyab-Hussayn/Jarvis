@@ -498,12 +498,38 @@ def enforce_calls() -> int:
     return getattr(_local, "enforce_calls", 0)
 
 
+class TurnMemory:
+    """What the owner has refused during one request.
+
+    ``targets`` is the per-target denial memory; a decline never locks out
+    *other* targets ("delete A, keep B" must work). ``retried_declined`` is set
+    when a call is refused because its target was already declined: the model
+    is working around a "no", so the agent loop ends the turn rather than
+    spend more rounds on it. Live voice runs each tool call in its own scope,
+    so it holds one of these across the model turn and passes it to
+    ``confirmer_scope``.
+    """
+
+    def __init__(self) -> None:
+        self.targets: set[str] = set()
+        self.retried_declined = False
+
+
+def _memory() -> TurnMemory:
+    memory = getattr(_local, "memory", None)
+    if memory is None:
+        memory = TurnMemory()
+        _local.memory = memory
+    return memory
+
+
 def _denied_targets() -> set[str]:
-    targets = getattr(_local, "denied_targets", None)
-    if targets is None:
-        targets = set()
-        _local.denied_targets = targets
-    return targets
+    return _memory().targets
+
+
+def retried_declined_target() -> bool:
+    """True once a call was refused for retrying a target declined this turn."""
+    return _memory().retried_declined
 
 
 def _target_keys(action_desc: str) -> set[str]:
@@ -547,21 +573,22 @@ class confirmer_scope:
     said in and never leaks into the next one.
     """
 
-    def __init__(self, fn: Confirmer | None):
+    def __init__(self, fn: Confirmer | None, memory: TurnMemory | None = None):
         self._fn = fn
+        self._memory = memory if memory is not None else TurnMemory()
         self._previous: Confirmer | None = None
-        self._previous_denials: set[str] | None = None
+        self._previous_memory: TurnMemory | None = None
 
     def __enter__(self) -> "confirmer_scope":
         self._previous = getattr(_local, "confirmer", None)
-        self._previous_denials = getattr(_local, "denied_targets", None)
+        self._previous_memory = getattr(_local, "memory", None)
         _local.confirmer = self._fn
-        _local.denied_targets = set()
+        _local.memory = self._memory
         return self
 
     def __exit__(self, *exc_info) -> None:
         _local.confirmer = self._previous
-        _local.denied_targets = self._previous_denials
+        _local.memory = self._previous_memory
 
 
 def describe_targets(*parts: str) -> list[str]:
@@ -766,6 +793,9 @@ def enforce(
     keys = set(targets) if targets else _target_keys(action_desc)
     already_denied = keys & _denied_targets()
     if already_denied:
+        # Tell the agent loop the model is retrying something the owner
+        # refused, so it can end the turn instead of spending more rounds.
+        _memory().retried_declined = True
         audit.record(
             "safety.bypass_attempt",
             skill=skill, source=source, action=action_desc,
