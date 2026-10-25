@@ -323,6 +323,19 @@ def test_a_second_socket_takes_the_session_over(client, monkeypatch):
             assert _until(second, _t("pong"))
 
 
+def test_the_oldest_detached_session_is_evicted_past_the_cap(client, monkeypatch):
+    monkeypatch.setattr(events, "MAX_HELD_SESSIONS", 2)
+    ids = []
+    for _ in range(3):
+        with _connect(client) as ws:
+            ids.append(_frame(ws)["session_id"])
+    assert len(client.app.state.sessions) == 2
+    with _connect(client, ids[0]) as ws:
+        assert _frame(ws)["resumed"] is False
+    with _connect(client, ids[2]) as ws:
+        assert _frame(ws)["resumed"] is True
+
+
 def test_reset_clears_what_a_resume_would_replay(client, monkeypatch):
     _stub_llm(monkeypatch, [_answer("hello")])
     with _connect(client) as ws:

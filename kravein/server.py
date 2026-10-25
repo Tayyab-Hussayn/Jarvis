@@ -469,6 +469,11 @@ def create_app(token: str | None = None) -> Any:
             await held.take_over()
             audit.record("web.resumed", principal=principal)
         else:
+            # Bound the memory a client that never comes back can hold: past
+            # the cap the oldest detached session goes (attached ones stay).
+            detached = [h for h in store.items() if h.client is None]
+            while len(store) >= events.MAX_HELD_SESSIONS and detached:
+                detached.pop(0).expire("evicted")
             held = _Held(store.new_id(), principal, loop, store)
             store.add(held)
             events.register(held.session)
