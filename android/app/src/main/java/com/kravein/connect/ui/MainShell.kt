@@ -33,6 +33,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -109,6 +110,8 @@ fun MainShell(
 @Composable
 private fun KraveinWebTab(credential: DeviceCredential, web: KraveinWebController, onPairAgain: () -> Unit) {
     val state by web.state.collectAsState()
+    // The PC may be found at a new address; the page, token and loopback pipe belong to the old one.
+    LaunchedEffect(credential.host, credential.port) { web.endpointChanged(credential) }
     // Back walks the page's own history first, and only then leaves the app.
     // canGoBack() is not observable, so the handler stays on and finishes the activity itself when there is no history.
     val activity = LocalContext.current as? Activity
@@ -130,10 +133,12 @@ private fun KraveinWebTab(credential: DeviceCredential, web: KraveinWebControlle
                 if (current == WebUiState.Loading) {
                     LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceVariant)
                 }
-                AndroidView(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    factory = { web.viewFor(credential) },
-                )
+                key(credential.host, credential.port) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        factory = { web.viewFor(credential) },
+                    )
+                }
                 OutlinedButton(onClick = { web.reload() }, modifier = Modifier.fillMaxWidth()) { Text("Reload") }
             }
         }

@@ -21,6 +21,13 @@ object AgentStateStore {
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
+    private val _discovery = MutableStateFlow(DiscoveryStatus.IDLE)
+    val discovery: StateFlow<DiscoveryStatus> = _discovery.asStateFlow()
+
+    fun setDiscovery(status: DiscoveryStatus) {
+        _discovery.value = status
+    }
+
     fun setConnectionState(state: ConnectionState) {
         _connectionState.value = state
     }

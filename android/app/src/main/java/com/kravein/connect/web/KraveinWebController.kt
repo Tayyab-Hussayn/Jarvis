@@ -194,6 +194,13 @@ class KraveinWebController(
         }
     }
 
+    /** The PC answered at a new address (found again on this network): drop the page built for the old one. */
+    fun endpointChanged(newCredential: DeviceCredential) {
+        val current = credential ?: return
+        if (current.host == newCredential.host && current.port == newCredential.port) return
+        bind(newCredential)
+    }
+
     /** Unpaired or credential changed: nothing of the old session may remain. */
     fun reset() {
         destroy()
