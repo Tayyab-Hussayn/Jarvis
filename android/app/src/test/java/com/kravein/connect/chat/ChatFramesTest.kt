@@ -42,17 +42,65 @@ class ChatFramesTest {
     }
 
     @Test fun uninterestingFramesAreIgnoredNotErrors() {
-        assertEquals(ServerFrame.Ignored, ChatFrames.parse("""{"t":"voice_state","phase":"idle","text":""}"""))
         assertEquals(ServerFrame.Ignored, ChatFrames.parse("""{"t":"job_event","id":"j","title":"t","text":"x","failed":false}"""))
     }
 
-    // Server #111 (resumable sessions) added fields to `hello` and the `replay`/`user_turn` frames; a phone that does
-    // not resume yet must neither choke on the new hello nor mistake a replay for live conversation.
-    @Test fun resumableSessionFramesDoNotBreakTheClient() {
+    // Server #111 (resumable sessions): the session id in `hello`, the `replay` and the `user_turn` frames inside it.
+    @Test fun helloCarriesTheSessionHandle() {
         val hello = ChatFrames.parse("""{"t":"hello","assistant_name":"Kravein","skills":168,"provider":"p","model":"m","environment":"e","session_id":"s1","resumed":true,"session_ttl_minutes":30}""")
-        assertEquals(ServerFrame.Hello("Kravein", "m"), hello)
-        assertEquals(ServerFrame.Ignored, ChatFrames.parse("""{"t":"replay","frames":[{"t":"user_turn","id":"t1","text":"hi"}],"busy":false,"voice":{"active":false,"mode":"","audio":""}}"""))
-        assertEquals(ServerFrame.Ignored, ChatFrames.parse("""{"t":"user_turn","id":"t1","text":"hi"}"""))
+        assertEquals(ServerFrame.Hello("Kravein", "m", sessionId = "s1", resumed = true), hello)
+        // A server that predates resume says nothing: no handle, resumed unknown (not "false").
+        assertEquals(ServerFrame.Hello("Kravein", "m", null, null), ChatFrames.parse("""{"t":"hello","assistant_name":"Kravein","model":"m"}"""))
+        // A handle that is not a short string is not ours to store.
+        assertEquals(null, (ChatFrames.parse("""{"t":"hello","model":"m","session_id":"${"x".repeat(200)}"}""") as ServerFrame.Hello).sessionId)
+        assertEquals(null, (ChatFrames.parse("""{"t":"hello","model":"m","session_id":"  "}""") as ServerFrame.Hello).sessionId)
+    }
+
+    @Test fun replayCarriesTheRecordedConversation() {
+        val replay = ChatFrames.parse(
+            """{"t":"replay","busy":true,"voice":{"active":true,"mode":"live","audio":"device"},"frames":[
+                {"t":"user_turn","id":"t1","text":"hi"},{"t":"turn_start","id":"t1"},{"t":"answer","id":"t1","text":"yo"},
+                {"t":"voice_state","phase":"heard","text":"open youtube"},{"t":"job_event","id":"j"},{"nonsense":1},"junk"]}""",
+        )
+        assertIs<ServerFrame.Replay>(replay)
+        assertEquals(true, replay.busy)
+        assertEquals(ReplayVoice(true, "live", "device"), replay.voice)
+        // Unknown and broken recorded frames are dropped one by one; the conversation survives.
+        assertEquals(
+            listOf(ServerFrame.UserTurn("t1", "hi"), ServerFrame.TurnStart("t1"), ServerFrame.Answer("t1", "yo"), ServerFrame.VoiceState("heard", "open youtube", null)),
+            replay.frames,
+        )
+    }
+
+    @Test fun replayRefusesNestingAndHugeFrameLists() {
+        assertEquals(
+            emptyList(),
+            (ChatFrames.parse("""{"t":"replay","frames":[{"t":"replay","frames":[{"t":"turn_start","id":"t1"}]}],"busy":false}""") as ServerFrame.Replay).frames,
+        )
+        val many = (1..ChatFrames.MAX_REPLAY_FRAMES + 1).joinToString(",") { """{"t":"turn_start","id":"t$it"}""" }
+        assertEquals(ServerFrame.Malformed, ChatFrames.parse("""{"t":"replay","frames":[$many],"busy":false}"""))
+        assertEquals(ServerFrame.Malformed, ChatFrames.parse("""{"t":"replay","busy":false}"""))
+        // No voice object means no voice, not a crash.
+        assertEquals(ReplayVoice.NONE, (ChatFrames.parse("""{"t":"replay","frames":[],"busy":false}""") as ServerFrame.Replay).voice)
+    }
+
+    @Test fun onlyAReplayMayBeLargerThanTheFrameCap() {
+        val big = "x".repeat(ChatFrames.MAX_FRAME_CHARS)
+        assertEquals(ServerFrame.Malformed, ChatFrames.parse("""{"t":"answer","id":"t1","text":"$big"}"""))
+        val replay = ChatFrames.parse("""{"t":"replay","busy":false,"frames":[{"t":"answer","id":"t1","text":"$big"}]}""")
+        assertIs<ServerFrame.Replay>(replay)
+    }
+
+    @Test fun voiceFramesParseStrictly() {
+        assertEquals(ServerFrame.VoiceState("started", "live", "device"), ChatFrames.parse("""{"t":"voice_state","phase":"started","text":"live","audio":"device"}"""))
+        assertEquals(ServerFrame.VoiceState("listening", "", null), ChatFrames.parse("""{"t":"voice_state","phase":"listening"}"""))
+        assertEquals(ServerFrame.Malformed, ChatFrames.parse("""{"t":"voice_state","text":"x"}"""))
+        assertEquals(ServerFrame.AudioClear, ChatFrames.parse("""{"t":"audio_clear"}"""))
+    }
+
+    @Test fun voiceRequestsMatchTheServerProtocol() {
+        assertEquals("""{"t":"voice_start","mode":"live","audio":"device"}""", ChatFrames.voiceStartDevice())
+        assertEquals("""{"t":"voice_stop"}""", ChatFrames.voiceStop())
     }
 
     @Test fun garbageIsMalformed() {

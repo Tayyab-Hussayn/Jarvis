@@ -47,7 +47,33 @@ sealed interface ChatMessage {
     ) : ChatMessage
 }
 
-enum class Link { CONNECTING, OPEN, RECONNECTING, OFFLINE, UNAUTHORIZED }
+/** [REPLACED]: another socket took this session over; we stop retrying instead of fighting for it. */
+enum class Link { CONNECTING, OPEN, RECONNECTING, OFFLINE, UNAUTHORIZED, REPLACED }
+
+enum class VoicePhase {
+    OFF, STARTING, IDLE, LISTENING, THINKING, SPEAKING, ERROR;
+
+    /** A session that is genuinely running (the same definition as the web's `isVoiceLive`). */
+    val live: Boolean get() = this != OFF && this != ERROR
+}
+
+/** The voice session as the chat shows it. [turnId] is the spoken turn being built (`s…`), if one is open. */
+data class VoiceUi(
+    val phase: VoicePhase = VoicePhase.OFF,
+    /** "live" or "local", as the server reported it (never what we asked for). */
+    val mode: String = "",
+    /** Whether the microphone/speaker are this phone's ("device") or the PC's ("laptop"). */
+    val audio: String = "",
+    val error: String = "",
+    /** Session chatter ("started", "ended"): a status line, not conversation. */
+    val notes: List<String> = emptyList(),
+    val turnId: String? = null,
+    val toolCount: Int = 0,
+    /** Set on the stop tap. You cannot be stopping something already stopped, see [live]. */
+    val stopping: Boolean = false,
+) {
+    val isStopping: Boolean get() = stopping && phase.live
+}
 
 data class ChatState(
     val messages: List<ChatMessage> = emptyList(),
@@ -58,11 +84,18 @@ data class ChatState(
     val cancelling: Boolean = false,
     /** Confirmations whose turn has no message here (voice, a panel run); still shown, never dropped. */
     val looseConfirms: List<ConfirmItem> = emptyList(),
+    /** Highest turn number used (`t7`, `s3`): typed and spoken turns share it so an id is never reused. */
+    val seq: Int = 0,
+    val voice: VoiceUi = VoiceUi(),
 ) {
     val pendingConfirms: List<ConfirmItem>
         get() = (messages.filterIsInstance<ChatMessage.Assistant>().flatMap { it.confirms } + looseConfirms)
             .filter { it.status == ConfirmStatus.PENDING }
 }
+
+/** What a server restart or an expired session leaves behind: the server no longer has the conversation above. */
+const val SESSION_LOST_NOTE =
+    "This conversation was not found on the server (it expired or the server restarted), so Kravein does not remember what is above."
 
 const val LOST_RESULT =
     "Connection lost — result unknown. It may have run; check the device or the activity log."

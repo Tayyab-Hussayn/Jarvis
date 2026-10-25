@@ -11,7 +11,13 @@ class UiPrefs(context: Context) {
         get() = prefs.getBoolean(KEY_NOTIFICATIONS_PROMPTED, false)
         set(value) = prefs.edit().putBoolean(KEY_NOTIFICATIONS_PROMPTED, value).apply()
 
+    /** The floating voice bubble (Settings). Off by default; it also needs the "display over other apps" permission. */
+    var bubbleEnabled: Boolean
+        get() = prefs.getBoolean(KEY_BUBBLE, false)
+        set(value) = prefs.edit().putBoolean(KEY_BUBBLE, value).apply()
+
     private companion object {
         const val KEY_NOTIFICATIONS_PROMPTED = "notifications_prompted"
+        const val KEY_BUBBLE = "bubble_enabled"
     }
 }

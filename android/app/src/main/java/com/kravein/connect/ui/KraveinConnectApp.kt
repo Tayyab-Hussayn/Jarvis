@@ -90,6 +90,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.kravein.connect.chat.ChatHub
+import com.kravein.connect.voice.VoiceHub
 import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.delay
 import androidx.compose.animation.*
@@ -122,6 +123,7 @@ fun KraveinConnectApp(
     onRequestCameraPermission: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onStartService: () -> Unit,
+    onRequestMicPermission: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -314,7 +316,15 @@ fun KraveinConnectApp(
                         chatTab = {
                             val chat by ChatHub.client.state.collectAsState()
                             val prefill by ChatHub.prefill.collectAsState()
+                            val voiceStatus by VoiceHub.status.collectAsState()
+                            val micRationale by VoiceHub.micRationale.collectAsState()
                             ChatScreen(
+                                voiceStatus = voiceStatus,
+                                micRationale = micRationale,
+                                onMic = VoiceHub::start,
+                                onVoiceMute = VoiceHub::toggleMute,
+                                onVoiceStop = VoiceHub::stop,
+                                onRequestMic = onRequestMicPermission,
                                 state = chat,
                                 prefill = prefill,
                                 onPrefillUsed = ChatHub::prefillUsed,
@@ -355,6 +365,8 @@ fun KraveinConnectApp(
                                     context.startService(Intent(context, KraveinConnectForegroundService::class.java).apply {
                                         action = KraveinConnectForegroundService.ACTION_STOP
                                     })
+                                    // A microphone must not outlive the pairing it belongs to.
+                                    VoiceHub.stop()
                                     storage.clearCredential()
                                     // The :web process notices the missing credential the next time it starts and exits.
                                     ChatHub.onCredential(null)
@@ -706,6 +718,67 @@ private fun QrScannerScreen(
     }
 }
 
+/**
+ * The floating voice bubble: off by default, and turning it on asks for "display over other apps". The switch only
+ * stays on if the permission was really granted — it is re-read on return from system settings, never assumed.
+ */
+@Composable
+private fun BubbleSetting() {
+    val context = LocalContext.current
+    val prefs = remember { UiPrefs(context) }
+    var enabled by remember { mutableStateOf(prefs.bubbleEnabled && android.provider.Settings.canDrawOverlays(context)) }
+    var waitingForPermission by remember { mutableStateOf(false) }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                val granted = android.provider.Settings.canDrawOverlays(context)
+                if (waitingForPermission) {
+                    waitingForPermission = false
+                    enabled = granted
+                    prefs.bubbleEnabled = granted
+                } else if (enabled && !granted) {
+                    // Revoked in system settings since: the toggle must not claim a bubble that cannot show.
+                    enabled = false
+                    prefs.bubbleEnabled = false
+                }
+            }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+    SectionLabel("Voice bubble")
+    Spacer(Modifier.height(8.dp))
+    Panel {
+        androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Floating bubble", fontWeight = FontWeight.Bold)
+                Text(
+                    "A small orb over other apps while a voice session runs and Kravein is not on screen. Tap it to mute, stop or come back.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            androidx.compose.material3.Switch(
+                checked = enabled,
+                onCheckedChange = { on ->
+                    if (!on) {
+                        enabled = false
+                        prefs.bubbleEnabled = false
+                    } else if (android.provider.Settings.canDrawOverlays(context)) {
+                        enabled = true
+                        prefs.bubbleEnabled = true
+                    } else {
+                        waitingForPermission = true
+                        context.startActivity(
+                            Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")),
+                        )
+                    }
+                },
+            )
+        }
+    }
+}
+
 @Composable
 private fun SettingsScreen(
     credential: DeviceCredential,
@@ -731,6 +804,8 @@ private fun SettingsScreen(
             Text("${credential.host}:${credential.port}", fontWeight = FontWeight.Bold)
             Text("Paired as ${credential.deviceName}", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        Spacer(Modifier.height(20.dp))
+        BubbleSetting()
         Spacer(Modifier.height(20.dp))
         OutlinedButton(onClick = onOpenPermissions, modifier = Modifier.fillMaxWidth()) { Text("Permissions") }
         Spacer(Modifier.height(12.dp))
