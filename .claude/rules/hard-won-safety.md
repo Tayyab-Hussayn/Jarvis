@@ -20,7 +20,11 @@ interpreter one-liners) are now classified, and `safety.enforce()` keeps a **per
 memory** keyed on the *target*, not the verb — once you decline an action on a path, any further
 destructive action on that same path in that request is refused outright without re-asking. The
 memory is scoped by `confirmer_scope`, so it lasts exactly one turn. Never widen it to a blanket
-per-turn lockout: "delete A, keep B" must still work.
+per-turn lockout: "delete A, keep B" must still work. **The key must survive a change of route
+(#117, seen on a phone 2026-10-25):** after a declined `delete_path`, the model retried the same
+path with `permanent=True`, then `run_command rm`/`rm -f`, each producing a fresh prompt. Flags
+don't change the key, shell commands declare their paths, and a refused retry of a declined target
+ends the turn ("Okay, I won't do that.") instead of burning tool rounds.
 
 **The denial memory only works if the target is *declared*.** It originally read the target back
 out of the human-readable action string, which found file paths and pids and **nothing else** — so
