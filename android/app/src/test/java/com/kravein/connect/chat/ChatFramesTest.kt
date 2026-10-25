@@ -46,6 +46,15 @@ class ChatFramesTest {
         assertEquals(ServerFrame.Ignored, ChatFrames.parse("""{"t":"job_event","id":"j","title":"t","text":"x","failed":false}"""))
     }
 
+    // Server #111 (resumable sessions) added fields to `hello` and the `replay`/`user_turn` frames; a phone that does
+    // not resume yet must neither choke on the new hello nor mistake a replay for live conversation.
+    @Test fun resumableSessionFramesDoNotBreakTheClient() {
+        val hello = ChatFrames.parse("""{"t":"hello","assistant_name":"Kravein","skills":168,"provider":"p","model":"m","environment":"e","session_id":"s1","resumed":true,"session_ttl_minutes":30}""")
+        assertEquals(ServerFrame.Hello("Kravein", "m"), hello)
+        assertEquals(ServerFrame.Ignored, ChatFrames.parse("""{"t":"replay","frames":[{"t":"user_turn","id":"t1","text":"hi"}],"busy":false,"voice":{"active":false,"mode":"","audio":""}}"""))
+        assertEquals(ServerFrame.Ignored, ChatFrames.parse("""{"t":"user_turn","id":"t1","text":"hi"}"""))
+    }
+
     @Test fun garbageIsMalformed() {
         assertEquals(ServerFrame.Malformed, ChatFrames.parse("not json"))
         assertEquals(ServerFrame.Malformed, ChatFrames.parse("""{"id":"x"}"""))
