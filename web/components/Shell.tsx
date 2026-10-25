@@ -89,6 +89,7 @@ const STATUS: Record<Connection, { label: string; colour: string }> = {
   reconnecting: { label: "Reconnecting", colour: "var(--moderate)" },
   offline: { label: "Server down", colour: "var(--critical)" },
   unauthorized: { label: "Not authorised", colour: "var(--critical)" },
+  replaced: { label: "Open in another window", colour: "var(--moderate)" },
 };
 
 /* -- rail ------------------------------------------------------------- */
