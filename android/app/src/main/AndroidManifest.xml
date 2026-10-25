@@ -29,6 +29,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
             android:screenOrientation="unspecified">
             <intent-filter>
@@ -42,6 +43,14 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+
+        <!-- The WebView lives in its own process so its Chromium renderer can be given back (see WebActivity). -->
+        <activity
+            android:name=".web.WebActivity"
+            android:exported="false"
+            android:process=":web"
+            android:label="@string/app_name"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
 
         <service
             android:name=".tile.KraveinTileService"

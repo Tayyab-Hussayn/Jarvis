@@ -1,8 +1,11 @@
 package com.kravein.connect.ui
 
-import android.app.Activity
-import androidx.activity.compose.BackHandler
+import android.content.Intent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -13,10 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -28,12 +31,10 @@ import com.kravein.connect.ui.theme.KraveinTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,41 +45,41 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.runtime.LaunchedEffect
 import com.kravein.connect.core.DeviceCredential
 import com.kravein.connect.core.ShellNavigation
-import com.kravein.connect.web.KraveinWebController
-import com.kravein.connect.web.WebUiState
+import com.kravein.connect.web.WebActivity
 
 private enum class ShellTab(val label: String, val icon: ImageVector) {
-    KRAVEIN("Kravein", Icons.Filled.Home),
+    CHAT("Chat", Icons.Filled.Home),
     PHONE("Phone", Icons.Filled.Phone),
+    MORE("More", Icons.Filled.MoreVert),
     SETTINGS("Settings", Icons.Filled.Settings),
 }
 
 /**
- * The paired app: the Kravein web UI, the phone-side connection status, and settings. Only the selected tab is
- * composed, so the WebView is not even built until its tab is first shown.
+ * The paired app: the native Chat (default), the phone-side connection status, "More" (the full web UI, in its own
+ * process) and settings. Only the selected tab is composed.
  */
 @Composable
 fun MainShell(
     credential: DeviceCredential,
-    web: KraveinWebController,
+    chatTab: @Composable () -> Unit,
     phoneTab: @Composable () -> Unit,
     settingsTab: @Composable () -> Unit,
-    onPairAgain: () -> Unit,
 ) {
-    var tab by rememberSaveable { mutableStateOf(ShellTab.KRAVEIN) }
-    // A tap on a confirmation notification lands on the Kravein tab, where the same question is on screen.
-    val showKravein by ShellNavigation.showKravein.collectAsState()
-    val seen = remember { showKravein }
-    LaunchedEffect(showKravein) { if (showKravein != seen) tab = ShellTab.KRAVEIN }
+    var tab by rememberSaveable { mutableStateOf(ShellTab.CHAT) }
+    // A tap on a confirmation notification lands on the Chat tab, where the same question is on screen.
+    val showChat by ShellNavigation.showKravein.collectAsState()
+    val seen = remember { showChat }
+    LaunchedEffect(showChat) { if (showChat != seen) tab = ShellTab.CHAT }
+    val imeUp = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
+            // Hidden while the keyboard is up: otherwise imePadding lifts the bar above the keys and it eats the screen.
             // Glass chrome with a hairline on top, like the web rail.
-            NavigationBar(containerColor = KraveinTheme.colors.glassStrong, modifier = Modifier.topHairline(KraveinTheme.colors.glassBorder)) {
+            if (!imeUp) NavigationBar(containerColor = KraveinTheme.colors.glassStrong, modifier = Modifier.topHairline(KraveinTheme.colors.glassBorder)) {
                 ShellTab.entries.forEach { item ->
                     NavigationBarItem(
                         selected = tab == item,
@@ -97,56 +98,38 @@ fun MainShell(
             }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        // consumeWindowInsets: the tab's own imePadding must not add the bar/system inset a second time.
+        Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             when (tab) {
-                ShellTab.KRAVEIN -> KraveinWebTab(credential, web, onPairAgain)
+                ShellTab.CHAT -> chatTab()
                 ShellTab.PHONE -> phoneTab()
+                ShellTab.MORE -> MoreTab(credential)
                 ShellTab.SETTINGS -> settingsTab()
             }
         }
     }
 }
 
+/** Everything the native screens do not cover yet lives in the web UI, opened on demand in a separate process. */
 @Composable
-private fun KraveinWebTab(credential: DeviceCredential, web: KraveinWebController, onPairAgain: () -> Unit) {
-    val state by web.state.collectAsState()
-    // The PC may be found at a new address; the page, token and loopback pipe belong to the old one.
-    LaunchedEffect(credential.host, credential.port) { web.endpointChanged(credential) }
-    // Back walks the page's own history first, and only then leaves the app.
-    // canGoBack() is not observable, so the handler stays on and finishes the activity itself when there is no history.
-    val activity = LocalContext.current as? Activity
-    BackHandler(enabled = true) { if (web.canGoBack()) web.goBack() else activity?.finish() }
-
-    when (val current = state) {
-        WebUiState.NeedsPairing -> Centered {
-            Text("This phone is no longer paired", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text("Kravein on your PC refused this device. Pair it again to continue.", textAlign = TextAlign.Center)
-            GradientButton(onClick = onPairAgain, modifier = Modifier.fillMaxWidth()) { Text("Pair again") }
-        }
-        is WebUiState.Offline -> Centered {
-            Text("Kravein is unreachable", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text(current.message, textAlign = TextAlign.Center)
-            GradientButton(onClick = { web.reload() }, modifier = Modifier.fillMaxWidth()) { Text("Retry") }
-        }
-        else -> {
-            Column(Modifier.fillMaxSize()) {
-                if (current == WebUiState.Loading) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceVariant)
-                }
-                key(credential.host, credential.port) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxWidth().weight(1f),
-                        factory = { web.viewFor(credential) },
-                    )
-                }
-                OutlinedButton(onClick = { web.reload() }, modifier = Modifier.fillMaxWidth()) { Text("Reload") }
-            }
-        }
+private fun MoreTab(credential: DeviceCredential) {
+    val context = LocalContext.current
+    Centered {
+        Text("The full Kravein", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(
+            "Voice, apps, routines and the rest of the web UI on ${credential.host}. It opens in its own window and " +
+                "frees its memory two minutes after you leave it.",
+            textAlign = TextAlign.Center,
+        )
+        GradientButton(
+            onClick = { context.startActivity(Intent(context, WebActivity::class.java)) },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Open Kravein web") }
     }
 }
 
 @Composable
-private fun Centered(content: @Composable () -> Unit) {
+internal fun Centered(content: @Composable () -> Unit) {
     Column(
         Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),

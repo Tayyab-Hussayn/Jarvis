@@ -89,7 +89,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.currentBackStackEntryAsState
-import com.kravein.connect.web.KraveinWebController
+import com.kravein.connect.chat.ChatHub
 import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.delay
 import androidx.compose.animation.*
@@ -122,7 +122,6 @@ fun KraveinConnectApp(
     onRequestCameraPermission: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onStartService: () -> Unit,
-    web: KraveinWebController,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -212,7 +211,9 @@ fun KraveinConnectApp(
     val nowSeconds = { System.currentTimeMillis() / 1000 }
 
     val route by navController.currentBackStackEntryAsState()
-    val inShell = route?.destination?.route == "home"
+    // No route yet (first frame) counts as the shell: a paired launch must not start Chromium just to draw the
+    // onboarding background for one frame and then keep it resident.
+    val inShell = route == null || route?.destination?.route == "home"
 
     Box(modifier = Modifier.fillMaxSize()) {
         // The 3D background is a second, always-animating WebView: only the onboarding screens get it, never the
@@ -306,10 +307,26 @@ fun KraveinConnectApp(
                         }
                         context.startActivity(intent)
                     }
+                    // The chat socket follows the credential (and the app being visible, see ChatHub).
+                    LaunchedEffect(paired) { ChatHub.onCredential(paired) }
                     MainShell(
                         credential = paired,
-                        web = web,
-                        onPairAgain = { navController.navigate("connect") { popUpTo(0) } },
+                        chatTab = {
+                            val chat by ChatHub.client.state.collectAsState()
+                            val prefill by ChatHub.prefill.collectAsState()
+                            ChatScreen(
+                                state = chat,
+                                prefill = prefill,
+                                onPrefillUsed = ChatHub::prefillUsed,
+                                onSend = { ChatHub.client.ask(it) },
+                                onStop = { ChatHub.client.stopTurn() },
+                                onNew = { ChatHub.client.newConversation() },
+                                onConfirm = { id, approve -> ChatHub.client.answerConfirmation(id, approve) },
+                                onDismissLoose = { ChatHub.client.dismissLoose(it) },
+                                onRetry = { ChatHub.client.retryNow() },
+                                onPairAgain = { navController.navigate("connect") { popUpTo(0) } },
+                            )
+                        },
                         phoneTab = {
                             ConnectedScreen(
                                 credential = paired,
@@ -339,7 +356,8 @@ fun KraveinConnectApp(
                                         action = KraveinConnectForegroundService.ACTION_STOP
                                     })
                                     storage.clearCredential()
-                                    web.reset()
+                                    // The :web process notices the missing credential the next time it starts and exits.
+                                    ChatHub.onCredential(null)
                                     AgentStateStore.setCredential(null)
                                     AgentStateStore.setConnectionState(ConnectionState.DISCONNECTED)
                                     AgentStateStore.setError(null)
