@@ -110,28 +110,8 @@
     }
   },
   "frozen": {
-    "_comment": "Nobody edits these (the Windows-original tree). Enforced by guard_edits.py and guard_bash.py.",
-    "paths": [
-      "main.py",
-      "ui.py",
-      "actions/",
-      "agent/",
-      "smart_home/",
-      "kravein_connect/",
-      "dashboard/",
-      "extra/",
-      "core/",
-      "auth/",
-      "config/",
-      "memory/",
-      "plugins/",
-      "plugin_manager.py",
-      "workspace_store.py",
-      "discord_bot.py",
-      "gesture_utils.py",
-      "or_client.py",
-      "smart_home_page_new.py"
-    ]
+    "_comment": "Owner 2026-10-29: the Windows-original tree is being deleted (#124); nothing is frozen any more.",
+    "paths": []
   },
   "models": {
     "_comment": "Owner rule 2026-10-23: agents ALWAYS run Sonnet at effort medium (start-agent.sh refuses anything else). Hard tasks get a stricter packet; the orchestrator's review catches the rest.",
