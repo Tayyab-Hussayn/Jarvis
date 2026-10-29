@@ -48,6 +48,12 @@ for name in [".claude", "kb", "CLAUDE.md", ".gitignore"]:
         shutil.copytree(s, R / name, ignore=skip)
     else:
         shutil.copy(s, R / name)
+# The real roster freezes nothing since the Windows tree was deleted (#124); pin a fixture list so
+# the frozen-path guard itself stays tested.
+_ro = R / ".claude/team/roster.json"
+_r = json.loads(_ro.read_text())
+_r["frozen"] = {"paths": ["main.py", "actions/", "extra/"]}
+_ro.write_text(json.dumps(_r, indent=2))
 for f, c in {"kravein/agent.py": "x", "kravein/skills/a.py": "y", "docs/spec.md": "z", "src/main.kt": "m",
              "kb/state/project-state.md": "# v1\n", "kb/modules/engine.md": "e", "kb/modules/skills.md": "s",
              "main.py": "win", "actions/a.py": "win", "extra/A.java": "j"}.items():
