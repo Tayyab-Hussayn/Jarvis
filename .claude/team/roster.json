@@ -103,7 +103,6 @@
       "label": "agent:android",
       "summary": "Kravein's Android companion app (Kotlin, Compose): toolchain, pairing, device commands, phone-side tests",
       "owns": [
-        "brahma-connect-android/",
         "android/",
         "kb/modules/android.md"
       ]
