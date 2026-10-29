@@ -11,7 +11,8 @@
 # Tracked files only (git ls-files), staged first so rsync --delete can drop
 # files that no longer exist upstream without ever seeing the remote's own
 # .venv, node_modules or web-dist (protected below, not deleted).
-# android/, .claude/ and .github/ are tracked but useless on the laptop.
+# android/, .claude/, .github/ and kb/ (team docs, phone app) are tracked but
+# not needed on the laptop, and the owner wants no old project name there.
 
 set -euo pipefail
 
@@ -28,7 +29,7 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
 git ls-files -z --exclude-standard \
-  | grep -zvE '^(android/|\.claude/|\.github/)' \
+  | grep -zvE '^(android/|\.claude/|\.github/|kb/)' \
   | rsync -a --from0 --files-from=- ./ "$STAGE/"
 
 rsync -a --delete --mkpath \
