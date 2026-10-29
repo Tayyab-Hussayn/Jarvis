@@ -1,9 +1,7 @@
 """Configuration and filesystem layout.
 
-The Windows build kept everything next to the script and leaned on
-%LOCALAPPDATA%. Here we follow the XDG Base Directory spec instead, while
-still reading the original `config/*.json` files so existing setups keep
-working.
+Everything follows the XDG Base Directory spec; nothing is read from the
+repository checkout.
 """
 
 from __future__ import annotations
@@ -17,7 +15,6 @@ from typing import Any
 APP_NAME = "kravein"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-LEGACY_CONFIG_DIR = BASE_DIR / "config"
 
 
 def _xdg(var: str, default: Path) -> Path:
@@ -32,30 +29,10 @@ XDG_STATE_HOME = _xdg("XDG_STATE_HOME", HOME / ".local" / "state")
 XDG_CACHE_HOME = _xdg("XDG_CACHE_HOME", HOME / ".cache")
 XDG_RUNTIME_DIR = _xdg("XDG_RUNTIME_DIR", Path(f"/run/user/{os.getuid()}"))
 
-# The assistant was called Brahma-Echo until 2026-08-24 and its XDG
-# directories were named after it. The rename moved them, but a directory that
-# was missed — or one restored from an old backup, or written by a stale
-# checkout — would otherwise mean silently starting from scratch: no API keys,
-# no audit history, a browser profile with no logins. So the old location is
-# adopted when the new one does not exist yet.
-#
-# This is transitional. See the rename note in CLAUDE.md: legacy paths are to
-# be removed once nothing is falling back to them.
-LEGACY_APP_NAME = "brahma-echo"
-
-
-def _app_dir(base: Path) -> Path:
-    current = base / APP_NAME
-    legacy = base / LEGACY_APP_NAME
-    if not current.exists() and legacy.exists():
-        return legacy
-    return current
-
-
-CONFIG_DIR = _app_dir(XDG_CONFIG_HOME)
-DATA_DIR = _app_dir(XDG_DATA_HOME)
-STATE_DIR = _app_dir(XDG_STATE_HOME)
-CACHE_DIR = _app_dir(XDG_CACHE_HOME)
+CONFIG_DIR = XDG_CONFIG_HOME / APP_NAME
+DATA_DIR = XDG_DATA_HOME / APP_NAME
+STATE_DIR = XDG_STATE_HOME / APP_NAME
+CACHE_DIR = XDG_CACHE_HOME / APP_NAME
 RUNTIME_DIR = XDG_RUNTIME_DIR / APP_NAME
 
 AUDIT_LOG = STATE_DIR / "audit.jsonl"
@@ -286,15 +263,6 @@ def load_settings(reload: bool = False) -> dict[str, Any]:
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"[config] ignoring malformed {path}: {exc}")
 
-        # Fall back to the original Windows-era settings file if present.
-        if not user:
-            legacy = LEGACY_CONFIG_DIR / "app_settings.json"
-            if legacy.exists():
-                try:
-                    user = json.loads(legacy.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    pass
-
         _settings_cache = _deep_merge(DEFAULT_SETTINGS, user)
         return _settings_cache
 
@@ -332,13 +300,12 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def api_keys() -> dict[str, str]:
-    """Resolve API keys from env, then XDG config, then the legacy file.
+    """Resolve API keys from env, then XDG config.
 
     Environment wins so secrets can be injected by systemd without landing
     on disk.
     """
-    keys = _read_json(LEGACY_CONFIG_DIR / "api_keys.json")
-    keys = _deep_merge(keys, _read_json(CONFIG_DIR / "api_keys.json"))
+    keys = _read_json(CONFIG_DIR / "api_keys.json")
 
     env_map = {
         "gemini_api_key": ("KRAVEIN_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
