@@ -58,7 +58,10 @@ def test_installer_uses_only_defined_variables():
     used = set(re.findall(r"\$\{?([A-Z_][A-Z0-9_]*)", text))
     assigned |= set(re.findall(r"mapfile -t ([A-Z_][A-Z0-9_]*)", text))
     builtin = {"HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
-               "BASH_SOURCE", "PATH"}
+               "BASH_SOURCE", "PATH",
+               # Session env vars, only ever read with a `:-` default.
+               "XDG_CURRENT_DESKTOP", "NIRI_SOCKET", "SWAYSOCK",
+               "HYPRLAND_INSTANCE_SIGNATURE"}
     # Names inside single-quoted heredocs/echo text (e.g. \$USER) are not code.
     unbound = used - assigned - builtin - {"USER"}
     assert not unbound, unbound
@@ -127,6 +130,52 @@ def test_installer_writes_auto_and_nothing_else_to_web_env(tmp_path):
     # an address written by an older install is replaced, not kept.
     assert env.read_text() == "KRAVEIN_LAN_HOST=auto\n"
     assert oct(env.stat().st_mode & 0o777) == "0o600"
+
+
+def _check(tmp_path, tools, runtime_files=(), env_extra=None):
+    """Run `install-linux.sh --check` with only `tools` on PATH."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("dirname", "id", "python3", *tools):
+        real = shutil.which(name) or "/bin/true"
+        (bin_dir / name).symlink_to(real)
+    runtime = tmp_path / "run"
+    runtime.mkdir()
+    for f in runtime_files:
+        (runtime / f).touch()
+    env = {"PATH": str(bin_dir), "XDG_RUNTIME_DIR": str(runtime),
+           "HOME": str(tmp_path / "home"), **(env_extra or {})}
+    # Absolute bash: the stripped PATH above must not be needed to find it.
+    return subprocess.run([shutil.which("bash"), str(INSTALLER), "--check"], capture_output=True,
+                          text=True, env=env, check=True).stdout
+
+
+def test_installer_check_detects_niri_from_runtime_socket(tmp_path):
+    # Over ssh there is no NIRI_SOCKET or XDG_CURRENT_DESKTOP; the socket in
+    # the runtime dir is the only sign. Noctalia is found the same way.
+    out = _check(tmp_path, ["niri", "kitty"],
+                 ["niri.wayland-1.746.sock", "noctalia-wayland-1.sock"])
+    assert "compositor: niri" in out and "shell: Noctalia" in out
+    assert re.search(r"window control\s+niri", out)       # niri IPC is accepted
+    assert re.search(r"terminal\s+kitty", out)            # kitty without foot
+    assert not tmp_path.joinpath("home").exists()          # --check writes nothing
+
+
+def test_installer_check_prints_a_pasteable_pacman_line_for_missing_tools(tmp_path):
+    out = _check(tmp_path, ["niri", "kitty"], ["niri.wayland-1.1.sock"])
+    line = next(l for l in out.splitlines() if "sudo pacman" in l).strip()
+    assert line.startswith("sudo pacman -S --needed ")
+    pkgs = line.split()[4:]
+    for p in ("ydotool", "wtype", "wl-clipboard", "grim", "slurp"):
+        assert p in pkgs
+    # Package names only: no prose like "hyprland or wmctrl" in the command.
+    assert "or" not in pkgs and "niri" not in pkgs and "kitty" not in pkgs
+
+
+def test_installer_check_without_a_known_compositor_does_not_claim_niri(tmp_path):
+    out = _check(tmp_path, ["kitty"])
+    assert "compositor: unknown" in out
+    assert "wtype" not in out.split("sudo pacman")[-1].split("wl-clipboard")[0]
 
 
 def test_installer_hints_use_real_commands():
