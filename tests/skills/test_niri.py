@@ -292,3 +292,33 @@ def test_screenshot_region_names_missing_package(monkeypatch, tmp_path):
     monkeypatch.setattr(screen, "backend_name", lambda: "niri")
     with pytest.raises(screen.CaptureError, match="grim and slurp"):
         screen.capture(tmp_path / "x.png", region=True)
+
+
+# -- app-name ambiguity (the remote's real kitty entries) --------------------
+
+def _kitty_entries(tmp_path):
+    return [
+        apps.DesktopEntry(name="kitty", exec_cmd="kitty", path=tmp_path / "kitty.desktop"),
+        apps.DesktopEntry(name="kitty URL Launcher", exec_cmd="kitty +open",
+                          path=tmp_path / "kitty-open.desktop"),
+    ]
+
+
+def test_exact_app_name_is_not_ambiguous_with_a_lookalike(niri, monkeypatch, tmp_path):
+    backend, fake = niri
+    monkeypatch.setattr(desktop, "_backend", backend)
+    monkeypatch.setattr(apps, "find", lambda q: _kitty_entries(tmp_path))
+    for query in ("kitty", "Kitty", "kitty.desktop"):
+        fake.windows = [w for w in fake.windows if w["id"] != 13]
+        fake.next_spawn = {"id": 13, "app_id": "kitty", "title": "k", "pid": 502,
+                           "workspace_id": 1, "is_focused": True}
+        assert "Started kitty on workspace 2" in apps.launch_on_workspace(query, "2")
+
+
+def test_same_name_twice_is_still_ambiguous(niri, monkeypatch, tmp_path):
+    backend, _ = niri
+    monkeypatch.setattr(desktop, "_backend", backend)
+    twins = [apps.DesktopEntry(name="Editor", exec_cmd="ed1", path=tmp_path / "a.desktop"),
+             apps.DesktopEntry(name="Editor", exec_cmd="ed2", path=tmp_path / "b.desktop")]
+    monkeypatch.setattr(apps, "find", lambda q: twins)
+    assert "matches several applications" in apps.launch_on_workspace("editor", "2")
