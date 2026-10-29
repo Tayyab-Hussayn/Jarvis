@@ -18,7 +18,7 @@ Owner request 2026-10-29: make Kravein work on a second laptop running niri with
 - Audit facts (orchestrator, 2026-10-29): Arch, kernel 6.18 LTS, Python 3.14.8, niri 26.04 (JSON IPC works: `niri msg --json windows|workspaces`), Noctalia owns org.freedesktop.Notifications, PipeWire (pactl/wpctl), brightnessctl, playerctl, nmcli, bluetoothctl, kitty (no foot). **Missing:** ydotool, wtype, wl-clipboard, grim, slurp. No project dir yet.
 
 ## Tasks
-- Owner 2026-10-29: project lives at `/home/kravein/Projects/desktop/kravein` on the new machine; Windows tree deleted and all Brahma names removed first (#124), then sync.
+- Owner 2026-10-29: project lives at `/home/kravein/Projects/desktop/kravein` on the new machine; Windows tree and all old project names removed first (#124/#127), then sync.
 - #122 qa: provision `/home/kravein/Projects/desktop/kravein` on the remote, installer niri detection + missing-package hints.
 - #123 skills: niri platform backend (windows/workspaces/ids/open_app), socket discovery, live check on the remote.
 - Owner: `sudo pacman -S ydotool wtype wl-clipboard grim slurp` on the new machine.

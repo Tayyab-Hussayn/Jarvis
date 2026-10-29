@@ -23,7 +23,7 @@ updated: 2026-10-23
 - Run `tools/eval_models.py` off-vs-auto for tool routing; flip default if parity (needs live provider calls).
 - Claude provider; verify NovaRouter tool calling with the real schema.
 - Android app (owner-approved 2026-10-22, agent `android`): 1) ~~toolchain + rename + build~~ done #17, 2) ~~phone channel~~ done #20, 3) ~~app on the protocol~~ done #26, 4) ~~`phone_*` skills~~ done #32.
-- Rename leftovers: `brahma` strings, XDG fallback in `config.py`.
+- ~~Rename leftovers + XDG fallback~~ done #127.
 
 ## Open owner decisions
 - Decided 2026-10-23: auto-approve allowed only with guardrails — live owner sources only (web/voice/cli, never jobs/WhatsApp), CRITICAL still asks, hard refusals stay, auto expires (1 h) and resets on restart, every auto-approval audited (#35).
