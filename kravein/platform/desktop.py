@@ -5,6 +5,7 @@ window API, so this presents one interface over several backends:
 
   * Hyprland  — ``hyprctl`` IPC (this machine)
   * Sway      — ``swaymsg`` IPC
+  * niri      — ``niri msg --json`` IPC
   * X11       — ``wmctrl`` / ``xdotool``
   * KDE/GNOME — best-effort via D-Bus or the X11 fallback
 
@@ -461,6 +462,243 @@ class SwayBackend(WindowBackend):
 
 
 # ---------------------------------------------------------------------------
+# niri
+# ---------------------------------------------------------------------------
+
+_NO_WINDOW = Window("", "", "", None, "", False)
+
+
+class NiriBackend(WindowBackend):
+    """niri 26.x, through ``niri msg --json`` (JSON IPC; recorded fixtures in
+    ``tests/skills/fixtures/niri``).
+
+    * A window id is niri's own numeric id. Unlike Hyprland's 0.56 Lua
+      dispatchers, niri's actions take ``--id``/``--window-id``, so close,
+      fullscreen, float and move hit exactly the named window without
+      focusing it first -- nothing here can fall through to "whatever is
+      focused".
+    * A workspace is labelled by its name if it has one, else its ``idx``
+      (position on its output). Workspace ids are internal and never shown.
+      Only the focused output's workspaces get bare numbers; others are
+      ``idx@output`` and cannot be targeted by number.
+    * niri has no kill action (``kill`` falls back to close) and reports no
+      rectangle for tiled windows, so ``geometry`` is None -- callers that
+      need one (scrolling) must refuse rather than guess.
+    * Every state change is re-read from niri before reporting True: the
+      action socket answers "Handled" for requests that did nothing (an
+      out-of-range workspace index is clamped, not rejected).
+    """
+
+    name = "niri"
+
+    def available(self) -> bool:
+        return shell.have("niri") and bool(detect.find_niri_socket())
+
+    def _env(self) -> dict[str, str]:
+        # An ssh session or a user service has no NIRI_SOCKET; without it
+        # ``niri msg`` exits "NIRI_SOCKET is not set" on every call.
+        return {"NIRI_SOCKET": detect.find_niri_socket()}
+
+    def _json(self, *args: str) -> Any:
+        result = shell.run(["niri", "msg", "--json", *args], timeout=6, env=self._env())
+        if not result.ok:
+            return None
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+
+    def _action(self, *args: str) -> bool:
+        return shell.run(
+            ["niri", "msg", "action", *args], timeout=8, env=self._env()
+        ).ok
+
+    # -- state ------------------------------------------------------------
+
+    def _workspace_rows(self) -> list[dict]:
+        rows = self._json("workspaces")
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    @staticmethod
+    def _labels(rows: list[dict]) -> dict[Any, str]:
+        focused_output = next(
+            (r.get("output") for r in rows if r.get("is_focused")), None
+        )
+        multi = len({r.get("output") for r in rows}) > 1
+        labels: dict[Any, str] = {}
+        for row in rows:
+            base = row.get("name") or str(row.get("idx", ""))
+            if multi and row.get("output") != focused_output and not row.get("name"):
+                base = f"{base}@{row.get('output')}"
+            labels[row.get("id")] = str(base)
+        return labels
+
+    def list_windows(self) -> list[Window]:
+        rows = self._json("windows")
+        if not isinstance(rows, list):
+            return []
+        labels = self._labels(self._workspace_rows())
+        windows: list[Window] = []
+        for row in rows:
+            if not isinstance(row, dict) or row.get("id") is None:
+                continue
+            pid = row.get("pid")
+            windows.append(Window(
+                id=str(row["id"]),
+                title=row.get("title") or "",
+                app=row.get("app_id") or "",
+                pid=pid if isinstance(pid, int) else None,
+                workspace=labels.get(row.get("workspace_id"), ""),
+                focused=bool(row.get("is_focused")),
+                geometry=None,
+            ))
+        return windows
+
+    def list_workspaces(self) -> list[str]:
+        rows = self._workspace_rows()
+        labels = self._labels(rows)
+        return [labels[r.get("id")] for r in rows]
+
+    def _focused_workspace(self) -> str | None:
+        rows = self._workspace_rows()
+        labels = self._labels(rows)
+        for row in rows:
+            if row.get("is_focused"):
+                return labels[row.get("id")]
+        return None
+
+    def _find(self, window_id: str) -> Window | None:
+        for win in self.list_windows():
+            if win.id == str(window_id):
+                return win
+        return None
+
+    @staticmethod
+    def _settle(check, attempts: int = 12, pause: float = 0.08) -> bool:
+        """Poll until ``check()`` holds; niri applies actions asynchronously."""
+        for _ in range(attempts):
+            if check():
+                return True
+            time.sleep(pause)
+        return check()
+
+    def _floating(self, window_id: str) -> bool | None:
+        for row in self._json("windows") or []:
+            if isinstance(row, dict) and str(row.get("id")) == window_id:
+                return bool(row.get("is_floating"))
+        return None
+
+    # -- actions ----------------------------------------------------------
+
+    def focus(self, window: Window) -> bool:
+        if self._find(window.id) is None:
+            return False
+        if not self._action("focus-window", "--id", window.id):
+            return False
+        return self._settle(lambda: (self.focused() or _NO_WINDOW).id == window.id)
+
+    def close(self, window: Window) -> bool:
+        """Ask the window to close; True means niri accepted it.
+
+        The caller (``close_window``) polls for the window to vanish, since an
+        app with a save prompt stays open after an accepted request.
+        """
+        if self._find(window.id) is None:
+            return False
+        return self._action("close-window", "--id", window.id)
+
+    def fullscreen(self) -> bool:
+        # niri's window list does not expose fullscreen state, so the effect
+        # cannot be re-read; True only says niri accepted the request.
+        target = self.focused()
+        if target is None:
+            return False
+        return self._action("fullscreen-window", "--id", target.id)
+
+    def toggle_float(self) -> bool:
+        target = self.focused()
+        if target is None:
+            return False
+        was = self._floating(target.id)
+        if was is None or not self._action("toggle-window-floating", "--id", target.id):
+            return False
+        return self._settle(lambda: self._floating(target.id) not in (None, was))
+
+    def workspace(self, target: str) -> bool:
+        ref = str(target).strip()
+        if not ref or "@" in ref:
+            return False
+        if not self._action("focus-workspace", ref):
+            return False
+        return self._settle(lambda: self._focused_workspace() == ref)
+
+    def move_to_workspace(self, target: str, window: Window | None = None) -> bool:
+        ref = str(target).strip()
+        if not ref or "@" in ref:
+            return False
+        if window is None:
+            window = self.focused()
+        if window is None:
+            return False
+        args = ["move-window-to-workspace", "--window-id", window.id]
+        if not window.focused:
+            args += ["--focus", "false"]
+        if not self._action(*args, ref):
+            return False
+        return self._settle(lambda: (self._find(window.id) or _NO_WINDOW).workspace == ref)
+
+    def spawn(self, command: list[str]) -> bool:
+        # Through niri so the child gets the compositor's own environment
+        # (WAYLAND_DISPLAY, portals) even when we run from ssh or a service.
+        if self._action("spawn", "--", *command):
+            return True
+        shell.spawn(command)
+        return True
+
+    can_spawn_on_workspace = True
+
+    def spawn_on_workspace(self, command: list[str], workspace: str) -> bool:
+        """Start a command and park its window on a workspace, unfocused.
+
+        niri has no ``[workspace N]`` launch rule (placement is config-only
+        window rules, which belong to the owner), so the window is placed
+        after it appears: spawn, find the new window id, move it with
+        ``--focus false``, then give focus back to what had it. The window
+        shows briefly on the current workspace first. Returns False only when
+        niri refused the spawn; a window that never appears or lands elsewhere
+        is reported by the caller, which re-reads the state.
+        """
+        ref = str(workspace).strip()
+        before = {w.id for w in self.list_windows()}
+        prior = self.focused()
+        prior_ws = self._focused_workspace()
+        if not self._action("spawn", "--", *command):
+            return False
+
+        new: list[Window] = []
+        for _ in range(30):
+            time.sleep(0.25)
+            new = [w for w in self.list_windows() if w.id not in before]
+            if new:
+                break
+        if not new:
+            return True
+
+        for win in new:
+            self.move_to_workspace(ref, window=Window(
+                win.id, win.title, win.app, win.pid, win.workspace, False))
+
+        # The new window took focus before it moved; put the user back.
+        if prior is not None and self._find(prior.id) is not None:
+            now = self.focused()
+            if now is None or now.id != prior.id:
+                self.focus(prior)
+        elif prior_ws and self._focused_workspace() != prior_ws:
+            self.workspace(prior_ws)
+        return True
+
+
+# ---------------------------------------------------------------------------
 # X11
 # ---------------------------------------------------------------------------
 
@@ -598,6 +836,10 @@ def backend() -> WindowBackend:
         candidates = [HyprlandBackend(), SwayBackend(), X11Backend()]
     elif env.compositor == "sway":
         candidates = [SwayBackend(), HyprlandBackend(), X11Backend()]
+    elif env.compositor == "niri":
+        # No X11 fallback: wmctrl on a niri session only sees XWayland
+        # clients and would report most windows as missing.
+        candidates = [NiriBackend()]
     else:
         candidates = [X11Backend(), HyprlandBackend(), SwayBackend()]
 
