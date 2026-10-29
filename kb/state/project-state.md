@@ -39,7 +39,7 @@ updated: 2026-10-23
 
 - Dynamic LAN address + mDNS `_kravein._tcp` #107 (owner re-runs installer: web.env → auto). Android rediscovers the PC by mDNS #108 (not yet device-tested on another network). Hybrid native app: native Chat merged #113 (device-tested; PSS 115 MB with Chat). Plan items 8–10: resumable sessions merged #111 (resume via /ws?resume=, voice grace 60 s, not across server restart), native voice + background + resume + bubble merged #119 (open: owner heard 2–3 overlapping voices once, not reproduced); #120 android device pass of #119 open items + overlap hunt — checks 1 bubble, 2 rationale, 4 PSS (115–126 MB bg) verified #121; check 3 overlap hunt needs the owner speaking ~10 turns (typed turns do not reach Live; no working TTS on the PC); declined-target retry ends the turn #117. Owner's phone has 3 pairings — remove the 2 old ones after the device test.
 
-- Niri port (plan `kb/plans/niri-port.md`, owner 2026-10-29): #122 qa provision + installer, #123 skills niri backend. Remote via `ssh kravein-new`; only `/home/kravein/Projects/desktop/kravein` writable; #124 engine deletes the Windows tree + Brahma leftovers (roster unfrozen), niri config read-only.
+- Niri port (plan `kb/plans/niri-port.md`, owner 2026-10-29): #122 qa provision + installer, #123 skills niri backend. Remote via `ssh kravein-new`; only `/home/kravein/Projects/desktop/kravein` writable; Windows tree + old-name fallbacks deleted #127, docs/team cleanup lead batch, niri config read-only.
 
 ## Blockers
 - None.

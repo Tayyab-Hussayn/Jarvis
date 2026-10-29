@@ -4,12 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## The assistant is called Kravein
 
-Renamed from **Brahma / Brahma-Echo** on 2026-08-24. Any surviving `brahma` name, import, path or
-string is a leftover, not a decision — replace it with `kravein` on sight rather than working
-around it. The `brahma-echo` XDG directories were migrated, and `config.py` still falls back to
-them; delete that fallback and the old paths once nothing is using them. The Android app
-(`brahma-connect-android/`, moving to `android/`) is renamed by the **android** agent now that it
-can be built here.
+The project is **Kravein** everywhere; old names, paths and fallbacks were removed in #127. Any other project name that appears in code or docs is a bug — replace it with `kravein`.
 
 ## How we work
 
@@ -20,8 +15,7 @@ issues, PRs and commits are in English.
 **engine**, **skills**, **web**, **qa**, **android** — each its own Claude Code session in its own worktree
 (`.claude/worktrees/<name>` on `agent/<name>`). An agent edits only the paths it owns
 (`.claude/team/roster.json`, enforced by hooks) and reaches `main` only through a reviewed,
-squash-merged PR on the private GitHub remote. The Windows-original tree is
-**frozen** — nobody edits it until the roster unfreezes it.
+squash-merged PR on the private GitHub remote.
 Your SessionStart briefing says which role you are. Protocol: `.claude/rules/team-protocol.md`;
 overview: `kb/how-the-team-works.md`.
 
@@ -50,15 +44,15 @@ unclear or wrong, use `/conflict-report` instead of guessing.
 ## Current state
 @kb/state/project-state.md
 
-## Two codebases live here
+## Layout
 
-| Tree | Status |
+| Tree | What |
 |---|---|
-| `kravein/` | **The live Linux port. Work here.** |
-| `web/` | **The frontend (Next.js). Work here.** Built output lands in `kravein/web-dist/`. |
-| `main.py`, `ui.py`, `actions/`, `agent/`, `smart_home/`, `kravein_connect/`, `dashboard/`, `extra/` | Original Windows build. Kept for reference; **do not assume it runs.** |
+| `kravein/` | The assistant (Linux). |
+| `web/` | The frontend (Next.js); built output lands in `kravein/web-dist/`. |
+| `android/` | Kravein Connect, the phone app (Kotlin). |
 
-`actions/attention_monitor.py` imports `ctypes.wintypes` and `pyautogui` at module top level, so `main.py` cannot even import on Linux. The Windows tree was deliberately left untouched rather than half-migrated. `README-LINUX.md` documents what was ported and what was not.
+The original Windows build was deleted on 2026-10-29 (#127).
 
 ## Commands
 
@@ -66,7 +60,7 @@ Everything runs from the venv; there is no global install.
 
 ```bash
 ./install-linux.sh                          # venv + native tool check + optional systemd unit
-.venv/bin/python -m pytest tests/engine tests/skills tests/test_web_transport.py -q   # main suite (428 tests)
+.venv/bin/python -m pytest tests -q          # main suite (882 tests)
 .venv/bin/python -m pytest tests/engine/test_safety.py::test_name -q   # single test
 python3 .claude/team/tests/test_team_engine.py   # team guards (122)
 .claude/team/bin/team status                 # agents, worktrees, guard blocks
@@ -86,7 +80,6 @@ cd web && npm run dev                       # frontend dev server on :3000 (talk
 cd web && npm run build                     # static export -> kravein/web-dist/
 ```
 
-`tests/test_kravein_connect*.py` are from the Windows tree. `tests/test_screen_processor.py` and `test_gesture_utils.py` need `cv2`/`mediapipe`, which have no Python 3.14 wheels — those failures are expected.
 
 ## Architecture
 
