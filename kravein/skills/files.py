@@ -250,6 +250,173 @@ def write_file(
     return f"{action} {target} ({len(content):,} chars)."
 
 
+_EDIT_MAX_BYTES = 5 * 1024 * 1024
+
+
+@skill(category="files", danger=Danger.MODERATE)
+def edit_file(
+    path: str,
+    old_text: str,
+    new_text: str,
+    _source: str = "local",
+    _confirm: bool = False,
+) -> str:
+    """Replace one exact piece of text inside an existing text file.
+
+    Use this to change part of a file; use write_file only for new files or
+    full rewrites. The edit is refused when old_text is not found or appears
+    more than once — include more surrounding lines to make it unique.
+
+    Args:
+        path: The file to edit.
+        old_text: Exact text to replace, including whitespace and newlines.
+        new_text: Replacement text (may be empty to delete old_text).
+    """
+    if not old_text:
+        return "Refused: old_text is empty; say which text to replace."
+    if old_text == new_text:
+        return "Nothing to do: old_text and new_text are identical."
+
+    target = config.resolve_user_path(path)
+    # Same path policy as write_file: protected paths are refused here too.
+    # Not escalated to DESTRUCTIVE like an overwrite — an exact, unique
+    # replacement is a small reversible change, and confirming every edit
+    # would make working inside a directory unusable.
+    verdict = check_path(target, write=True)
+    enforce(
+        verdict, f"edit {target}",
+        skill="edit_file", source=_source, pre_confirmed=_confirm,
+        targets=describe_targets(f"file:{target}"),
+    )
+
+    if not target.is_file():
+        return f"Not a file: {target}"
+    try:
+        if target.stat().st_size > _EDIT_MAX_BYTES:
+            return f"Refused: {target} is larger than {_EDIT_MAX_BYTES // 1024 // 1024} MB."
+        # newline="" keeps CRLF files CRLF; a text-mode round trip would
+        # silently rewrite every line ending in the file.
+        with target.open("r", encoding="utf-8", newline="") as handle:
+            text = handle.read()
+    except UnicodeDecodeError:
+        return f"Refused: {target} is not UTF-8 text."
+    except PermissionError:
+        return f"Permission denied: {target}"
+    except OSError as exc:
+        return f"Could not read {target}: {exc}"
+
+    count = text.count(old_text)
+    if count == 0:
+        return f"Refused: old_text was not found in {target}. Nothing changed."
+    if count > 1:
+        # Never take the first match: the model may mean another one.
+        lines = []
+        start = 0
+        while len(lines) < 5:
+            idx = text.find(old_text, start)
+            if idx < 0:
+                break
+            lines.append(text.count("\n", 0, idx) + 1)
+            start = idx + len(old_text)
+        return (f"Refused: old_text matches {count} places in {target} "
+                f"(lines {', '.join(map(str, lines))}{'…' if count > len(lines) else ''}). "
+                "Include more surrounding text so it matches exactly once. Nothing changed.")
+
+    updated = text.replace(old_text, new_text, 1)
+    tmp = target.with_name(f".{target.name}.kravein-edit")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(updated)
+        shutil.copymode(target, tmp)
+        # Atomic swap: a crash mid-write must not leave a half-written file.
+        os.replace(tmp, target)
+    except PermissionError:
+        tmp.unlink(missing_ok=True)
+        return f"Permission denied: {target}"
+    except OSError as exc:
+        tmp.unlink(missing_ok=True)
+        return f"Could not write {target}: {exc}"
+    line = text.count("\n", 0, text.find(old_text)) + 1
+    return f"Edited {target} at line {line} (1 replacement, {len(updated) - len(text):+,} chars)."
+
+
+_SEARCH_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
+                     ".mypy_cache", ".pytest_cache", "dist", "build", ".next"}
+_SEARCH_MAX_FILE = 2 * 1024 * 1024
+
+
+@skill(category="files")
+def search_text(
+    query: str,
+    directory: str = "home",
+    glob: str = "",
+    max_results: int = 40,
+) -> str:
+    """Search inside file contents under a directory (like grep -rn).
+
+    Output is capped; narrow it with glob or a more specific directory.
+    To find files by name use find_files instead.
+
+    Args:
+        query: Text to look for (case-insensitive, plain text not regex).
+        directory: Directory to search under.
+        glob: Only search files whose name matches, e.g. '*.py'.
+        max_results: Maximum matching lines to return (1-200).
+    """
+    import fnmatch
+
+    if not query:
+        return "Give some text to search for."
+    root = config.resolve_user_path(directory)
+    if not root.is_dir():
+        return f"Not a directory: {root}"
+
+    limit = max(1, min(int(max_results), 200))
+    needle = query.lower()
+    hits: list[str] = []
+    files_scanned = 0
+    truncated = False
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune in place: skipping vendored/build trees is what keeps this
+        # fast and keeps results about the user's own files.
+        dirnames[:] = sorted(d for d in dirnames
+                             if d not in _SEARCH_SKIP_DIRS and not d.startswith("."))
+        for fname in sorted(filenames):
+            if glob and not fnmatch.fnmatch(fname, glob):
+                continue
+            fpath = Path(dirpath) / fname
+            try:
+                if fpath.is_symlink() or fpath.stat().st_size > _SEARCH_MAX_FILE:
+                    continue
+                with fpath.open("rb") as handle:
+                    raw = handle.read()
+            except OSError:
+                continue
+            if b"\0" in raw[:4096]:  # binary
+                continue
+            files_scanned += 1
+            for number, line in enumerate(raw.decode("utf-8", "ignore").splitlines(), 1):
+                if needle in line.lower():
+                    shown = line.strip()
+                    if len(shown) > 200:
+                        shown = shown[:200] + "…"
+                    hits.append(f"{fpath}:{number}: {shown}")
+                    if len(hits) >= limit:
+                        truncated = True
+                        break
+            if truncated:
+                break
+        if truncated:
+            break
+
+    if not hits:
+        return f"No matches for '{query}' in {files_scanned} file(s) under {root}."
+    tail = (f"\n… stopped at {limit} matches; narrow with glob or directory."
+            if truncated else "")
+    return "\n".join(hits) + tail
+
+
 @skill(category="files", danger=Danger.MODERATE)
 def create_directory(path: str) -> str:
     """Create a directory, including any missing parents.
