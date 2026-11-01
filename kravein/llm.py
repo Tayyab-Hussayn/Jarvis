@@ -1000,8 +1000,16 @@ class LLM:
         system: str = "",
         tools: list[dict] | None = None,
         temperature: float | None = None,
+        prefer: str = "",
     ) -> Reply:
-        """Get one model turn, failing over between providers."""
+        """Get one model turn, failing over between providers.
+
+        ``prefer`` is ``"provider:model"`` (an agent profile's ``model``): that
+        provider is tried first with that model. Every other provider keeps its
+        own configured model and the breaker/failover run as usual, so a bad
+        preference costs one failed attempt, never the request. A provider that
+        is unavailable or cooling down is simply not preferred.
+        """
         if temperature is None:
             temperature = float(config.get("llm.temperature", 0.4))
 
@@ -1009,11 +1017,23 @@ class LLM:
         if not order:
             raise LLMError(self.status())
 
+        preferred_name, _, preferred_model = (prefer or "").partition(":")
+        preferred_name = preferred_name.strip().lower()
+        if preferred_name:
+            first = [p for p in order if p.name == preferred_name]
+            order = first + [p for p in order if p.name != preferred_name]
+
         errors: list[str] = []
         for provider in order:
             try:
+                extra = (
+                    {"model": preferred_model.strip()}
+                    if preferred_model.strip() and provider.name == preferred_name
+                    else {}
+                )
                 reply = provider.complete(
-                    messages, system=system, tools=tools, temperature=temperature
+                    messages, system=system, tools=tools, temperature=temperature,
+                    **extra,
                 )
                 self._record_success(provider.name)
                 audit.record(

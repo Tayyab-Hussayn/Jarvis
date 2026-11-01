@@ -20,7 +20,7 @@ from . import audit, config, registry, toolselect
 from .agents import AgentProfile, ProfileError, history as _history, load_profile
 from .llm import LLMError, ToolCall, client
 from .platform import detect
-from .safety import Confirmer, confirmer_scope, retried_declined_target
+from .safety import Confirmer, TurnMemory, confirmer_scope, retried_declined_target
 
 # Called with (kind, text) — or (kind, text, data) for observers that want the
 # structured form. kind is one of: thinking, tool, tool_result, answer, error.
@@ -127,6 +127,7 @@ class Turn:
 
 
 DECLINED_REPLY = "Okay, I won't do that."
+ORCHESTRATOR = "orchestrator"
 
 # Old turns are folded into a rolling summary by one tool-less model call.
 SUMMARY_SYSTEM = (
@@ -162,6 +163,13 @@ class Agent:
     thread_id: str | None = None
     summary: str = ""
     max_history: int = 0
+    depth: int = 0                      # 0 = talks to the owner, 1 = a delegated sub-agent
+    max_rounds: int = 0                 # 0 = llm.max_tool_iterations
+    extra_instructions: str = ""        # appended to the system prompt (delegate's report format)
+    _round_allowed: "frozenset[str] | None" = None  # this round's narrowed tool set (escalation)
+    _stop: Any = None                   # the current turn's stop flag, for delegate to link
+    end_turn_check: Any = None          # delegate: callable -> True ends the turn (owner declined, unattended refusal)
+    _memory: "TurnMemory | None" = None  # shared denial memory (a sub-agent shares its parent's)
 
     def __init__(
         self,
@@ -172,6 +180,9 @@ class Agent:
         max_history: int = 0,
         profile: "AgentProfile | str | None" = None,
         thread_id: str | None = None,
+        depth: int = 0,
+        max_rounds: int = 0,
+        memory: "TurnMemory | None" = None,
     ):
         """``profile`` restricts this agent to that profile's tools (enforced in
         ``registry.dispatch``) and adds its instructions to the base prompt;
@@ -189,6 +200,18 @@ class Agent:
                 self._allowed = registry.resolve_tools(profile.tools)
             except ValueError as exc:
                 raise ProfileError(f"profile '{profile.name}': {exc}") from None
+        # Nested delegation is impossible by construction: only the Orchestrator
+        # profile may hold `delegate`, and never below depth 0. The prompt says
+        # so too, but this is the enforcement.
+        if self._allowed is not None and "delegate" in self._allowed:
+            if profile.name != ORCHESTRATOR or depth > 0:
+                raise ProfileError(
+                    f"profile '{profile.name}' may not use delegate "
+                    "(only the Orchestrator, and never as a sub-agent)"
+                )
+        self.depth = depth
+        self.max_rounds = max_rounds
+        self._memory = memory
         self.thread_id = thread_id
         self.summary = ""
         self.source = source
@@ -198,6 +221,13 @@ class Agent:
         self.messages: list[dict[str, Any]] = []
         self._lock = threading.RLock()
         self._llm = client()
+        if profile is not None and profile.model:
+            known = {p.name for p in self._llm._all()}
+            if profile.model.partition(":")[0] not in known:
+                raise ProfileError(
+                    f"profile '{profile.name}': unknown provider in model "
+                    f"'{profile.model}' (known: {', '.join(sorted(known))})"
+                )
         # Skill categories this conversation has used or asked for. They stay
         # exposed on later turns so a follow-up ("now close it") is not shown
         # a toolset narrowed to its own wording. None of this is read unless
@@ -253,12 +283,15 @@ class Agent:
             if self.profile.instructions:
                 prompt += "\n\n" + self.profile.instructions
 
+        if self.extra_instructions:
+            prompt += "\n\n" + self.extra_instructions
+
         memory = context_for_prompt()
         if memory:
             prompt += "\n\n" + memory
         return prompt
 
-    def _with_context(self) -> list[dict[str, Any]]:
+    def _with_context(self, extra: str = "") -> list[dict[str, Any]]:
         """The outgoing messages plus volatile context, appended last.
 
         The model needs to know what time it is — otherwise "5 PM tomorrow"
@@ -287,9 +320,10 @@ class Agent:
                 "ISO 8601 timestamp before passing it to a tool."
             )
         except Exception:
-            return self._history_messages()
+            note = ""
 
-        return [*self._history_messages(), {"role": "user", "content": note}]
+        tail = [{"role": "user", "content": n} for n in (note, extra) if n]
+        return [*self._history_messages(), *tail]
 
     def _history_messages(self) -> list[dict[str, Any]]:
         """History as sent: the rolling summary (if any) leads."""
@@ -446,6 +480,16 @@ class Agent:
         )
         return fresh if len(fresh) != wanted else cached
 
+    # -- escalation ------------------------------------------------------
+
+    def _can_escalate(self) -> bool:
+        """An Orchestrator with someone to hand the task to."""
+        if self._allowed is None or "delegate" not in self._allowed or self.depth:
+            return False
+        from .agents import list_profiles
+
+        return any(n != ORCHESTRATOR for n in list_profiles())
+
     # -- main loop -------------------------------------------------------
 
     def ask(self, text: str, stop: threading.Event | None = None) -> Turn:
@@ -477,7 +521,12 @@ class Agent:
         if not text:
             return Turn(reply="")
 
-        max_iterations = int(config.get("llm.max_tool_iterations", 8))
+        max_iterations = self.max_rounds or int(config.get("llm.max_tool_iterations", 8))
+        escalate_after = int(config.get("agents.escalate_after_rounds", 3))
+        escalate_ok = escalate_after > 0 and self._can_escalate()
+        escalated = False
+        self._stop = stop
+        self._round_allowed = None
         turn = Turn()
 
         def cancelled() -> bool:
@@ -505,16 +554,42 @@ class Agent:
 
             # The confirmer must be installed for the whole loop, since skills
             # run on this thread and read it from thread-local state.
-            with confirmer_scope(self.confirmer):
+            with confirmer_scope(self.confirmer, self._memory):
                 for iteration in range(1, max_iterations + 1):
                     turn.iterations = iteration
                     if cancelled():
                         return give_up("before_model")
 
+                    # Escalation, in code: after N tool rounds without an
+                    # answer the Orchestrator's next round can only delegate
+                    # (or reply). Both the schema and dispatch are narrowed, so
+                    # a model that names another tool anyway is refused.
+                    if escalate_ok and not escalated and iteration > escalate_after:
+                        escalated = True
+                        audit.record(
+                            "agent.escalated", source=self.source,
+                            after_rounds=iteration - 1,
+                        )
+                    round_allowed = self._allowed
+                    note = ""
+                    if escalated:
+                        round_allowed = frozenset({"delegate"})
+                        tools = registry.tool_declarations(names=round_allowed)
+                        note = (
+                            f"[context] You have used {iteration - 1} tool rounds on "
+                            "this request without finishing. From here your only tool "
+                            "is delegate: hand the remaining work to the right "
+                            "sub-agent, or answer now with what you have."
+                        )
+
                     try:
-                        tools = self._current_tools(text, tools)
+                        if not escalated:
+                            tools = self._current_tools(text, tools)
+                        kwargs = {"prefer": self.profile.model} if (
+                            self.profile is not None and self.profile.model) else {}
                         reply = self._llm.complete(
-                            self._with_context(), system=system, tools=tools
+                            self._with_context(note), system=system, tools=tools,
+                            **kwargs,
                         )
                     except LLMError as exc:
                         turn.error = str(exc)
@@ -576,6 +651,7 @@ class Agent:
                                 "content": "Not run — the user stopped the request.",
                             })
                             continue
+                        self._round_allowed = round_allowed
                         result = self._run_tool(call)
                         turn.tool_calls.append(call.name)
                         self.messages.append({
@@ -584,7 +660,10 @@ class Agent:
                             "tool_call_id": call.id or call.name,
                             "content": self._cap_result(call.name, result),
                         })
-                        declined = declined or retried_declined_target()
+                        declined = (
+                            declined or retried_declined_target()
+                            or (self.end_turn_check is not None and bool(self.end_turn_check()))
+                        )
 
                     if declined:
                         # The owner said no. Another round would only let the
@@ -626,7 +705,7 @@ class Agent:
             call.arguments,
             source=self.source,
             context=self,
-            allowed=self._allowed,
+            allowed=self._round_allowed if self._round_allowed is not None else self._allowed,
         )
         used = registry.get_skill(call.name)
         if used is not None and used.category != "tools":
@@ -643,3 +722,20 @@ def one_shot(text: str, *, source: str = "cli", confirmer: Confirmer | None = No
     agent = Agent(source=source, confirmer=confirmer)
     turn = agent.ask(text)
     return turn.reply or turn.error
+
+
+def make_agent(*, source: str, thread_id: str | None = None, **kwargs: Any) -> Agent:
+    """The Agent for a transport the owner talks to (web, voice, CLI).
+
+    ``agents.orchestrator`` (default off) switches these to the Orchestrator
+    profile. Off, this is exactly ``Agent(source=...)`` as before. Jobs, the
+    daemon and WhatsApp do not use it: unattended runs keep their old shape.
+    """
+    if config.get("agents.orchestrator", False):
+        try:
+            return Agent(source=source, thread_id=thread_id, profile=ORCHESTRATOR, **kwargs)
+        except ProfileError as exc:
+            # A broken profile must not take the assistant down; fall back to
+            # the all-tools agent and say so.
+            audit.record("agent.orchestrator_unavailable", error=str(exc))
+    return Agent(source=source, thread_id=thread_id, **kwargs)

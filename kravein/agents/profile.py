@@ -10,7 +10,7 @@ File shape::
     name: research
     purpose: One line on what this agent is for.
     tools: [web, files, read_file]      # categories and/or skill names
-    model: gemini-3.5-flash             # optional
+    model: zen:deepseek-v4.1-flash      # optional, "provider:model"
     report_max_chars: 1500              # optional
     ---
     Free-form instructions, appended to the shared base system prompt.
@@ -152,12 +152,18 @@ def parse_profile(text: str, *, expected_name: str = "", where: str = "SKILL.md"
         if limit <= 0:
             raise ProfileError(f"{where}: report_max_chars must be positive")
 
+    model = str(meta.get("model", ""))
+    if model and not re.match(r"^[a-z0-9_-]+:\S+$", model):
+        raise ProfileError(
+            f"{where}: model must look like 'provider:model' (got '{model}')"
+        )
+
     return AgentProfile(
         name=name,
         purpose=str(meta["purpose"]),
         tools=tools,
         instructions=body,
-        model=str(meta.get("model", "")),
+        model=model,
         report_max_chars=limit,
     )
 

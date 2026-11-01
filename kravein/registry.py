@@ -335,8 +335,12 @@ def get_skill(name: str) -> Skill | None:
 
 
 def categories() -> dict[str, list[Skill]]:
+    """Skill groups the model and `more_tools` can name. The "agents" group
+    (``delegate``) is not one of them: it is reached by profile, by name."""
     out: dict[str, list[Skill]] = {}
     for entry in all_skills().values():
+        if entry.category == "agents":
+            continue
         out.setdefault(entry.category, []).append(entry)
     for group in out.values():
         group.sort(key=lambda s: s.name)
@@ -367,6 +371,10 @@ def tool_declarations(
         if names is not None:
             if entry.name not in names:
                 continue
+        elif entry.category == "agents":
+            # `delegate` is an Orchestrator-only tool: an agent with no
+            # profile never sees it (and `delegate` refuses such a caller too).
+            continue
         elif entry.name in ROUTING_ONLY_SKILLS:
             if not routing:
                 continue
