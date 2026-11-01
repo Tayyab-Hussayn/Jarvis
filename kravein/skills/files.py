@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .. import config
 from ..platform import apps, shell
+from .. import safety
 from ..registry import skill
 from ..safety import (Danger, Verdict, check_delete, check_path,
                       describe_targets, enforce)
@@ -253,6 +254,11 @@ def write_file(
 _EDIT_MAX_BYTES = 5 * 1024 * 1024
 
 
+def _clip(text: str, limit: int = 80) -> str:
+    one = text.replace("\n", "\\n")
+    return repr(one if len(one) <= limit else one[:limit] + "…")
+
+
 @skill(category="files", danger=Danger.MODERATE)
 def edit_file(
     path: str,
@@ -277,17 +283,15 @@ def edit_file(
     if old_text == new_text:
         return "Nothing to do: old_text and new_text are identical."
 
-    target = config.resolve_user_path(path)
-    # Same path policy as write_file: protected paths are refused here too.
-    # Not escalated to DESTRUCTIVE like an overwrite — an exact, unique
-    # replacement is a small reversible change, and confirming every edit
-    # would make working inside a directory unusable.
+    # Work on the real file. A symlinked path (stow-managed dotfiles) must keep
+    # its link, and the path checked by safety must be the one written;
+    # os.replace on the link itself would swap it for a regular file.
+    target = safety.resolve_target(config.resolve_user_path(path))
     verdict = check_path(target, write=True)
-    enforce(
-        verdict, f"edit {target}",
-        skill="edit_file", source=_source, pre_confirmed=_confirm,
-        targets=describe_targets(f"file:{target}"),
-    )
+    if verdict.blocked:
+        # Refuse before reading: protected files are not even opened.
+        enforce(verdict, f"edit {target}", skill="edit_file", source=_source,
+                pre_confirmed=_confirm, targets=describe_targets(f"file:{target}"))
 
     if not target.is_file():
         return f"Not a file: {target}"
@@ -322,6 +326,23 @@ def edit_file(
                 f"(lines {', '.join(map(str, lines))}{'…' if count > len(lines) else ''}). "
                 "Include more surrounding text so it matches exactly once. Nothing changed.")
 
+    line = text.count("\n", 0, text.find(old_text)) + 1
+    # Replacing most of the file is a rewrite, and an overwrite of an existing
+    # file is DESTRUCTIVE for write_file; edit_file must not be the quiet way
+    # around that confirmation.
+    if len(old_text) * 2 >= len(text):
+        verdict.danger = max(verdict.danger, Danger.DESTRUCTIVE)
+        verdict.reasons.append(
+            f"replaces {len(old_text) * 100 // max(len(text), 1)}% of {target.name}"
+        )
+    # The prompt is the owner's only look at the change: show where and what.
+    enforce(
+        verdict,
+        f"edit {target} at line {line}: - {_clip(old_text)} + {_clip(new_text)}",
+        skill="edit_file", source=_source, pre_confirmed=_confirm,
+        targets=describe_targets(f"file:{target}"),
+    )
+
     updated = text.replace(old_text, new_text, 1)
     tmp = target.with_name(f".{target.name}.kravein-edit")
     try:
@@ -336,13 +357,20 @@ def edit_file(
     except OSError as exc:
         tmp.unlink(missing_ok=True)
         return f"Could not write {target}: {exc}"
-    line = text.count("\n", 0, text.find(old_text)) + 1
     return f"Edited {target} at line {line} (1 replacement, {len(updated) - len(text):+,} chars)."
 
 
 _SEARCH_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
                      ".mypy_cache", ".pytest_cache", "dist", "build", ".next"}
 _SEARCH_MAX_FILE = 2 * 1024 * 1024
+_SECRET_NAMES = ("*.pem", "*.key", "*.p12", "*.pfx", "id_*", "*api_keys*",
+                 ".env", ".env.*", ".netrc", "*credentials*", "*secret*")
+
+
+def _looks_secret(name: str) -> bool:
+    import fnmatch
+    low = name.lower()
+    return any(fnmatch.fnmatch(low, pat) for pat in _SECRET_NAMES)
 
 
 @skill(category="files")
@@ -370,6 +398,11 @@ def search_text(
     root = config.resolve_user_path(directory)
     if not root.is_dir():
         return f"Not a directory: {root}"
+    # Results go to the model and from there to a cloud LLM, so secrets never
+    # enter the search: not as a root, not found beneath a wider root.
+    if safety.sensitive_kind(root):
+        return (f"Refused: {root} holds keys or Kravein's own secrets and is "
+                "not searched.")
 
     limit = max(1, min(int(max_results), 200))
     needle = query.lower()
@@ -380,12 +413,18 @@ def search_text(
     for dirpath, dirnames, filenames in os.walk(root):
         # Prune in place: skipping vendored/build trees is what keeps this
         # fast and keeps results about the user's own files.
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in _SEARCH_SKIP_DIRS and not d.startswith("."))
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in _SEARCH_SKIP_DIRS and not d.startswith(".")
+            and not safety.sensitive_kind(Path(dirpath) / d))
         for fname in sorted(filenames):
             if glob and not fnmatch.fnmatch(fname, glob):
                 continue
+            if _looks_secret(fname):
+                continue
             fpath = Path(dirpath) / fname
+            if safety.sensitive_kind(fpath):
+                continue
             try:
                 if fpath.is_symlink() or fpath.stat().st_size > _SEARCH_MAX_FILE:
                     continue

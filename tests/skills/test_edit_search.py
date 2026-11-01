@@ -109,3 +109,111 @@ def test_search_skips_vendored_hidden_and_binary(tmp_path):
 def test_search_rejects_bad_input(tmp_path):
     assert "Give some text" in files.search_text("", str(tmp_path))
     assert "Not a directory" in files.search_text("x", str(tmp_path / "nope"))
+
+
+# --- review findings (#136) -------------------------------------------------
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A fake home with Kravein dirs, so sensitive classes are testable."""
+    h = tmp_path / "home"
+    h.mkdir()
+    monkeypatch.setattr(safety.Path, "home", classmethod(lambda cls: h))
+    from kravein import config
+    for name, sub in (("CONFIG_DIR", ".config/kravein"), ("STATE_DIR", ".local/state/kravein"),
+                      ("DATA_DIR", ".local/share/kravein")):
+        d = h / sub
+        d.mkdir(parents=True)
+        monkeypatch.setattr(config, name, d)
+    ws = h / ".local/share/kravein/workspace"
+    ws.mkdir()
+    monkeypatch.setattr(config, "WORKSPACE_DIR", ws)
+    return h
+
+
+@pytest.mark.parametrize("rel", [".config/kravein/api_keys.json", ".local/state/kravein/x",
+                                 ".local/share/kravein/memory.json"])
+def test_kravein_own_dirs_are_blocked_for_writes(home, rel):
+    v = safety.check_path(home / rel, write=True)
+    assert v.blocked and safety.sensitive_kind(home / rel) == "blocked"
+
+
+def test_kravein_workspace_is_still_writable(home):
+    v = safety.check_path(home / ".local/share/kravein/workspace/a.txt", write=True)
+    assert not v.blocked and v.danger < safety.Danger.DESTRUCTIVE
+
+
+@pytest.mark.parametrize("rel", [".ssh/authorized_keys", ".bashrc", ".zshrc", ".profile",
+                                 ".config/fish/config.fish", ".config/systemd/user/a.service",
+                                 ".config/autostart/x.desktop", ".gnupg/gpg.conf"])
+def test_login_surfaces_need_confirmation(home, rel):
+    v = safety.check_path(home / rel, write=True)
+    assert not v.blocked and v.danger >= safety.Danger.DESTRUCTIVE
+    assert safety.sensitive_kind(home / rel) == "confirm"
+
+
+def test_write_file_shares_the_classification(home, enforced):
+    files.write_file(str(home / ".bashrc"), "x")
+    assert enforced[0][0].danger >= safety.Danger.DESTRUCTIVE
+
+
+def test_edit_in_sensitive_location_is_destructive_and_blocked_one_refuses(home, enforced):
+    rc = home / ".bashrc"
+    rc.write_text("a\n" * 50 + "export X=1\n")
+    files.edit_file(str(rc), "export X=1", "export X=2")
+    assert enforced[0][0].danger >= safety.Danger.DESTRUCTIVE
+
+
+def test_edit_of_kravein_private_file_is_refused_before_reading(home):
+    keys = home / ".config/kravein/api_keys.json"
+    keys.write_text('{"k": "v"}' + " " * 100)
+    with pytest.raises(safety.SafetyError):
+        files.edit_file(str(keys), '"v"', '"w"')
+    assert '"v"' in keys.read_text()
+
+
+def test_large_replacement_is_treated_as_overwrite(tmp_path, enforced):
+    f = tmp_path / "a.txt"
+    f.write_text("line one\nline two\n")
+    files.edit_file(str(f), "line one\nline two", "all new")
+    assert enforced[0][0].danger >= safety.Danger.DESTRUCTIVE
+    g = tmp_path / "b.txt"
+    g.write_text("x" * 100 + "needle" + "y" * 100)
+    files.edit_file(str(g), "needle", "pin")
+    assert enforced[1][0].danger < safety.Danger.DESTRUCTIVE
+
+
+def test_confirmation_text_previews_the_change(tmp_path, enforced):
+    f = tmp_path / "a.txt"
+    f.write_text("a\nb\nTARGET value\nc\n" * 3 + "unique line\n")
+    files.edit_file(str(f), "unique line", "changed " * 30)
+    desc = enforced[0][1]
+    assert "line 13" in desc and "- 'unique line'" in desc and "+ 'changed" in desc
+    assert "…" in desc  # long new text is clipped
+
+
+def test_edit_through_symlink_keeps_the_link(tmp_path, enforced):
+    real = tmp_path / "real.conf"
+    real.write_text("a=1\nb=2\nc=3\nd=4\n")
+    link = tmp_path / "link.conf"
+    link.symlink_to(real)
+    files.edit_file(str(link), "c=3", "c=9")
+    assert link.is_symlink() and real.read_text() == "a=1\nb=2\nc=9\nd=4\n"
+    assert enforced[0][2]["targets"] == [f"file:{real}".lower()]
+
+
+def test_search_refuses_sensitive_roots_and_skips_secret_files(home):
+    (home / ".ssh").mkdir()
+    (home / ".ssh" / "id_rsa").write_text("needle")
+    assert "Refused" in files.search_text("needle", str(home / ".ssh"))
+    assert "Refused" in files.search_text("needle", str(home / ".config/kravein"))
+    proj = home / "proj"
+    proj.mkdir()
+    for n in ("key.pem", "id_ed25519", "api_keys.json", ".env", "ok.txt", "prod.key"):
+        (proj / n).write_text("needle")
+    out = files.search_text("needle", str(proj))
+    assert "ok.txt" in out
+    for n in ("key.pem", "id_ed25519", "api_keys.json", ".env", "prod.key"):
+        assert n not in out
+    (home / ".bashrc").write_text("needle")
+    assert ".bashrc" not in files.search_text("needle", str(home))
