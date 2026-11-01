@@ -501,6 +501,7 @@ class NovaRouterProvider:
     """
 
     name = "novarouter"
+    label = "NovaRouter"
 
     # The gateway rejects more than this outright:
     #   400 validation_failed "Array must contain at most 128 element(s)"
@@ -519,6 +520,12 @@ class NovaRouterProvider:
 
     def available(self) -> bool:
         return bool(config.novarouter_api_key())
+
+    def _key(self) -> str:
+        return config.novarouter_api_key()
+
+    def _timeout(self) -> float:
+        return REQUEST_TIMEOUT
 
     def _fit_tools(self, tools: list[dict] | None) -> list[dict] | None:
         """Trim to what the gateway will accept, worst-case last.
@@ -584,9 +591,9 @@ class NovaRouterProvider:
         temperature: float = 0.4,
         model: str = "",
     ) -> Reply:
-        key = config.novarouter_api_key()
+        key = self._key()
         if not key:
-            raise LLMError("NovaRouter has no API key configured")
+            raise LLMError(f"{self.label} has no API key configured")
 
         chosen = self.model_name(model)
         payload: dict[str, Any] = {
@@ -607,22 +614,22 @@ class NovaRouterProvider:
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=REQUEST_TIMEOUT,
+                timeout=self._timeout(),
             )
         except requests.RequestException as exc:
-            raise LLMError(f"NovaRouter unreachable: {exc}") from exc
+            raise LLMError(f"{self.label} unreachable: {exc}") from exc
 
         if response.status_code == 401:
-            raise LLMError("NovaRouter rejected the API key")
+            raise LLMError(f"{self.label} rejected the API key")
         if not response.ok:
             raise LLMError(
-                f"NovaRouter returned {response.status_code}: {response.text[:200]}"
+                f"{self.label} returned {response.status_code}: {response.text[:200]}"
             )
 
         data = response.json()
         choices = data.get("choices") or []
         if not choices:
-            raise LLMError("NovaRouter returned no choices")
+            raise LLMError(f"{self.label} returned no choices")
 
         message = choices[0].get("message", {}) or {}
         reply = Reply(
@@ -642,6 +649,66 @@ class NovaRouterProvider:
                     name=fn["name"], arguments=args, id=call.get("id", ""),
                 ))
         return reply
+
+
+class ZenProvider(NovaRouterProvider):
+    """OpenCode Zen (https://opencode.ai/zen) — text-mode primary.
+
+    Same OpenAI-compatible wire shape as NovaRouter, so it reuses its request
+    and reply handling. Verified 2026-11-01 against the Zen docs and the live
+    `GET https://opencode.ai/inference/v1/models` listing: DeepSeek V4.1 Flash
+    is `deepseek-v4.1-flash`, served on `.../inference/openai/v1/chat/completions`
+    (the listing reports tool support). `-free` ids exist but are for OpenCode
+    clients only, so the default is the paid id.
+
+    Unlike NovaRouter no tool cap is known, so none is applied; if Zen ever
+    answers 400 "too many tools" it falls to the next provider like any 4xx.
+    """
+
+    name = "zen"
+    label = "Zen"
+    MAX_TOOLS = 10**6
+
+    def available(self) -> bool:
+        return bool(config.zen_api_key())
+
+    def _key(self) -> str:
+        return config.zen_api_key()
+
+    def _timeout(self) -> float:
+        # Capped like Cline: a slow primary must hand over, since cancel
+        # cannot interrupt a request already in flight.
+        return float(config.get("llm.zen_timeout_seconds", 45))
+
+    def _base(self) -> str:
+        return str(config.get(
+            "llm.zen_base_url", "https://opencode.ai/inference/openai/v1"
+        )).rstrip("/")
+
+    def model_name(self, override: str = "") -> str:
+        return override or str(config.get("llm.zen_model", "deepseek-v4.1-flash"))
+
+    def status(self) -> str:
+        if not self.available():
+            return (
+                "no key — add opencode_zen_api_key to "
+                f"{config.CONFIG_DIR / 'api_keys.json'}, or set OPENCODE_ZEN_API_KEY"
+            )
+        return f"key present, model {self.model_name()}"
+
+    def report(self) -> str:
+        """`kravein doctor` block: configured or missing, never the key."""
+        lines = ["Zen provider (text primary)"]
+        lines.append(f"  model    : {self.model_name()}")
+        lines.append(f"  endpoint : {self._base()}")
+        if not self.available():
+            lines.append("  key      : NOT SET — text falls back to the next provider")
+            lines.append(f"  Fix      : {self.status()[len('no key — '):]}")
+        else:
+            lines.append("  key      : present")
+        return "\n".join(lines)
+
+
 
 
 def _to_openai_messages(messages: list[dict[str, Any]], system: str) -> list[dict]:
@@ -700,13 +767,14 @@ class LLM:
         self.gemini = GeminiProvider()
         self.openrouter = OpenRouterProvider()
         self.novarouter = NovaRouterProvider()
+        self.zen = ZenProvider()
 
         self._failures: dict[str, int] = {}
         self._cooling_until: dict[str, float] = {}
         self._breaker_lock = threading.Lock()
 
     def _all(self) -> list[Any]:
-        return [self.cline, self.gemini, self.openrouter, self.novarouter]
+        return [self.zen, self.cline, self.gemini, self.openrouter, self.novarouter]
 
     # -- circuit breaker -------------------------------------------------
 
@@ -814,7 +882,7 @@ class LLM:
         list is exactly what will actually be attempted.
         """
         by_name = {p.name: p for p in self._all()}
-        preferred = str(config.get("llm.provider", "cline")).lower()
+        preferred = str(config.get("llm.provider", "zen")).lower()
         configured = [str(n).lower() for n in (config.get("llm.provider_order") or [])]
 
         sequence = [preferred]
@@ -860,6 +928,8 @@ class LLM:
                 labels.append(f"cline:{configured_model()}")
             elif provider.name == "novarouter":
                 labels.append(f"novarouter:{self.novarouter.model_name()}")
+            elif provider.name == "zen":
+                labels.append(f"zen:{self.zen.model_name()}")
             else:
                 labels.append(provider.name)
 

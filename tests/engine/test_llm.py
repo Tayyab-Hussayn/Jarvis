@@ -116,7 +116,7 @@ def test_gemini_default_model_is_not_the_retired_one():
 
     # gemini-2.5-flash returns 404 for keys created after its retirement.
     assert config.get("llm.gemini_model") != "gemini-2.5-flash"
-    assert config.get("llm.provider") in ("gemini", "cline", "openrouter")
+    assert config.get("llm.provider") in ("gemini", "cline", "openrouter", "zen")
 
 
 def test_gemini_uses_exactly_one_model():
@@ -239,15 +239,18 @@ def test_gemini_timeout_is_clamped_to_the_api_minimum():
     assert llm.GEMINI_MIN_TIMEOUT == 10.0
 
 
-def test_default_provider_is_cline_not_gemini():
+def test_default_provider_is_zen_then_cline_not_gemini():
     """Gemini proved unreliable on this account, so it does not lead.
 
-    It stays configured for voice (Live native-audio) and vision only.
+    It stays configured for voice (Live native-audio) and vision only. Since
+    2026-11-01 Zen (DeepSeek V4.1 Flash) leads the text chain, Cline behind it.
     """
     from kravein import config
 
-    assert config.get("llm.provider") == "cline"
-    assert "gemini" not in (config.get("llm.provider_order") or [])
+    llm_defaults = config.DEFAULT_SETTINGS["llm"]
+    assert llm_defaults["provider"] == "zen"
+    assert llm_defaults["provider_order"][:2] == ["zen", "cline"]
+    assert "gemini" not in (llm_defaults["provider_order"] or [])
     assert config.get("llm.cline_model").endswith(":free"), \
         "default must run on a zero balance"
 

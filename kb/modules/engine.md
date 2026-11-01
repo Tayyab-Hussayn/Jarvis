@@ -1,7 +1,7 @@
 ---
 type: module
 owner: engine
-updated: 2026-10-24
+updated: 2026-11-01
 ---
 
 # engine
@@ -13,7 +13,7 @@ updated: 2026-10-24
 ## Verify
 ```bash
 .venv/bin/python -m compileall -q kravein/
-.venv/bin/python -m pytest tests/engine -q          # 248: safety, registry, llm, agent loop, cline, novarouter, voice, jobs, routines, whatsapp, audit, routing
+.venv/bin/python -m pytest tests/engine -q          # 470: safety, registry, llm, agent loop, cline, novarouter, voice, jobs, routines, whatsapp, audit, routing
 ```
 
 ## Public interfaces
@@ -31,6 +31,7 @@ updated: 2026-10-24
 - `config.py` (#124): XDG only (`~/.config|.local/share|.local/state|.cache/kravein`). The Windows tree, the in-repo `config/*.json` fallback and the pre-rename XDG fallback are deleted; a machine on the kravein paths is unaffected. Guarded by `tests/engine/test_config_paths.py`.
 - Declined-retry stop (#114): `safety.TurnMemory` (denied targets + `retried_declined`) is what `confirmer_scope` installs; a call refused because its target was already declined sets the flag (`safety.retried_declined_target()`), and `Agent.ask` then skips the rest of the batch and ends the turn with "Okay, I won't do that." (audit `safety.declined_turn_stop`). Different targets are still asked — no blanket lockout. Live voice runs one scope per tool call, so `LiveSession` holds one `TurnMemory` per model turn (reset in `_reset_turn`). Same-path keys for `delete_path permanent=True` and `run_command rm <path>` come from `_target_keys` on the action text; pinned by `tests/engine/test_declined_turn.py`.
 - `service.py` (#76): the unit is never enabled (owner: manual on/off). Host comes from `web.env` `KRAVEIN_LAN_HOST`, port 8787. `phones remove` refuses ambiguous names; `open` never prints the token. Pinned by `tests/engine/test_service_cli.py` (systemctl/HTTP stubbed).
+- Zen provider (#129): `llm.ZenProvider` subclasses `NovaRouterProvider` (same OpenAI wire shape; `label`/`_key`/`_timeout` hooks), first in `LLM._all()`. Defaults `llm.zen_base_url=https://opencode.ai/inference/openai/v1`, `llm.zen_model=deepseek-v4.1-flash` (verified in the Zen docs and `GET https://opencode.ai/inference/v1/models`), `zen_timeout_seconds` 45, no tool cap. Key: `config.zen_api_key()` = `opencode_zen_api_key` in api_keys.json or `OPENCODE_ZEN_API_KEY`; redacted in audit. `kravein doctor` prints `ZenProvider.report()`. `config._migrate_user_settings`: a settings.json holding exactly the old defaults (`cline`, `[cline, novarouter]`) is read as unset so Zen leads. Pinned by `tests/engine/test_zen.py`. Gotcha: `_agent_with` does not stub zen — a real key would be hit by un-stubbed agent tests (qa-owned conftest needs an autouse blank of `config.zen_api_key`).
 - Tests stub all three providers; breaker tests monkeypatch `config.STATE_DIR`. See `CLAUDE.md` "Testing conventions".
 - Tool routing is pinned by `tests/engine/test_tool_routing.py` (default off, only `auto` enables, fail-open, `more_tools` edge cases, byte-stable tool list between rounds).
 - Dynamic LAN address (`discovery.py`, #105): `web.env` `KRAVEIN_LAN_HOST=auto` (installer default); an explicit address no longer held counts as `auto`. `pick_address`: held explicit → itself; one real candidate → it; several → the default-route interface (`/proc/net/route`); several with no default route → `None` (refuse, never first). Real = psutil private IPv4, not loopback/link-local/virtual (`docker*`, `br-*`, `veth*`, `tun*`… same list as the old installer filter). `serve --lan --follow` (unit passes it; `--host auto` implies it) → `server._serve_following` re-binds uvicorn in-process when `AddressWatcher` (5 s poll) sees a change: same cert/token, Host allowlist swapped, mDNS re-advertised; no address → waits. `Advertiser` announces `_kravein._tcp` port 8787, TXT `fp` (cert sha256[:16]) + `v=1`, bound to the one interface; without `zeroconf` it logs `discovery.unavailable` and the server still runs. `service.current_host()` resolves auto/stale for `kravein start|status|…`. Mobile data cannot reach a LAN address (status says so). Pinned by `tests/engine/test_discovery.py`; `test_service_cli.py`'s fixture stubs `discovery.interface_addresses` so the dev machine's real network does not leak in.

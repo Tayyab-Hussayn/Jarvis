@@ -65,7 +65,8 @@ def _truncate(value: Any) -> Any:
 # Keys whose values must never reach the log.
 _REDACT_KEYS = {
     "password", "passwd", "secret", "token", "api_key", "apikey",
-    "gemini_api_key", "openrouter_api_key", "authorization", "cookie",
+    "gemini_api_key", "openrouter_api_key", "novarouter_api_key",
+    "opencode_zen_api_key", "authorization", "cookie",
     "private_key", "passphrase", "credential", "credentials",
 }
 
