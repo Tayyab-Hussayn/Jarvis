@@ -7,3 +7,7 @@ from .profile import (  # noqa: F401
     load_profile,
     parse_profile,
 )
+
+# Registers the `delegate` skill (category "agents", hidden from agents that
+# have no profile; see registry.tool_declarations).
+from . import delegate  # noqa: E402,F401

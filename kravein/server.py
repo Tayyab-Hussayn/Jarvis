@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import audit, config, discovery, events, phone, registry, safety, webauth
-from .agent import Agent
+from .agent import Agent, make_agent
 from .agents.history import principal_thread_id
 from .platform import detect
 from .safety import confirmer_scope
@@ -1070,7 +1070,7 @@ class _Held:
         self.loop = loop
         self.store = store
         self.session = events.Session(loop)
-        self.agent = Agent(
+        self.agent = make_agent(
             source="web",
             observer=events.observer_for(self.session),
             confirmer=self.session.confirm,
