@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 import pytest
 import requests
@@ -202,3 +203,55 @@ def test_zen_is_a_known_provider_for_the_skill():
     from kravein.skills import llm_admin
 
     assert "zen" in llm_admin.KNOWN_PROVIDERS
+
+
+def _facade():
+    facade = llm.LLM()
+    facade.cline = _Next()
+    facade.gemini, facade.openrouter, facade.novarouter = _Next(), _Next(), _Next()
+    facade.gemini.name, facade.openrouter.name, facade.novarouter.name = (
+        "gemini", "openrouter", "novarouter",
+    )
+    return facade
+
+
+@pytest.mark.parametrize("status", [402, 429])
+def test_no_credit_or_usage_limit_opens_the_breaker_for_a_long_cooldown(
+    monkeypatch, tmp_path, status,
+):
+    """With no Zen credit every request must not pay the Zen round-trip."""
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path)
+    _keyed(monkeypatch)
+    calls = {"zen": 0}
+
+    def fake_post(*a, **k):
+        calls["zen"] += 1
+        return _Resp(status, text="Insufficient account funds")
+
+    monkeypatch.setattr(llm.requests, "post", fake_post)
+
+    first = _facade()
+    assert first.complete([{"role": "user", "content": "hi"}]).text == "from cline"
+    assert calls["zen"] == 1
+    # One failure is enough (ordinary threshold is 2), with the long cooldown.
+    assert first._is_cooling("zen")
+    assert first._cooling_until["zen"] - time.time() > 1500
+
+    # A later request, even from a fresh process (breaker is on disk), skips Zen.
+    second = _facade()
+    assert second.complete([{"role": "user", "content": "again"}]).text == "from cline"
+    assert calls["zen"] == 1
+
+    # reset_llm_failover brings it back.
+    second.reset_breaker()
+    second.complete([{"role": "user", "content": "retry"}])
+    assert calls["zen"] == 2
+
+
+def test_other_zen_errors_keep_the_ordinary_threshold(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path)
+    _keyed(monkeypatch)
+    monkeypatch.setattr(llm.requests, "post", lambda *a, **k: _Resp(503, text="x"))
+    facade = _facade()
+    facade.complete([{"role": "user", "content": "hi"}])
+    assert not facade._is_cooling("zen")  # 1 of 2 failures

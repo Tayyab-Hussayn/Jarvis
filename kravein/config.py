@@ -141,6 +141,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "zen_base_url": "https://opencode.ai/inference/openai/v1",
         "zen_model": "deepseek-v4.1-flash",
         "zen_timeout_seconds": 45,
+        # 402 (no credit) / 429 (usage limit) skip Zen this long, at once.
+        "zen_blocked_cooldown_seconds": 1800,
         # Kept configured for vision; not in the agent's text chain.
         "gemini_model": "gemini-3.6-flash",
         # A stalled Gemini is as unusable as a down one, so cap the wait and

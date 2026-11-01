@@ -49,6 +49,19 @@ class LLMError(RuntimeError):
     """No provider could answer."""
 
 
+class ProviderBlocked(LLMError):
+    """The provider refused for a reason that will not clear in seconds.
+
+    Out of credit (402) or over a usage limit (429). Retrying on every request
+    only pays a wasted round-trip before the failover, so the facade opens the
+    breaker at once for ``cooldown`` seconds instead of waiting for N failures.
+    """
+
+    def __init__(self, message: str, cooldown: float) -> None:
+        super().__init__(message)
+        self.cooldown = cooldown
+
+
 @dataclass
 class ToolCall:
     """A tool the model wants to run.
@@ -502,6 +515,12 @@ class NovaRouterProvider:
 
     name = "novarouter"
     label = "NovaRouter"
+    # Statuses that open the breaker immediately with a long cooldown. Empty
+    # here: a NovaRouter 429 keeps the ordinary threshold behaviour.
+    BLOCK_STATUSES: tuple[int, ...] = ()
+
+    def _blocked_cooldown(self) -> float:
+        return 0.0
 
     # The gateway rejects more than this outright:
     #   400 validation_failed "Array must contain at most 128 element(s)"
@@ -619,6 +638,11 @@ class NovaRouterProvider:
         except requests.RequestException as exc:
             raise LLMError(f"{self.label} unreachable: {exc}") from exc
 
+        if response.status_code in self.BLOCK_STATUSES:
+            raise ProviderBlocked(
+                f"{self.label} returned {response.status_code}: {response.text[:200]}",
+                self._blocked_cooldown(),
+            )
         if response.status_code == 401:
             raise LLMError(f"{self.label} rejected the API key")
         if not response.ok:
@@ -668,6 +692,13 @@ class ZenProvider(NovaRouterProvider):
     name = "zen"
     label = "Zen"
     MAX_TOOLS = 10**6
+    # 402 = no account credit, 429 = usage limit. Neither clears on its own in
+    # seconds, so skip Zen for a long while rather than pay its round-trip on
+    # every request (found live 2026-11-01: 402 "Insufficient account funds").
+    BLOCK_STATUSES = (402, 429)
+
+    def _blocked_cooldown(self) -> float:
+        return float(config.get("llm.zen_blocked_cooldown_seconds", 1800))
 
     def available(self) -> bool:
         return bool(config.zen_api_key())
@@ -835,6 +866,20 @@ class LLM:
                 )
             self._save_breaker()
 
+    def _open_breaker(self, name: str, cooldown: float, *, reason: str = "") -> None:
+        """Skip ``name`` for ``cooldown`` seconds starting now."""
+        with self._breaker_lock:
+            self._load_breaker()
+            self._failures[name] = max(
+                int(self._failures.get(name, 0)), self._trip_threshold(),
+            )
+            self._cooling_until[name] = time.time() + cooldown
+            audit.record(
+                "llm.breaker_open", provider=name, blocked=True,
+                cooldown_seconds=round(cooldown), reason=reason[:200],
+            )
+            self._save_breaker()
+
     def _record_success(self, name: str) -> None:
         with self._breaker_lock:
             self._load_breaker()
@@ -985,7 +1030,10 @@ class LLM:
                     # A non-quota failure on the preferred provider is still
                     # worth failing over on, but log it as unexpected.
                     audit.record("llm.unexpected_error", provider=provider.name, error=str(exc))
-                self._record_failure(provider.name)
+                if isinstance(exc, ProviderBlocked):
+                    self._open_breaker(provider.name, exc.cooldown, reason=str(exc))
+                else:
+                    self._record_failure(provider.name)
                 continue
 
         raise LLMError("No LLM provider could answer. " + " | ".join(errors))
