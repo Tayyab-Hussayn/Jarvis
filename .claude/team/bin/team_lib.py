@@ -124,8 +124,15 @@ def resolve_identity(cwd: str | Path) -> str:
     if env == "orchestrator" or env in roster["agents"]:
         return env
     branch = current_branch(cwd)
-    if branch.startswith("agent/") and branch[len("agent/"):] in roster["agents"]:
-        return branch[len("agent/"):]
+    if branch.startswith("agent/"):
+        # agent/<name> or a task branch agent/<name>-<task>; without the suffix match a task
+        # branch would fall through to "orchestrator" and lose every ownership guard.
+        name = branch[len("agent/"):]
+        if name in roster["agents"]:
+            return name
+        base = name.split("-", 1)[0]
+        if base in roster["agents"]:
+            return base
     return "orchestrator"
 
 
