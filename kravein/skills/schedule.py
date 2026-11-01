@@ -20,8 +20,11 @@ and says why; it does not get to authorise itself because nobody is watching.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from .. import audit, config, jobs
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, describe_targets, enforce
 
 
@@ -136,13 +139,27 @@ def schedule_job(
     return f"Scheduled {job['id']} for {local}: {prompt[:70]}{warning}"
 
 
-@skill(category="schedule", danger=Danger.SAFE)
-def list_jobs(include_finished: bool = False) -> str:
-    """List scheduled jobs and reminders.
+@skill(
+    category="schedule", danger=Danger.SAFE,
+    aliases={"job_history": {"view": "history"}, "schedule_status": {"view": "status"}},
+)
+def list_jobs(
+    include_finished: bool = False,
+    view: Literal["jobs", "history", "status"] = "jobs",
+    limit: int | None = None,
+) -> str:
+    """List scheduled jobs and reminders, what they recently did, or whether the scheduler is running.
 
     Args:
-        include_finished: Also show jobs that already ran or failed.
+        include_finished: For jobs: also show jobs that already ran or failed.
+        view: jobs (default) = the list; history = what jobs recently did, including
+            failures; status = whether jobs will actually fire and where they are stored.
+        limit: For history: how many entries to show.
     """
+    if view == "history":
+        return _merge.run(job_history, limit=limit)
+    if view == "status":
+        return schedule_status()
     every = jobs.all_jobs()
     if not include_finished:
         every = [j for j in every if j.get("state") in ("pending", "running")]
@@ -159,7 +176,6 @@ def list_jobs(include_finished: bool = False) -> str:
     return "\n".join(lines)
 
 
-@skill(category="schedule", danger=Danger.MODERATE)
 def cancel_job(job_id: str = "", _source: str = "local", _confirm: bool = False) -> str:
     """Cancel a scheduled job, or all of them.
 
@@ -194,7 +210,6 @@ def cancel_job(job_id: str = "", _source: str = "local", _confirm: bool = False)
     return f"Cancelled {removed} job(s)."
 
 
-@skill(category="schedule", danger=Danger.SAFE)
 def job_history(limit: int = 15) -> str:
     """Show what scheduled jobs recently did, including failures.
 
@@ -224,7 +239,6 @@ def job_history(limit: int = 15) -> str:
     return "\n".join(out)
 
 
-@skill(category="schedule", danger=Danger.SAFE)
 def schedule_status() -> str:
     """Whether scheduled jobs will actually fire, and where they are stored."""
     active = _timer_active()
@@ -265,7 +279,6 @@ def _timer_active() -> bool:
     return result.stdout.strip() == "active"
 
 
-@skill(category="schedule", danger=Danger.MODERATE)
 def pause_job(job_id: str, resume: bool = False) -> str:
     """Pause a scheduled job, or resume a paused one.
 
@@ -291,7 +304,6 @@ def pause_job(job_id: str, resume: bool = False) -> str:
     return f"{job_id} is now {state}."
 
 
-@skill(category="schedule", danger=Danger.MODERATE)
 def edit_job(
     job_id: str,
     prompt: str = "",
@@ -347,3 +359,46 @@ def edit_job(
         return f"No job {job_id!r}."
     audit.record("schedule.edited", id=job_id)
     return f"Updated {job_id}. Next run: {updated.get('next_run', '?')}."
+
+
+@skill(
+    category="schedule", danger=Danger.MODERATE,
+    aliases={
+        "cancel_job": {"action": "cancel"},
+        "pause_job": {"action": "pause"},
+        "edit_job": {"action": "edit"},
+    },
+)
+def manage_job(
+    action: Literal["cancel", "pause", "edit"],
+    job_id: str | None = None,
+    resume: bool | None = None,
+    prompt: str | None = None,
+    when: str | None = None,
+    repeat: str | None = None,
+    title: str | None = None,
+    _source: str = "local",
+    _confirm: bool = False,
+) -> str:
+    """Cancel, pause/resume, or edit a scheduled job. To create one use schedule_job.
+
+
+    Args:
+        action: cancel (empty job_id cancels EVERY pending job, asks first); pause (needs job_id); edit (needs job_id; changes only the fields given).
+        job_id: Which job, e.g. "j3".
+        resume: For pause: True to resume a paused job instead.
+        prompt: For edit: new message or task.
+        when: For edit: new time, e.g. '10m' or '5pm'.
+        repeat: For edit: new repeat rule.
+        title: For edit: new heading.
+    """
+    if action == "cancel":
+        return cancel_job(job_id or "", _source=_source, _confirm=_confirm)
+    if not job_id:
+        return f"{action} needs job_id."
+    if action == "pause":
+        return _merge.run(pause_job, job_id=job_id, resume=resume)
+    if action == "edit":
+        return _merge.run(edit_job, job_id=job_id, prompt=prompt, when=when,
+                          repeat=repeat, title=title)
+    return _merge.unknown(action, ["cancel", "pause", "edit"])

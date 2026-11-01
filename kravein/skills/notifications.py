@@ -11,6 +11,8 @@ Ports two Windows-bound modules:
 
 from __future__ import annotations
 
+from typing import Literal
+
 import re
 import shlex
 import time
@@ -19,6 +21,7 @@ from datetime import datetime, timedelta
 from .. import audit
 from ..platform import notify, shell
 from ..registry import skill
+from . import _merge
 from ..safety import Danger
 
 _DURATION_RE = re.compile(
@@ -63,7 +66,6 @@ def send_notification(
     return notify.send(message, title, urgency=urgency)
 
 
-@skill(category="notify", danger=Danger.MODERATE)
 def set_reminder(message: str, delay: str = "10m", title: str = "Reminder") -> str:
     """Remind you about something later with a desktop notification.
 
@@ -88,7 +90,6 @@ def set_reminder(message: str, delay: str = "10m", title: str = "Reminder") -> s
     )
 
 
-@skill(category="notify", danger=Danger.SAFE)
 def list_reminders() -> str:
     """List reminders that are still pending."""
     from .schedule import list_jobs
@@ -96,12 +97,47 @@ def list_reminders() -> str:
     return list_jobs()
 
 
-@skill(category="notify", danger=Danger.DESTRUCTIVE)
 def cancel_reminders(_source: str = "local", _confirm: bool = False) -> str:
     """Cancel every pending reminder."""
     from .schedule import cancel_job
 
     return cancel_job(job_id="", _source=_source, _confirm=_confirm)
+
+
+@skill(
+    category="notify", danger=Danger.MODERATE,
+    aliases={
+        "set_reminder": {"action": "set"},
+        "list_reminders": {"action": "list"},
+        "cancel_reminders": {"action": "cancel"},
+    },
+)
+def reminder(
+    action: Literal["set", "list", "cancel"] = "set",
+    message: str | None = None,
+    delay: str | None = None,
+    title: str | None = None,
+    _source: str = "local",
+    _confirm: bool = False,
+) -> str:
+    """Set, list or cancel reminders (desktop notifications that fire later, even if Kravein is closed).
+
+
+    Args:
+        action: set (needs message; delay default 10m); list; cancel (EVERY pending reminder, asks first).
+        message: For set: what to remind you about.
+        delay: For set: when, e.g. '10m', '1h30m', '45s', or a clock time like '5pm'.
+        title: For set: notification heading.
+    """
+    if action == "set":
+        if not message:
+            return "set needs a message."
+        return _merge.run(set_reminder, message=message, delay=delay, title=title)
+    if action == "list":
+        return list_reminders()
+    if action == "cancel":
+        return cancel_reminders(_source=_source, _confirm=_confirm)
+    return _merge.unknown(action, ["set", "list", "cancel"])
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +163,6 @@ def _on_notification(note: notify.Notification) -> None:
         tts.speak(f"New message from {summary}.")
 
 
-@skill(category="notify", danger=Danger.MODERATE)
 def watch_notifications(enabled: bool = True) -> str:
     """Start or stop watching desktop notifications for calls and messages.
 
@@ -143,7 +178,6 @@ def watch_notifications(enabled: bool = True) -> str:
     return watcher.stop()
 
 
-@skill(category="notify", danger=Danger.SAFE)
 def recent_notifications(limit: int = 15, kind: str = "") -> str:
     """Show notifications seen since watching started.
 
@@ -168,7 +202,6 @@ def recent_notifications(limit: int = 15, kind: str = "") -> str:
     return "\n".join(lines)
 
 
-@skill(category="notify", danger=Danger.SAFE)
 def notification_status() -> str:
     """Report whether notification watching is active and available."""
     watcher = notify.watcher()
@@ -181,6 +214,38 @@ def notification_status() -> str:
     sender = shell.first_available("notify-send", "dunstify")
     lines.append(f"Sender   : {sender or 'none installed'}")
     return "\n".join(lines)
+
+
+@skill(
+    category="notify", danger=Danger.MODERATE,
+    aliases={
+        "notification_status": {"action": "status"},
+        "recent_notifications": {"action": "recent"},
+        "watch_notifications": {"action": "watch"},
+    },
+)
+def notifications(
+    action: Literal["status", "recent", "watch"] = "status",
+    enabled: bool | None = None,
+    limit: int | None = None,
+    kind: str | None = None,
+) -> str:
+    """Watch desktop notifications for calls and messages, and read what was seen.
+
+
+    Args:
+        action: status; recent (limit, kind); watch (enabled).
+        enabled: For watch: True to start watching, False to stop.
+        limit: For recent: how many to show.
+        kind: For recent: only this kind of notification.
+    """
+    if action == "status":
+        return notification_status()
+    if action == "recent":
+        return _merge.run(recent_notifications, limit=limit, kind=kind)
+    if action == "watch":
+        return _merge.run(watch_notifications, enabled=enabled)
+    return _merge.unknown(action, ["status", "recent", "watch"])
 
 
 @skill(category="notify", danger=Danger.MODERATE)

@@ -797,7 +797,6 @@ def organize_directory(
     return "\n".join(out)
 
 
-@skill(category="files", danger=Danger.MODERATE, requires=("xdg-open",))
 def open_path(path: str) -> str:
     """Open a file, folder or URL in the default application.
 

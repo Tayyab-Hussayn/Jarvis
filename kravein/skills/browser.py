@@ -14,11 +14,14 @@ Two rules carried over from `AGENT_AUDIT.md`:
 
 from __future__ import annotations
 
+from typing import Literal
+
 import contextlib
 import urllib.parse
 
 from ..platform import browser
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, Verdict, describe_targets, enforce
 
 # Words that suggest the click does something you cannot take back. Matched
@@ -48,7 +51,6 @@ def _site(url: str) -> str:
         return url
 
 
-@skill(category="browser", danger=Danger.SAFE)
 def browser_status() -> str:
     """Whether Kravein's browser is running, and what is open in it."""
     problem = _guard()
@@ -211,13 +213,19 @@ def browser_search_site(query: str) -> str:
     return f"Searched {site} for '{query}' — now on {result['url']}"
 
 
-@skill(category="browser", danger=Danger.SAFE)
-def browser_read(max_chars: int = 3000) -> str:
-    """Read the visible text of the current page.
+@skill(
+    category="browser", danger=Danger.SAFE,
+    aliases={"browser_status": {"status": True}},
+)
+def browser_read(max_chars: int = 3000, status: bool = False) -> str:
+    """Read the visible text of the current page, or report whether the browser is running and which tabs are open.
 
     Args:
         max_chars: Truncate beyond this many characters.
+        status: True to report the browser and its numbered tabs instead of page text.
     """
+    if status:
+        return browser_status()
     problem = _guard()
     if problem:
         return problem
@@ -403,7 +411,6 @@ def browser_scroll(direction: str = "down", amount: int = 600) -> str:
         return f"Could not scroll: {exc}"
 
 
-@skill(category="browser", danger=Danger.MODERATE)
 def browser_switch_tab(index: int) -> str:
     """Bring one of Kravein's browser tabs to the front.
 
@@ -427,7 +434,6 @@ def browser_switch_tab(index: int) -> str:
         return f"Could not switch tab: {exc}"
 
 
-@skill(category="browser", danger=Danger.MODERATE)
 def browser_close_tab(index: int = 0) -> str:
     """Close a tab in Kravein's browser.
 
@@ -460,3 +466,26 @@ def browser_quit() -> str:
         return "Kravein's browser is not running."
     browser.shutdown()
     return "Closed Kravein's browser."
+
+
+@skill(
+    category="browser", danger=Danger.MODERATE,
+    aliases={
+        "browser_switch_tab": {"action": "switch"},
+        "browser_close_tab": {"action": "close"},
+    },
+)
+def browser_tab(action: Literal["switch", "close"], index: int | None = None) -> str:
+    """Switch to, or close, a tab in Kravein's browser. Tab numbers come from browser_read with status=True.
+
+    Args:
+        action: switch (needs index) or close.
+        index: 1-based tab number. For close, omit to close the current tab.
+    """
+    if action == "switch":
+        if index is None:
+            return "switch needs index (1-based tab number)."
+        return browser_switch_tab(index)
+    if action == "close":
+        return _merge.run(browser_close_tab, index=index)
+    return _merge.unknown(action, ["switch", "close"])
