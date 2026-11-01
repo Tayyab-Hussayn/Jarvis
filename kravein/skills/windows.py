@@ -7,12 +7,15 @@ IPC, so it works without synthetic input.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import json
 import os
 import time
 
 from ..platform import desktop
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, Verdict, describe_targets, enforce
 from ..safety import own_pids as safety_own_pids
 
@@ -150,22 +153,37 @@ def _wait_until_gone(backend, ids: set[str], timeout: float = _GONE_TIMEOUT) -> 
     return remaining
 
 
-@skill(category="windows", danger=Danger.SAFE)
-def list_windows(as_json: bool = False) -> str:
-    """List every open window, grouped by workspace, with each window's exact
-    id and, for terminals, the shell's working directory.
+@skill(
+    category="windows", danger=Danger.SAFE,
+    aliases={
+        "focused_window": {"view": "focused"},
+        "list_workspaces": {"view": "workspaces"},
+    },
+)
+def list_windows(
+    as_json: bool = False,
+    view: Literal["windows", "focused", "workspaces"] = "windows",
+) -> str:
+    """List every open window grouped by workspace (with each window's exact
+    id and, for terminals, the shell's working directory), or describe the
+    focused window, or list the workspaces.
 
     Args:
-        as_json: Return a JSON list of {id, title, app, pid, workspace,
-            focused, cwd} instead of text.
+        as_json: For windows: return a JSON list of {id, title, app, pid,
+            workspace, focused, cwd} instead of text.
+        view: windows (default), focused (just the window with focus) or
+            workspaces (the workspace list).
     """
+    if view == "focused":
+        return focused_window()
+    if view == "workspaces":
+        return list_workspaces()
     if as_json:
         return json.dumps([desktop.window_record(w)
                            for w in desktop.backend().list_windows()])
     return desktop.describe_windows()
 
 
-@skill(category="windows", danger=Danger.SAFE)
 def focused_window() -> str:
     """Describe the window that currently has focus."""
     win = desktop.backend().focused()
@@ -234,7 +252,6 @@ def move_window_to_workspace(workspace: str) -> str:
     return f"Could not move the window to workspace {workspace}."
 
 
-@skill(category="windows", danger=Danger.SAFE)
 def list_workspaces() -> str:
     """List the compositor's workspaces."""
     spaces = desktop.backend().list_workspaces()
@@ -250,7 +267,6 @@ def list_workspaces() -> str:
     return "\n".join(lines)
 
 
-@skill(category="windows", danger=Danger.MODERATE)
 def toggle_fullscreen() -> str:
     """Toggle fullscreen on the focused window."""
     if desktop.backend().fullscreen():
@@ -258,12 +274,31 @@ def toggle_fullscreen() -> str:
     return "Could not toggle fullscreen on this compositor."
 
 
-@skill(category="windows", danger=Danger.MODERATE)
 def toggle_floating() -> str:
     """Toggle tiling/floating on the focused window."""
     if desktop.backend().toggle_float():
         return "Toggled floating."
     return "This compositor does not support floating toggle."
+
+
+@skill(
+    category="windows", danger=Danger.MODERATE,
+    aliases={
+        "toggle_fullscreen": {"mode": "fullscreen"},
+        "toggle_floating": {"mode": "floating"},
+    },
+)
+def window_state(mode: Literal["fullscreen", "floating"]) -> str:
+    """Toggle fullscreen, or tiling/floating, on the focused window.
+
+    Args:
+        mode: fullscreen or floating.
+    """
+    if mode == "fullscreen":
+        return toggle_fullscreen()
+    if mode == "floating":
+        return toggle_floating()
+    return _merge.unknown(mode, ["fullscreen", "floating"])
 
 
 @skill(category="windows", danger=Danger.DESTRUCTIVE)

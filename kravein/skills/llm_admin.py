@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from .. import config
 from ..registry import skill
+from . import _merge
 from ..safety import Danger
 
 KNOWN_PROVIDERS = ("zen", "cline", "gemini", "openrouter")
@@ -72,7 +75,6 @@ def _novarouter_report() -> str:
     return "\n".join(lines)
 
 
-@skill(category="llm", danger=Danger.SAFE)
 def llm_status() -> str:
     """Show which LLM provider and model the assistant is using."""
     from .. import cline
@@ -84,7 +86,6 @@ def llm_status() -> str:
     ])
 
 
-@skill(category="llm", danger=Danger.MODERATE)
 def reset_llm_failover() -> str:
     """Clear provider cooldowns so the primary model is tried again.
 
@@ -99,7 +100,6 @@ def reset_llm_failover() -> str:
     return f"Was: {before}\nNow: {facade.status()}"
 
 
-@skill(category="llm", danger=Danger.SAFE)
 def list_llm_models(filter_text: str = "") -> str:
     """List models available through the Cline account.
 
@@ -133,7 +133,6 @@ def list_llm_models(filter_text: str = "") -> str:
     )
 
 
-@skill(category="llm", danger=Danger.MODERATE)
 def set_llm_model(model: str) -> str:
     """Change which model the assistant uses through Cline.
 
@@ -157,7 +156,6 @@ def set_llm_model(model: str) -> str:
     )
 
 
-@skill(category="llm", danger=Danger.MODERATE)
 def set_llm_provider(provider: str) -> str:
     """Choose which LLM backend the assistant prefers.
 
@@ -193,3 +191,45 @@ def set_llm_provider(provider: str) -> str:
     llm_module._client = None
 
     return f"LLM provider set to '{provider}'.\n{llm_module.client().status()}"
+
+
+@skill(
+    category="llm", danger=Danger.MODERATE,
+    aliases={
+        "llm_status": {"action": "status"},
+        "reset_llm_failover": {"action": "reset_failover"},
+        "list_llm_models": {"action": "list_models"},
+        "set_llm_model": {"action": "set_model"},
+        "set_llm_provider": {"action": "set_provider"},
+    },
+)
+def llm_control(
+    action: Literal["status", "reset_failover", "list_models", "set_model", "set_provider"] = "status",
+    model: str | None = None,
+    provider: str | None = None,
+    filter_text: str | None = None,
+) -> str:
+    """Inspect or change which LLM the assistant itself uses.
+
+
+    Args:
+        action: status; reset_failover; list_models (filter_text); set_model (needs model); set_provider (needs provider).
+        model: For set_model: the model id.
+        provider: For set_provider: the backend to prefer.
+        filter_text: For list_models: only models containing this text.
+    """
+    if action == "status":
+        return llm_status()
+    if action == "reset_failover":
+        return reset_llm_failover()
+    if action == "list_models":
+        return _merge.run(list_llm_models, filter_text=filter_text)
+    if action == "set_model":
+        if not model:
+            return "set_model needs model."
+        return set_llm_model(model)
+    if action == "set_provider":
+        if not provider:
+            return "set_provider needs provider."
+        return set_llm_provider(provider)
+    return _merge.unknown(action, ["status", "reset_failover", "list_models", "set_model", "set_provider"])
