@@ -68,6 +68,11 @@ MAX_ATTEMPTS = len(RETRY_BACKOFF_SECONDS)
 STALE_RUN_SECONDS = 30 * 60
 
 VALID_KINDS = ("notify", "agent")
+# Kinds Kravein manages itself. They are never creatable, editable or
+# cancellable through the public entry points (schedule_job / manage_job pass
+# no `_internal`): the daily review runs the Orchestrator unattended with a
+# code-fixed tool list, so a model must not be able to mint or rewrite one.
+INTERNAL_KINDS = ("review",)
 
 # A paused job keeps its schedule and its history but is never claimed by a
 # tick. Deliberately distinct from cancelling: "not now" and "never again" are
@@ -259,9 +264,10 @@ def add(
     title: str = "Reminder",
     tz_name: str = "",
     speak: bool = False,
+    _internal: bool = False,
 ) -> dict[str, Any]:
     """Add a job. Returns the stored record."""
-    if kind not in VALID_KINDS:
+    if kind not in VALID_KINDS and not (_internal and kind in INTERNAL_KINDS):
         raise ValueError(f"kind must be one of {VALID_KINDS}")
     tz_name = tz_name or local_timezone()
 
@@ -313,8 +319,11 @@ def pending() -> list[dict[str, Any]]:
     return [j for j in all_jobs() if j.get("state") in ("pending", "running", "paused")]
 
 
-def cancel(job_id: str = "") -> int:
-    """Cancel one job, or every pending job when no id is given."""
+def cancel(job_id: str = "", *, _internal: bool = False) -> int:
+    """Cancel one job, or every pending job when no id is given.
+
+    Internal jobs (the daily review) are skipped: they follow their setting.
+    """
     removed = 0
     with locked() as got:
         if not got:
@@ -323,6 +332,8 @@ def cancel(job_id: str = "") -> int:
         keep = []
         for job in data.get("jobs", []):
             target = not job_id or job.get("id") == job_id
+            if target and job.get("kind") in INTERNAL_KINDS and not _internal:
+                target = False
             if target and job.get("state") in ("pending", "running", "paused"):
                 removed += 1
                 record_run(event="cancelled", id=job.get("id"))
@@ -333,7 +344,7 @@ def cancel(job_id: str = "") -> int:
     return removed
 
 
-def set_paused(job_id: str, paused: bool) -> str:
+def set_paused(job_id: str, paused: bool, *, _internal: bool = False) -> str:
     """Pause or resume one job. Returns the new state, or "" if not found.
 
     A paused job is skipped by `_claim` but keeps its `next_run`, so resuming
@@ -350,6 +361,8 @@ def set_paused(job_id: str, paused: bool) -> str:
                 continue
             if job.get("state") not in PAUSABLE:
                 return ""
+            if job.get("kind") in INTERNAL_KINDS and not _internal:
+                return ""          # follows its setting, not manage_job
             job["state"] = "paused" if paused else "pending"
             save(data)
             record_run(event="paused" if paused else "resumed", id=job_id)
@@ -366,6 +379,7 @@ def edit(
     title: str | None = None,
     kind: str | None = None,
     speak: bool | None = None,
+    _internal: bool = False,
 ) -> dict[str, Any] | None:
     """Change a job in place. Returns the updated record, or None if missing.
 
@@ -380,6 +394,8 @@ def edit(
         for job in data.get("jobs", []):
             if job.get("id") != job_id:
                 continue
+            if job.get("kind") in INTERNAL_KINDS and not _internal:
+                raise ValueError("this job is managed by Kravein's settings and cannot be edited")
 
             if kind is not None:
                 if kind not in VALID_KINDS:
@@ -566,6 +582,16 @@ def run_job(job: dict[str, Any]) -> tuple[bool, str, str]:
 
     if kind == "notify":
         return True, prompt, ""
+
+    if kind == "review":
+        # The prompt, profile and tool list are fixed in code, not read from
+        # the stored job. Lazy import: the tick that finds nothing due never
+        # gets here.
+        try:
+            from .agents import proposals
+        except Exception as exc:
+            return False, "", f"could not load the review: {exc}"
+        return proposals.run_daily_review(job)
 
     try:
         from .agent import Agent

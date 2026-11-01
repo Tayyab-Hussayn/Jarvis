@@ -30,6 +30,9 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs_mod, "LOCK", tmp_path / "jobs.lock")
     monkeypatch.setattr(jobs_mod, "HISTORY", tmp_path / "job-runs.jsonl")
     monkeypatch.setattr(jobs_mod, "deliver", lambda *a, **k: None)
+    # Tests below assign `store.run_job = ...` directly; without this the stub
+    # outlives the test and every later `run_job` caller gets it.
+    monkeypatch.setattr(jobs_mod, "run_job", jobs_mod.run_job)
     return jobs_mod
 
 

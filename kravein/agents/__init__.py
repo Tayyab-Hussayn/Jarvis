@@ -11,3 +11,4 @@ from .profile import (  # noqa: F401
 # Registers the `delegate` skill (category "agents", hidden from agents that
 # have no profile; see registry.tool_declarations).
 from . import delegate  # noqa: E402,F401
+from . import proposals  # noqa: E402,F401  (registers propose / decide_proposal)

@@ -527,6 +527,8 @@ class Agent:
         escalated = False
         self._stop = stop
         self._round_allowed = None
+        # Lets `decide_proposal` tell "proposed earlier" from "proposed this turn".
+        self.turn_no = getattr(self, "turn_no", 0) + 1
         turn = Turn()
 
         def cancelled() -> bool:
