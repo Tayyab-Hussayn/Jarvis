@@ -6,7 +6,7 @@ from .. import config
 from ..registry import skill
 from ..safety import Danger
 
-KNOWN_PROVIDERS = ("cline", "gemini", "openrouter")
+KNOWN_PROVIDERS = ("zen", "cline", "gemini", "openrouter")
 
 
 def _gemini_report() -> str:
@@ -76,10 +76,11 @@ def _novarouter_report() -> str:
 def llm_status() -> str:
     """Show which LLM provider and model the assistant is using."""
     from .. import cline
-    from ..llm import client
+    from ..llm import ZenProvider, client
 
     return "\n\n".join([
-        client().status(), _gemini_report(), cline.doctor(), _novarouter_report(),
+        client().status(), ZenProvider().report(), _gemini_report(),
+        cline.doctor(), _novarouter_report(),
     ])
 
 
@@ -161,7 +162,7 @@ def set_llm_provider(provider: str) -> str:
     """Choose which LLM backend the assistant prefers.
 
     Args:
-        provider: 'cline', 'gemini' or 'openrouter'.
+        provider: 'zen', 'cline', 'gemini' or 'openrouter'.
     """
     provider = (provider or "").strip().lower()
     if provider not in KNOWN_PROVIDERS:
@@ -173,6 +174,7 @@ def set_llm_provider(provider: str) -> str:
     if provider not in available:
         detail = ", ".join(available) or "none"
         hint = {
+            "zen": "Add opencode_zen_api_key to your api_keys.json.",
             "cline": "Install the CLI and run:  cline auth",
             "gemini": "Add gemini_api_key to your api_keys.json.",
             "openrouter": "Add openrouter_api_key to your api_keys.json.",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -332,13 +333,49 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+_warned_keys_files: set[tuple[str, str]] = set()
+
+
+def _read_api_keys_file(path: Path) -> dict[str, Any]:
+    """Read api_keys.json, saying so when it is unreadable.
+
+    A missing comma made the whole file invalid JSON and every key silently
+    vanished: `doctor` reported each provider as "NOT SET" with no hint that the
+    keys were there. The warning carries only the parser's position, never file
+    content (it holds secrets), and is printed once per distinct error.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        problem = f"cannot be read ({exc.strerror or type(exc).__name__})"
+    else:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            problem = f"is not valid JSON ({exc.msg}, line {exc.lineno} column {exc.colno})"
+        else:
+            if isinstance(data, dict):
+                return data
+            problem = "must be a JSON object"
+    if (str(path), problem) not in _warned_keys_files:
+        _warned_keys_files.add((str(path), problem))
+        print(
+            f"[config] {path} {problem}; no API keys were loaded from it. "
+            "Fix the file (keys set in the environment still work).",
+            file=sys.stderr,
+        )
+    return {}
+
+
 def api_keys() -> dict[str, str]:
     """Resolve API keys from env, then XDG config.
 
     Environment wins so secrets can be injected by systemd without landing
     on disk.
     """
-    keys = _read_json(CONFIG_DIR / "api_keys.json")
+    keys = _read_api_keys_file(CONFIG_DIR / "api_keys.json")
 
     env_map = {
         "gemini_api_key": ("KRAVEIN_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"),

@@ -175,3 +175,30 @@ def test_doctor_report_never_shows_the_key(monkeypatch):
     _keyed(monkeypatch, "sekret-zen-key")
     report = llm.ZenProvider().report()
     assert "present" in report and "sekret" not in report
+
+
+def test_unparseable_api_keys_file_warns_without_leaking(monkeypatch, tmp_path, capsys):
+    """A missing comma silently dropped every key; now it says so."""
+    monkeypatch.undo()
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config, "_warned_keys_files", set())
+    monkeypatch.delenv("OPENCODE_ZEN_API_KEY", raising=False)
+    monkeypatch.delenv("KRAVEIN_OPENCODE_ZEN_API_KEY", raising=False)
+    (tmp_path / "api_keys.json").write_text(
+        '{"gemini_api_key": "sekret-one"\n "opencode_zen_api_key": "sekret-two"}'
+    )
+    assert config.zen_api_key() == ""
+    assert config.zen_api_key() == ""  # repeat: warned once only
+    err = capsys.readouterr().err
+    assert err.count("not valid JSON") == 1
+    assert "api_keys.json" in err and "line 2" in err
+    assert "sekret" not in err
+    # An env key still works while the file is broken.
+    monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "from-env")
+    assert config.zen_api_key() == "from-env"
+
+
+def test_zen_is_a_known_provider_for_the_skill():
+    from kravein.skills import llm_admin
+
+    assert "zen" in llm_admin.KNOWN_PROVIDERS
