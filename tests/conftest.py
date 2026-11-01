@@ -60,6 +60,22 @@ def _no_real_zen_key(monkeypatch):
     monkeypatch.setattr(config, "zen_api_key", lambda: "")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_state_dir(tmp_path, monkeypatch):
+    """No test may write the owner's real ~/.local/state/kravein.
+
+    Web sessions persist their history (agents.db) under ``config.STATE_DIR``,
+    so a transport test that asks a question would otherwise write, and later
+    read back, the owner's real conversation. Tests that need their own state
+    dir still monkeypatch it afterwards.
+    """
+    from kravein import config
+
+    state = tmp_path / config.APP_NAME  # keeps the "…/kravein" shape tests assert
+    state.mkdir()
+    monkeypatch.setattr(config, "STATE_DIR", state)
+
+
 @pytest.fixture
 def habits(tmp_path, monkeypatch):
     """Point the routine store at a temp dir, and never deliver for real."""

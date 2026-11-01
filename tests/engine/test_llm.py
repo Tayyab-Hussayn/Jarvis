@@ -251,11 +251,11 @@ def test_default_provider_is_zen_then_cline_not_gemini():
     assert llm_defaults["provider"] == "zen"
     assert llm_defaults["provider_order"][:2] == ["zen", "cline"]
     assert "gemini" not in (llm_defaults["provider_order"] or [])
-    # Not asserted any more: "cline_model ends with :free". It only ever passed
-    # because the owner's own settings.json set a :free model; the code default
-    # is `moonshotai/kimi-k2` (paid). With the real file no longer leaking into
-    # tests (tests/engine/conftest.py) the claim is false for the defaults —
-    # an owner decision, reported in #132, not something a test should paper over.
+    # This used to assert `cline_model.endswith(":free")`, which only held
+    # because the owner's settings.json set a free model. The code default is
+    # pinned instead; whether it should be a free model is an owner decision,
+    # and changing it must be a visible edit to this line.
+    assert llm_defaults["cline_model"] == "moonshotai/kimi-k2"
 
 
 def test_gemini_remains_available_for_voice_and_vision():
