@@ -38,6 +38,7 @@ from typing import Any, Optional
 
 from . import audit, config, discovery, events, phone, registry, safety, webauth
 from .agent import Agent
+from .agents.history import principal_thread_id
 from .platform import detect
 from .safety import confirmer_scope
 
@@ -1073,6 +1074,11 @@ class _Held:
             source="web",
             observer=events.observer_for(self.session),
             confirmer=self.session.confirm,
+            # Persistent history per principal (the browser, or one paired
+            # phone), so it survives a server restart and a phone never reads
+            # the browser's conversation. Hashed: the id is stored on disk and
+            # must not carry the device id or any token verbatim.
+            thread_id=principal_thread_id("web", principal),
         )
         # One turn at a time. A second `ask` mid-turn is rejected outright
         # rather than queued — queuing would let a user stack destructive

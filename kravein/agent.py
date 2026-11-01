@@ -11,11 +11,13 @@ future GUI all drive the same :class:`Agent`.
 from __future__ import annotations
 
 import inspect
+import json
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from . import audit, config, registry, toolselect
+from .agents import AgentProfile, ProfileError, history as _history, load_profile
 from .llm import LLMError, ToolCall, client
 from .platform import detect
 from .safety import Confirmer, confirmer_scope, retried_declined_target
@@ -126,9 +128,40 @@ class Turn:
 
 DECLINED_REPLY = "Okay, I won't do that."
 
+# Old turns are folded into a rolling summary by one tool-less model call.
+SUMMARY_SYSTEM = (
+    "You compress an assistant's conversation history. Write a compact summary "
+    "of the PREVIOUS SUMMARY plus the NEW MESSAGES: what the user asked, what "
+    "was actually done (only what a tool result confirmed), facts and "
+    "preferences worth remembering, and anything still unresolved. Plain text, "
+    "no preamble, under 250 words."
+)
+SUMMARY_MAX_CHARS = 3000
+_SUMMARY_INPUT_MAX_CHARS = 24000
+# After a trim the history is cut down to this share of the budget, so the
+# next turns do not trigger another summary call straight away.
+_TRIM_TARGET = 0.6
+
+
+def estimate_tokens(message: dict[str, Any]) -> int:
+    """Rough token count (chars / 4). Providers differ; this only has to be
+    stable and in the right range to decide when to trim."""
+    chars = len(str(message.get("content") or ""))
+    calls = message.get("tool_calls")
+    if calls:
+        chars += len(json.dumps(calls, default=str))
+    return chars // 4 + 4
+
 
 class Agent:
     """Stateful conversation with tool access."""
+
+    # Class-level defaults: some tests build an Agent without __init__.
+    profile: "AgentProfile | None" = None
+    _allowed: "frozenset[str] | None" = None
+    thread_id: str | None = None
+    summary: str = ""
+    max_history: int = 0
 
     def __init__(
         self,
@@ -136,8 +169,28 @@ class Agent:
         source: str = "local",
         observer: Observer | None = None,
         confirmer: Confirmer | None = None,
-        max_history: int = 40,
+        max_history: int = 0,
+        profile: "AgentProfile | str | None" = None,
+        thread_id: str | None = None,
     ):
+        """``profile`` restricts this agent to that profile's tools (enforced in
+        ``registry.dispatch``) and adds its instructions to the base prompt;
+        ``None`` is the all-tools agent every transport used before.
+        ``thread_id`` makes the history persistent (SQLite, keyed by profile
+        and thread); without it the history lives in memory only.
+        ``max_history`` is an optional extra cap on message count; the real
+        limit is the token budget ``llm.history_token_budget``."""
+        if isinstance(profile, str):
+            profile = load_profile(profile)
+        self.profile = profile
+        self._allowed: frozenset[str] | None = None
+        if profile is not None:
+            try:
+                self._allowed = registry.resolve_tools(profile.tools)
+            except ValueError as exc:
+                raise ProfileError(f"profile '{profile.name}': {exc}") from None
+        self.thread_id = thread_id
+        self.summary = ""
         self.source = source
         self.observer = _normalize_observer(observer)
         self.confirmer = confirmer
@@ -151,6 +204,28 @@ class Agent:
         # tool routing is on.
         self._tool_categories: set[str] = set()
         self._turn_categories: set[str] | None = None
+        if thread_id:
+            try:
+                self.messages, self.summary = _history.load(self._history_key, thread_id)
+            except Exception as exc:
+                # A broken history file must not stop the assistant starting.
+                audit.record("agent.history_load_failed", error=str(exc),
+                             profile=self._history_key)
+
+    @property
+    def _history_key(self) -> str:
+        return self.profile.name if self.profile else "default"
+
+    def _persist(self) -> None:
+        if not self.thread_id:
+            return
+        with self._lock:
+            try:
+                _history.save(self._history_key, self.thread_id,
+                              self.messages, self.summary)
+            except Exception as exc:
+                audit.record("agent.history_save_failed", error=str(exc),
+                             profile=self._history_key)
 
     # -- helpers ---------------------------------------------------------
 
@@ -170,6 +245,13 @@ class Agent:
             environment=env.summary(),
             home=config.HOME,
         )
+
+        if self.profile is not None:
+            prompt += (
+                f"\n\n## Your role: {self.profile.name}\n{self.profile.purpose}"
+            )
+            if self.profile.instructions:
+                prompt += "\n\n" + self.profile.instructions
 
         memory = context_for_prompt()
         if memory:
@@ -205,26 +287,116 @@ class Agent:
                 "ISO 8601 timestamp before passing it to a tool."
             )
         except Exception:
-            return list(self.messages)
+            return self._history_messages()
 
-        return [*self.messages, {"role": "user", "content": note}]
+        return [*self._history_messages(), {"role": "user", "content": note}]
+
+    def _history_messages(self) -> list[dict[str, Any]]:
+        """History as sent: the rolling summary (if any) leads."""
+        if not self.summary:
+            return list(self.messages)
+        lead = {
+            "role": "user",
+            "content": "[summary of the earlier conversation]\n" + self.summary,
+        }
+        return [lead, *self.messages]
 
     def reset(self) -> None:
         """Clear the conversation history."""
         with self._lock:
             self.messages.clear()
+            self.summary = ""
             self._tool_categories.clear()
+            if self.thread_id:
+                try:
+                    _history.delete(self._history_key, self.thread_id)
+                except Exception as exc:
+                    audit.record("agent.history_save_failed", error=str(exc))
         audit.record("agent.reset", source=self.source)
 
     def _trim_history(self) -> None:
-        if len(self.messages) <= self.max_history:
+        """Keep the history inside the token budget.
+
+        The oldest whole turns are folded into the rolling summary; if the
+        summary call fails the same turns are simply dropped. A cut is only
+        ever made at a user message, so a tool call is never separated from
+        its result, and the current turn (the last user message) is never cut.
+        """
+        budget = int(config.get("llm.history_token_budget", 24000))
+        cap = self.max_history
+        sizes = [estimate_tokens(m) for m in self.messages]
+        used = sum(sizes) + len(self.summary) // 4
+        over_count = bool(cap) and len(self.messages) > cap
+        if not over_count and (budget <= 0 or used <= budget):
             return
-        # Drop from the front, but never orphan a tool result from its call.
-        excess = len(self.messages) - self.max_history
-        cut = excess
-        while cut < len(self.messages) and self.messages[cut].get("role") == "tool":
-            cut += 1
+
+        users = [i for i, m in enumerate(self.messages) if m.get("role") == "user"]
+        if len(users) < 2:
+            return  # one turn: nothing older to fold; tool results are capped
+        target = int(budget * _TRIM_TARGET) - len(self.summary) // 4
+        cut = users[-1]
+        for i in users:
+            if i == 0:
+                continue
+            fits_budget = budget <= 0 or sum(sizes[i:]) <= target
+            fits_count = not cap or len(self.messages) - i <= cap
+            if fits_budget and fits_count:
+                cut = i
+                break
+
+        dropped = self.messages[:cut]
+        summary = self._summarize(dropped)
+        if summary:
+            self.summary = summary
         del self.messages[:cut]
+        audit.record(
+            "agent.history_trimmed", source=self.source, dropped=len(dropped),
+            summarized=bool(summary), kept=len(self.messages), tokens_before=used,
+        )
+
+    def _summarize(self, dropped: list[dict[str, Any]]) -> str:
+        """Fold ``dropped`` into the rolling summary; ``""`` on any failure."""
+        lines: list[str] = []
+        for m in dropped:
+            role = m.get("role", "?")
+            text = str(m.get("content") or "")[:600]
+            if m.get("tool_calls"):
+                names = ", ".join(c.get("name", "?") for c in m["tool_calls"])
+                text = (text + f" [called: {names}]").strip()
+            if text:
+                lines.append(f"{role}: {text}")
+        transcript = "\n".join(lines)[-_SUMMARY_INPUT_MAX_CHARS:]
+        prompt = (
+            f"PREVIOUS SUMMARY:\n{self.summary or '(none)'}\n\nNEW MESSAGES:\n{transcript}"
+        )
+        try:
+            reply = self._llm.complete(
+                [{"role": "user", "content": prompt}], system=SUMMARY_SYSTEM, tools=None,
+            )
+            text = (reply.text or "").strip()
+            wants_tools = reply.wants_tools
+        except Exception as exc:
+            audit.record("agent.summary_failed", source=self.source, error=str(exc))
+            return ""
+        if not text or wants_tools:
+            audit.record("agent.summary_failed", source=self.source, error="empty reply")
+            return ""
+        return text[:SUMMARY_MAX_CHARS]
+
+    @staticmethod
+    def _cap_result(name: str, result: str) -> str:
+        """Cap a tool result for the history; the audit log keeps the full text."""
+        limit = int(config.get("llm.tool_result_max_chars", 12000))
+        if limit <= 0 or len(result) <= limit:
+            return result
+        audit.record(
+            "agent.tool_result_truncated", tool=name, chars=len(result), kept=limit,
+        )
+        return (
+            result[:limit]
+            + f"\n[… cut: {len(result) - limit} of {len(result)} characters "
+            "not shown; the full result is in the audit log]"
+        )
 
     # -- tool routing ----------------------------------------------------
 
@@ -239,6 +411,10 @@ class Agent:
 
     def _tools_for_turn(self, text: str) -> list[dict[str, Any]]:
         """Tool schemas for this turn; every skill unless routing narrows it."""
+        if self._allowed is not None:
+            # A profile's tool set is fixed; routing would only fight it.
+            self._turn_categories = None
+            return registry.tool_declarations(names=self._allowed)
         if not self._routing_on():
             self._turn_categories = None
             return registry.tool_declarations()
@@ -273,6 +449,13 @@ class Agent:
     # -- main loop -------------------------------------------------------
 
     def ask(self, text: str, stop: threading.Event | None = None) -> Turn:
+        """Handle one user request (see ``_ask``) and persist the history."""
+        try:
+            return self._ask(text, stop)
+        finally:
+            self._persist()
+
+    def _ask(self, text: str, stop: threading.Event | None = None) -> Turn:
         """Handle one user request, running tools as needed.
 
         ``stop`` makes the turn interruptible. The loop runs on a worker
@@ -399,7 +582,7 @@ class Agent:
                             "role": "tool",
                             "name": call.name,
                             "tool_call_id": call.id or call.name,
-                            "content": result,
+                            "content": self._cap_result(call.name, result),
                         })
                         declined = declined or retried_declined_target()
 
@@ -443,6 +626,7 @@ class Agent:
             call.arguments,
             source=self.source,
             context=self,
+            allowed=self._allowed,
         )
         used = registry.get_skill(call.name)
         if used is not None and used.category != "tools":
