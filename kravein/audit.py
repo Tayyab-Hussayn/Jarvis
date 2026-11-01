@@ -89,6 +89,25 @@ def _redact(data: Any) -> Any:
     return data
 
 
+_ctx = threading.local()
+
+
+@contextmanager
+def context(**fields: Any) -> Iterator[None]:
+    """Tag every record written on this thread with ``fields`` while active.
+
+    ``delegate`` uses it to stamp a sub-agent's whole turn (agent.request,
+    skill.*, safety.*) with the delegation id, without touching those call
+    sites. Nested contexts add to, and then restore, the outer one.
+    """
+    outer = getattr(_ctx, "fields", {})
+    _ctx.fields = {**outer, **fields}
+    try:
+        yield
+    finally:
+        _ctx.fields = outer
+
+
 def record(event: str, _result_limit: int = MAX_VALUE_CHARS, **fields: Any) -> None:
     """Write one audit record. Never raises.
 
@@ -105,7 +124,7 @@ def record(event: str, _result_limit: int = MAX_VALUE_CHARS, **fields: Any) -> N
     fields = _redact(fields)
     has_big = _result_limit != MAX_VALUE_CHARS and "result" in fields
     big = fields.pop("result", None) if has_big else None
-    entry.update(_truncate(fields))
+    entry.update(_truncate({**getattr(_ctx, "fields", {}), **fields}))
     if has_big:
         entry["result"] = _truncate(big, _result_limit)
 

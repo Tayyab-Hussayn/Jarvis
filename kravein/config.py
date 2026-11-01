@@ -113,6 +113,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "confirm_by_voice": True,
         "max_reply_chars": 700,
     },
+    # Orchestrator + sub-agents (kb/plans/orchestrator-subagents.md). Off: every
+    # transport behaves exactly as before.
+    "agents": {
+        "orchestrator": False,
+        # Tool rounds the Orchestrator may spend on one request before its next
+        # round can only `delegate`.
+        "escalate_after_rounds": 3,
+        "delegate_max_rounds": 6,
+        "delegate_timeout_seconds": 300,
+        "report_max_chars": 1500,
+    },
     "llm": {
         # cline | gemini | openrouter.
         #

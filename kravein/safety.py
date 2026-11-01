@@ -590,6 +590,16 @@ def _memory() -> TurnMemory:
     return memory
 
 
+def current_memory() -> TurnMemory:
+    """This thread's denial memory, for a nested agent to share (``delegate``).
+
+    A sub-agent runs inside the caller's request, so a "no" the owner gave in
+    either must hold in both; a fresh memory per agent would let a declined
+    target be asked about again under another name.
+    """
+    return _memory()
+
+
 def _denied_targets() -> set[str]:
     return _memory().targets
 

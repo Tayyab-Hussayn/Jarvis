@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 from . import audit, config, registry
-from .agent import Agent
+from .agent import Agent, make_agent
 from .llm import client
 from .platform import detect
 from .safety import DANGER_LABELS, Danger
@@ -126,7 +126,7 @@ class Repl:
     """The interactive loop."""
 
     def __init__(self) -> None:
-        self.agent = Agent(source="cli", confirmer=terminal_confirmer,
+        self.agent = make_agent(source="cli", confirmer=terminal_confirmer,
                            observer=self._observe)
         self._last_kind = ""
 
@@ -715,10 +715,10 @@ def main(argv: list[str] | None = None) -> int:
         return _service_command(args)
 
     if command == "ask":
-        from .agent import Agent
+        from .agent import Agent, make_agent
 
         confirmer = _auto_yes if args.yes else terminal_confirmer
-        agent = Agent(source="cli-ask", confirmer=confirmer)
+        agent = make_agent(source="cli-ask", confirmer=confirmer)
         turn = agent.ask(" ".join(args.text))
         if turn.reply:
             print(turn.reply)

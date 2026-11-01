@@ -35,7 +35,7 @@ GOOD = """---
 name: scout
 purpose: Looks things up.
 tools: [memory, disk_usage]
-model: some-model
+model: zen:some-model
 report_max_chars: 900
 ---
 Be brief.
@@ -58,7 +58,7 @@ def test_full_profile_parses_every_field():
     p = parse_profile(GOOD, expected_name="scout")
     assert p == AgentProfile(
         name="scout", purpose="Looks things up.", tools=("memory", "disk_usage"),
-        instructions="Be brief.\n\nSecond paragraph.", model="some-model",
+        instructions="Be brief.\n\nSecond paragraph.", model="zen:some-model",
         report_max_chars=900,
     )
 
