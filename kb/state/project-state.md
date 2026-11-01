@@ -41,7 +41,7 @@ updated: 2026-10-23
 
 - Niri port (plan `kb/plans/niri-port.md`, owner 2026-10-29): #122 qa provision + installer, #123 skills niri backend. Remote via `ssh kravein-new`; only `/home/kravein/Projects/desktop/kravein` writable; Windows tree + old-name fallbacks deleted #127, docs/team cleanup lead batch, niri config read-only. Paused 2026-10-30 (remote unreachable, "No route to host"; team down): qa #122 has 3 local commits on agent/qa (not pushed); remote .venv half-installed → resume: detached venv install, remote suite + web build, ship. skills #126 (changes-requested) left: live open_app into ws 2 + screenshot on the remote. Owner still to run `sudo pacman -S ydotool wtype wl-clipboard grim slurp` there.
 
-- Owner 2026-11-01: text primary = OpenCode Zen `deepseek-v4.1-flash`, merged #130 (chain zen → cline → novarouter; 402/429 opens the breaker for 30 min). Live Zen answer pending: account has no credit (402); Zen `-free` models are OpenCode-client only (429). After the owner adds credit: run `reset_llm_failover`, then a live ask + tool call.
+- Owner 2026-11-01: text primary = OpenCode Zen `deepseek-v4.1-flash`, merged #130 (chain zen → cline → novarouter; 402/429 opens the breaker for 30 min). Live Zen answer pending: account has no credit (402); Zen `-free` models are OpenCode-client only (429). After the owner adds credit: run `reset_llm_failover`, then a live ask + tool call. Owner 2026-11-01: this machine's settings.json now leads with Gemini `gemini-3.5-flash-lite` (asked for 2.5-flash-lite: 404 "no longer available to new users"); chain gemini → zen → cline → novarouter; live ask + tool call OK. Backup: settings.json.bak-2026-11-01. Code defaults unchanged (zen).
 
 ## Blockers
 - None.
