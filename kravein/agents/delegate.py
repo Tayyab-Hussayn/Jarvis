@@ -193,6 +193,7 @@ def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> 
         unattended = real is safety._deny          # nobody to ask: stay that way
         memory = safety.current_memory()
         base_targets = len(memory.targets)
+        base_retried = memory.retried_declined
         state = {"declined": False}
 
         def confirm(action: str, detail: str, danger: Danger) -> bool:
@@ -230,7 +231,10 @@ def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> 
         return f"Could not start sub-agent '{name}': {exc}"
 
     child.extra_instructions = REPORT_INSTRUCTION
+    # A retry of a target the owner already declined is refused before any card
+    # is shown, so the confirmer never sees it; the shared memory flag does.
     child.end_turn_check = lambda: state["declined"] or (
+        memory.retried_declined and not base_retried) or (
         unattended and len(memory.targets) > base_targets
     )
     request = task + (f"\n\nContext from the Orchestrator:\n{context.strip()}" if context.strip() else "")
@@ -252,7 +256,7 @@ def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> 
             report = fb
 
         # The outcome is decided here, from what actually happened.
-        if state["declined"]:
+        if state["declined"] or (memory.retried_declined and not base_retried):
             report.outcome = "declined"
             report.summary = (
                 f"The owner declined an action by {name}; the task was stopped. "

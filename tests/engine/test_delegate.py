@@ -520,3 +520,19 @@ def test_agent_passes_its_profile_model_to_the_facade_and_rejects_unknown_provid
     bad = agent_mod.AgentProfile(name="m", purpose="p", tools=("memory",), model="nope:some-model")
     with pytest.raises(ProfileError):
         _agent_with([], profile=bad)
+
+
+def test_child_retrying_a_declined_target_is_reported_as_declined(_zz_skills):
+    # The refusal comes from the denial memory before any card is shown, so the
+    # confirmer never sees it; the report must still say "declined", not "partial".
+    memory = safety.TurnMemory()
+    memory.targets.add("zz:x")
+    agent, router = orchestrate(
+        [DELEGATE_WIPE, say("ok")],
+        [call("zz_wipe", target="x"), call("zz_wipe", target="y"), say(REPORT_DONE)],
+        confirmer=lambda *a: True, memory=memory,
+    )
+    agent.ask("wipe x")
+    report = [m for m in agent.messages if m["role"] == "tool"][0]["content"]
+    assert "outcome: declined" in report
+    assert _zz_skills["wiped"] == [] and router.calls["system-ops"] == 1
