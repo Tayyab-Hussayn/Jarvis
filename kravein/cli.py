@@ -878,7 +878,9 @@ def doctor() -> int:
     from . import cline as cline_provider
     from .skills.llm_admin import _gemini_report
 
-    for block in (_gemini_report(), cline_provider.doctor()):
+    from .llm import ZenProvider
+
+    for block in (ZenProvider().report(), _gemini_report(), cline_provider.doctor()):
         for line in block.splitlines():
             colour = red if ("NOT FOUND" in line or "NOT SET" in line) else dim
             print(colour(f"  {line}"))

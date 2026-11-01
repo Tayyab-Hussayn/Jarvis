@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -124,7 +125,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         #
         # Gemini is still used for voice (Live native-audio) and vision, where
         # it is the only option — see voice.live_model below.
-        "provider": "cline",
+        "provider": "zen",
         # Cline leads; NovaRouter is the backup. A single-entry chain meant one
         # provider outage took the whole assistant down with nowhere to fail
         # over, which matters much more now that the UI is reachable from a
@@ -132,7 +133,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         #
         # NovaRouter stays inert until a key exists — `available()` is false
         # without one, so the breaker skips it and nothing changes.
-        "provider_order": ["cline", "novarouter"],
+        "provider_order": ["zen", "cline", "novarouter"],
+        # Owner 2026-11-01: text mode leads with DeepSeek V4.1 Flash on OpenCode
+        # Zen (the "provider" above). Without a key `available()` is false and
+        # the chain is exactly cline -> novarouter as before.
+        # Endpoint and model id verified against the Zen docs and /models.
+        "zen_base_url": "https://opencode.ai/inference/openai/v1",
+        "zen_model": "deepseek-v4.1-flash",
+        "zen_timeout_seconds": 45,
+        # 402 (no credit) / 429 (usage limit) skip Zen this long, at once.
+        "zen_blocked_cooldown_seconds": 1800,
         # Kept configured for vision; not in the agent's text chain.
         "gemini_model": "gemini-3.6-flash",
         # A stalled Gemini is as unusable as a down one, so cap the wait and
@@ -263,8 +273,34 @@ def load_settings(reload: bool = False) -> dict[str, Any]:
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"[config] ignoring malformed {path}: {exc}")
 
+        user = _migrate_user_settings(user)
         _settings_cache = _deep_merge(DEFAULT_SETTINGS, user)
         return _settings_cache
+
+
+def _migrate_user_settings(user: dict[str, Any]) -> dict[str, Any]:
+    """Let a settings.json that merely snapshots the old defaults pick up new ones.
+
+    Saving settings (e.g. `set_llm_provider`) writes the whole merged tree, so a
+    machine ends up with the *defaults of the day* pinned as if chosen. When Zen
+    became the text primary (2026-11-01) such a file kept `cline` first and the
+    new default never applied. Only the exact previous defaults are treated as
+    "never chosen"; any other provider/order is an explicit choice and is kept.
+    In memory only: the file on disk is not rewritten.
+    """
+    llm_section = user.get("llm")
+    if not isinstance(llm_section, dict):
+        return user
+    if (
+        llm_section.get("provider") == "cline"
+        and llm_section.get("provider_order") == ["cline", "novarouter"]
+    ):
+        llm_section = {
+            k: v for k, v in llm_section.items()
+            if k not in ("provider", "provider_order")
+        }
+        user = {**user, "llm": llm_section}
+    return user
 
 
 def save_settings(data: dict[str, Any]) -> None:
@@ -299,18 +335,55 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+_warned_keys_files: set[tuple[str, str]] = set()
+
+
+def _read_api_keys_file(path: Path) -> dict[str, Any]:
+    """Read api_keys.json, saying so when it is unreadable.
+
+    A missing comma made the whole file invalid JSON and every key silently
+    vanished: `doctor` reported each provider as "NOT SET" with no hint that the
+    keys were there. The warning carries only the parser's position, never file
+    content (it holds secrets), and is printed once per distinct error.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        problem = f"cannot be read ({exc.strerror or type(exc).__name__})"
+    else:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            problem = f"is not valid JSON ({exc.msg}, line {exc.lineno} column {exc.colno})"
+        else:
+            if isinstance(data, dict):
+                return data
+            problem = "must be a JSON object"
+    if (str(path), problem) not in _warned_keys_files:
+        _warned_keys_files.add((str(path), problem))
+        print(
+            f"[config] {path} {problem}; no API keys were loaded from it. "
+            "Fix the file (keys set in the environment still work).",
+            file=sys.stderr,
+        )
+    return {}
+
+
 def api_keys() -> dict[str, str]:
     """Resolve API keys from env, then XDG config.
 
     Environment wins so secrets can be injected by systemd without landing
     on disk.
     """
-    keys = _read_json(CONFIG_DIR / "api_keys.json")
+    keys = _read_api_keys_file(CONFIG_DIR / "api_keys.json")
 
     env_map = {
         "gemini_api_key": ("KRAVEIN_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
         "openrouter_api_key": ("KRAVEIN_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
         "novarouter_api_key": ("KRAVEIN_NOVAROUTER_API_KEY", "NOVAROUTER_API_KEY"),
+        "opencode_zen_api_key": ("KRAVEIN_OPENCODE_ZEN_API_KEY", "OPENCODE_ZEN_API_KEY"),
     }
     for key, env_names in env_map.items():
         for name in env_names:
@@ -332,6 +405,10 @@ def openrouter_api_key() -> str:
 
 def novarouter_api_key() -> str:
     return api_keys().get("novarouter_api_key", "")
+
+
+def zen_api_key() -> str:
+    return api_keys().get("opencode_zen_api_key", "")
 
 
 # --------------------------------------------------------------------------

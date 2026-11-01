@@ -47,6 +47,19 @@ def _agent_with(script, **kwargs):
     return agent, stub
 
 
+@pytest.fixture(autouse=True)
+def _no_real_zen_key(monkeypatch):
+    """Zen leads the default chain but `_agent_with` does not stub it.
+
+    On a machine holding a real Zen key an un-stubbed agent test would send its
+    prompts to the live API. A blank key keeps Zen unavailable; tests that need
+    it set their own.
+    """
+    from kravein import config
+
+    monkeypatch.setattr(config, "zen_api_key", lambda: "")
+
+
 @pytest.fixture
 def habits(tmp_path, monkeypatch):
     """Point the routine store at a temp dir, and never deliver for real."""
