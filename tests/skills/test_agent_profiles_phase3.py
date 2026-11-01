@@ -20,10 +20,11 @@ SCENARIOS = REPO / "tools" / "eval" / "agents"
 
 # The only skills allowed above SAFE in a read-oriented profile, and why.
 # research: creating a document is the whole point of "documents"; `memory`
-# remembers/recalls owner facts (writes one small key-value entry).
+# Memory is deliberately NOT an exception: research reads untrusted web
+# pages, so it may `recall` but must never write what a page says into memory.
 RESEARCH_EXCEPTIONS = {
     "convert_document", "create_document", "create_pdf",
-    "create_presentation", "create_spreadsheet", "memory",
+    "create_presentation", "create_spreadsheet",
 }
 # reviewer: a screenshot writes one image file and changes nothing else.
 REVIEWER_EXCEPTIONS = {"take_screenshot"}
@@ -87,10 +88,47 @@ def test_research_has_no_state_changing_tool_but_documents_and_memory():
     tools = _tools("research")
     above_safe = {n for n in tools if _danger(n) >= Danger.MODERATE}
     assert above_safe <= RESEARCH_EXCEPTIONS, above_safe - RESEARCH_EXCEPTIONS
-    assert {"web_search", "fetch_page", "browser_read", "read_file", "memory",
+    assert {"web_search", "fetch_page", "browser_read", "read_file", "recall",
             "create_document"} <= tools
     assert not tools & {"run_command", "write_file", "edit_file", "delete_path",
-                        "open_app", "type_text", "install_package", "forget"}
+                        "open_app", "type_text", "install_package", "forget",
+                        "memory"}
+
+
+@pytest.mark.parametrize("call", [
+    ("memory", {"action": "remember", "key": "k", "value": "from a web page"}),
+    ("remember", {"key": "k", "value": "from a web page"}),
+    ("forget", {"key": "k"}),
+])
+def test_research_cannot_write_memory_through_dispatch(call, monkeypatch, tmp_path):
+    from kravein import config
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path, raising=False)
+    name, args = call
+    out = registry.dispatch(name, args, allowed=_tools("research"))
+    assert "not available to this agent" in out
+    # Reading is the one memory capability it has.
+    assert "not available to this agent" not in registry.dispatch(
+        "recall", {}, allowed=_tools("research"))
+
+
+def test_a_profile_entry_never_widens_through_an_alias():
+    """An alias in `tools` grants the whole canonical skill (see resolve_tools).
+
+    Sub-agents must list canonical names. The Orchestrator's aliases are pinned
+    below and each maps to a skill whose other actions it already holds, except
+    `log_out` (power_session), which comes with suspend/reboot/shutdown and is
+    still confirmed by the skill itself.
+    """
+    categories = registry.categories()
+    widened = {}
+    for agent in ("system-ops", "research", "reviewer", "orchestrator"):
+        for entry in load_profile(agent).tools:
+            if entry not in categories and registry.get_skill(entry).name != entry:
+                widened.setdefault(agent, []).append(entry)
+    assert widened == {"orchestrator": [
+        "suspend_system", "shutdown_system", "reboot_system",
+        "read_clipboard", "write_clipboard",
+    ]}
 
 
 def test_reviewer_is_strictly_read_only():

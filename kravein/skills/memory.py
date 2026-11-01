@@ -112,8 +112,16 @@ def remember(key: str, value: str, category: str = "facts") -> str:
     return f"Remembered [{category}] {key} = {value}"
 
 
+# Its own SAFE skill, not just an action of `memory`: a profile that may read
+# the owner's memory but must not write it (research reads web pages, and a
+# prompt-injected page could otherwise persist text into the system prompt)
+# needs a tool whose canonical name grants nothing more. Granting an *alias*
+# of `memory` grants the whole `memory` skill, remember included. (A new
+# category would need an engine routing decision, so it stays in "memory";
+# the Orchestrator therefore also sees this read-only twin of memory/recall.)
+@skill(category="memory", danger=Danger.SAFE)
 def recall(query: str = "", category: str = "") -> str:
-    """Look up what has been remembered.
+    """Look up what has been remembered about the owner. Read-only; to store a fact use memory.
 
     Args:
         query: Text to search keys and values for. Omit to list everything.
@@ -145,7 +153,7 @@ def recall(query: str = "", category: str = "") -> str:
 
 @skill(
     category="memory", danger=Danger.MODERATE,
-    aliases={"remember": {"action": "remember"}, "recall": {"action": "recall"}},
+    aliases={"remember": {"action": "remember"}},
 )
 def memory(
     action: Literal["remember", "recall"] = "recall",

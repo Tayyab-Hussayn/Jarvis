@@ -55,7 +55,6 @@ CASES = [
     ("set_wallpaper", {"path": "/x.png"}, "media", "set_wallpaper", None),
     ("wallpaper_status", {}, "media", "wallpaper_status", {}),
     ("remember", {"key": "k", "value": "v"}, "memory", "remember", {"key": "k", "value": "v"}),
-    ("recall", {"query": "q"}, "memory", "recall", {"query": "q"}),
     ("add_routine_step", {"routine_id": "r1", "label": "L", "at": "07:00"},
      "routines", "add_routine_step", {"routine_id": "r1", "label": "L", "at": "07:00"}),
     ("edit_routine_step", {"routine_id": "r1", "step_id": "s1", "points": 5},
