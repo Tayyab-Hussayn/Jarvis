@@ -127,7 +127,7 @@ DELEGATE_WIPE = call("delegate", agent="system-ops", task="wipe x")
 def test_orchestrator_profile_resolves_against_the_live_registry():
     p = load_profile("orchestrator")
     tools = registry.resolve_tools(p.tools)       # raises on a renamed skill
-    assert "delegate" in tools and "open_app" in tools and "get_volume" in tools
+    assert "delegate" in tools and "open_app" in tools and "volume" in tools
     assert "run_command" not in tools and "delete_path" not in tools
 
 
@@ -271,7 +271,7 @@ def test_subagent_calling_delegate_or_an_out_of_profile_tool_is_refused(audit_fi
     )
     agent.ask("go")
     refused = [r for r in records(audit_file) if r["event"] == "skill.profile_refused"]
-    assert {r["skill"] for r in refused} == {"delegate", "get_volume"}
+    assert {r["skill"] for r in refused} == {"delegate", "volume"}
     assert all(r.get("agent") == "system-ops" for r in refused)
     assert router.calls["orchestrator"] == 2 and router.calls["system-ops"] == 3
 
