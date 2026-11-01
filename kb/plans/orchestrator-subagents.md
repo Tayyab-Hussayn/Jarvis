@@ -34,8 +34,8 @@ Owner (text / voice / phone) -> Orchestrator (fast tools + delegate + propose + 
 windows (all), apps open/close/list/search, phone (all), settings (volume/brightness/media/wifi/bluetooth/dark mode), notify (reminders, notifications, speak), memory, weather/battery/system_status/disk/network, open_url/search_and_open/web_search, lock/suspend (shutdown/reboot with confirmation), routine_status/complete_step/skip_step, list_jobs/schedule_status, clipboard, screenshot, delegate, propose.
 
 ## Phases (one PR each unless noted)
-1. engine — profiles + SKILL.md loader + per-agent persistent history + token budget/summary + tool-result truncation. (#131)
-1b. skills — skill consolidation + general file editing, in parallel with 1. (#132)
+1. engine — profiles + SKILL.md loader + per-agent persistent history + token budget/summary + tool-result truncation. (#132)
+1b. skills — skill consolidation + general file editing, in parallel with 1. (#133)
 2. engine — `delegate`, report contract, Orchestrator profile, escalation, confirmer pass-through (safety-critical).
 3. skills — sub-agent profiles: system-ops, research, reviewer (SKILL.md + small eval set each).
 4. engine + web + android — proposals queue + approvals + daily proactive review job (uses existing jobs).
