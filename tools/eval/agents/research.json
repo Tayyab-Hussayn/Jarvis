@@ -1,0 +1,12 @@
+{
+  "agent": "research",
+  "note": "Search wide, read the best sources, state what could not be verified, end with a recommendation.",
+  "scenarios": [
+    {"id": "res-compare", "prompt": "Compare Hyprland and Niri for a daily driver and recommend one.", "expect_first_tool": "web_search"},
+    {"id": "res-docs", "prompt": "What changed in the latest Playwright release?", "expect_first_tool": "web_search"},
+    {"id": "res-local-first", "prompt": "How does this project decide which LLM provider to use?", "expect_first_tool": "search_text"},
+    {"id": "res-recall", "prompt": "Plan my week of study again like I told you last time.", "expect_first_tool": "memory"},
+    {"id": "res-given-url", "prompt": "Summarise https://example.com/post and say how recent it is.", "expect_first_tool": "fetch_page"},
+    {"id": "res-document", "prompt": "Write a one-page PDF comparing three password managers.", "expect_first_tool": "web_search"}
+  ]
+}
