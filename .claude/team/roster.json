@@ -49,7 +49,8 @@
         "kravein/voice.py",
         "kravein/whatsapp_service.py",
         "tests/engine/",
-        "kb/modules/engine.md"
+        "kb/modules/engine.md",
+        "kravein/agents/"
       ]
     },
     "skills": {
