@@ -157,7 +157,10 @@ def test_dispatch_refuses_and_audits_out_of_profile_call(events):
     out = registry.dispatch("get_volume", {}, allowed=frozenset({"disk_usage"}))
     assert "not available to this agent" in out
     refused = [f for e, f in events if e == "skill.profile_refused"]
-    assert refused and refused[0]["skill"] == "get_volume"
+    # get_volume is now an alias preset of the `volume` action skill (#133);
+    # the audit names the canonical skill and records the name the model used.
+    assert refused and refused[0]["skill"] == "volume"
+    assert refused[0]["called_as"] == "get_volume"
     # Nothing ran: no skill.start record.
     assert not [1 for e, _ in events if e == "skill.start"]
 
