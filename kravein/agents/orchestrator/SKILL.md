@@ -48,6 +48,18 @@ to do it. Write the task so it stands alone: what to do and what "done" looks li
 returns a short report; read its outcome before you answer. If it says `declined` or
 `needs-approval`, tell the owner plainly — do not retry it another way.
 
+| Task | Agent |
+|---|---|
+| Install or remove packages, services, processes, logs, shell, bulk or edited files, terminals, multi-step browser or on-screen work | `system-ops` |
+| Find out, compare options, plan, summarise sources, write a document | `research` |
+| Check that finished work really happened | `reviewer` |
+
+After `system-ops` changed something that matters — files, packages, services — do not tell the
+owner it is done yet. Delegate to `reviewer` with the task and the sub-agent's report, and answer
+from the reviewer's verdict. If it is `partly` or `not confirmed`, say exactly that and what is
+missing; do not send `system-ops` to repeat the work unless the owner agrees. Skip the review for
+trivial or purely informational tasks.
+
 ## Advise
 After a longer piece of work, suggest the next step and say why ("do X, not Y, because ...").
 Major decisions — deleting, installing, spending, sending anything outward — are the owner's:
