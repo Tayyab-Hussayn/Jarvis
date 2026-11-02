@@ -8,17 +8,38 @@ body {
 
 body {
   background-color: var(--bg);
-  /* Ambient aurora: two soft lights pinned to the viewport, so the glass
-     surfaces have something to blur. Fixed, so it never scrolls or repaints. */
+  /* Depth, never flat: a forest-tinted pool low in the frame and a faint red
+     horizon high on the right. Fixed, so it never scrolls or repaints. */
   background-image:
-    radial-gradient(60rem 38rem at 12% -8%, var(--aurora-1), transparent 70%),
-    radial-gradient(52rem 36rem at 105% 8%, var(--aurora-2), transparent 70%);
+    radial-gradient(70rem 40rem at 50% 112%, var(--aurora-2), transparent 70%),
+    radial-gradient(54rem 30rem at 82% -10%, var(--aurora-1), transparent 70%);
   background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Film grain. One tiny tiled SVG turbulence, pointer-transparent and under
+   all content; it is what stops the dark gradients from banding on a phone. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--grain-opacity);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .9 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  mix-blend-mode: soft-light;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: var(--tracking-display);
 }
 
 /* Scrollbars styled to match the surfaces; a default light scrollbar on a
@@ -81,7 +102,6 @@ body {
 @supports (backdrop-filter: blur(1px)) {
   .glass {
     backdrop-filter: blur(var(--blur)) saturate(140%);
-    -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
   }
 }
 .glass-strong {
@@ -90,6 +110,43 @@ body {
 
 .glow {
   box-shadow: var(--glow);
+}
+
+/* Smoked glass for panes: darker and with an inner chrome highlight. */
+.glass-pane {
+  background: var(--pane-glass);
+  border: 0;
+  box-shadow: var(--shadow-panel), var(--pane-hairline);
+}
+/* Cards on the canvas: the same smoked glass at card scale. */
+.glass-card {
+  background: var(--pane-glass);
+  box-shadow: var(--shadow-card), var(--pane-hairline);
+}
+@supports (backdrop-filter: blur(1px)) {
+  .glass-pane,
+  .glass-card {
+    backdrop-filter: blur(calc(var(--blur) + 8px)) saturate(145%);
+  }
+}
+
+/* The wordmark: liquid chrome, wide display face. */
+.wordmark {
+  font-family: var(--font-display);
+  letter-spacing: 0.22em;
+  background: var(--gradient-chrome);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--chrome);
+}
+
+/* Eyebrow label: small, wide-tracked, steel. */
+.eyebrow {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  color: var(--text-faint);
 }
 
 /* Gradient text for the one hero headline; solid colour fallback first. */
@@ -218,6 +275,139 @@ body {
   }
   50% {
     box-shadow: 0 0 0 3px var(--pulse-tint);
+  }
+}
+
+/* -- constellation ---------------------------------------------------- */
+/* All CSS: nothing here re-renders React per frame. Loops are paused or
+   removed in reduced motion by the global rule at the end of this file; the
+   state shapes (glyph, badge, label) carry the meaning without them. */
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+
+/* A slow swing, not a full turn; nodes counter-rotate so labels stay upright. */
+@keyframes orbit-swing {
+  from {
+    transform: rotate(-9deg);
+  }
+  to {
+    transform: rotate(9deg);
+  }
+}
+
+@keyframes orbit-swing-back {
+  from {
+    transform: rotate(9deg);
+  }
+  to {
+    transform: rotate(-9deg);
+  }
+}
+
+/* A travelling light along a connector (pathLength is normalised to 100). */
+@keyframes pulse-out {
+  from {
+    stroke-dashoffset: 14;
+  }
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+@keyframes pulse-back {
+  from {
+    stroke-dashoffset: -100;
+  }
+  to {
+    stroke-dashoffset: 14;
+  }
+}
+
+/* The orbit stops while the pointer or focus is on it: a node that drifts
+   away from the cursor is not clickable. */
+.constellation:hover .drift,
+.constellation:focus-within .drift {
+  animation-play-state: paused;
+}
+
+/* Idle connectors: a faint dashed flow toward the agents. */
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+@keyframes flash-done {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.9);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgba(255, 255, 255, 0);
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* -- panes ------------------------------------------------------------ */
+
+/* The sheet takes focus when it opens so the keyboard is inside it; a ring
+   around the whole sheet is noise, the controls inside carry their own. */
+.pane-sheet:focus,
+.pane-sheet:focus-visible {
+  outline: none;
+}
+
+/* Desktop: a sheet beside the dock. Phone: a bottom sheet that stops above the
+   dock bar, so the dock stays reachable and nothing scrolls sideways. */
+.pane-sheet {
+  top: calc(var(--hud-height) + 0.75rem);
+  /* Above the command deck (composer + dock), which stays visible below. */
+  bottom: 6.25rem;
+  left: 1rem;
+  right: 1rem;
+  margin-inline: auto;
+  max-width: 64rem;
+  border-radius: var(--radius-xl);
+  animation: sheet-in var(--motion-slow) var(--ease-out);
+}
+
+@media (max-width: 639px) {
+  .pane-sheet {
+    top: calc(var(--hud-height) + 0.5rem);
+    bottom: var(--dock-height);
+    left: 0;
+    right: 0;
+    max-width: none;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    animation: sheet-up var(--motion-slow) var(--ease-out);
   }
 }
 

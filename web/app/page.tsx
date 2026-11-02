@@ -1,77 +1,83 @@
 "use client";
 
 /**
- * The app shell.
+ * The app: "Command Constellation".
  *
- * Single route with hash-based views rather than Next routes. A static export
+ * No sidebar. A HUD bar on top, the Orchestrator and its sub-agents as the
+ * hero, the conversation as a transmission stream beneath them with a floating
+ * composer capsule, and a dock whose modules open as glass panes over the
+ * canvas. A pane is addressed by `#name` (`#settings`, `#agent/research`), so
+ * deep links, the old `#/name` links and the browser's Back button all work.
+ *
+ * Single route with hash-based views rather than Next routes: a static export
  * served by FastAPI's StaticFiles resolves nested routes through
  * directory-index lookups, which turns every deep-link refresh into a
- * trailing-slash question. One route sidesteps that, and the app is small
- * enough that per-screen code splitting would buy nothing.
- *
- * Layout is rail | (top bar / content). The floating dock is gone: it occluded
- * panel content on every screen and competed with the composer. Its contents
- * moved into the top bar, where they are always visible without covering
- * anything.
+ * trailing-slash question.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ActivityView } from "@/components/ActivityView";
+import { AgentPane } from "@/components/AgentPane";
 import { AppsView } from "@/components/AppsView";
+import { AutoBanner } from "@/components/AutoBanner";
 import { BrainView } from "@/components/BrainView";
+import { Constellation, AgentStrip } from "@/components/Constellation";
 import { Console } from "@/components/Console";
 import { ControlView } from "@/components/ControlView";
-import { AutoBanner } from "@/components/AutoBanner";
 import { FilesView } from "@/components/FilesView";
 import { HabitsView } from "@/components/HabitsView";
 import { JobsView } from "@/components/JobsView";
-import { Palette } from "@/components/Palette";
-import { ScreenView } from "@/components/ScreenView";
+import { Palette, type PaletteCommand } from "@/components/Palette";
 import { PhonesView } from "@/components/PhonesView";
+import { ScreenView } from "@/components/ScreenView";
 import { SettingsView } from "@/components/SettingsView";
 import {
   ConfirmOverlay,
-  NavDrawer,
-  Rail,
-  TopBar,
-  VIEWS,
-  type ViewId,
+  Dock,
+  Hud,
+  Pane,
+  focusConfirmation,
 } from "@/components/Shell";
 import { SystemView } from "@/components/SystemView";
 import { WindowsView } from "@/components/WindowsView";
+import { ORCHESTRATOR, type ProfileInfo, type AgentStateFrame } from "@/lib/agents";
+import { overlayConfirms } from "@/lib/confirm";
+import {
+  MODULES,
+  moduleLabel,
+  parseHash,
+  routeHash,
+  type ModuleId,
+  type Route,
+} from "@/lib/panes";
 import type { SkillInfo, StateSnapshot, SystemSnapshot } from "@/lib/protocol";
 import { isVoiceLive } from "@/lib/protocol";
+import { api } from "@/lib/session";
 import { useResource } from "@/lib/useApi";
-import { usePolicy } from "@/lib/usePolicy";
 import { useKravein } from "@/lib/useKravein";
+import { usePolicy } from "@/lib/usePolicy";
 
-const IDS = new Set<string>(VIEWS.map((view) => view.id));
-const TITLES: Record<string, string> = Object.fromEntries(
-  VIEWS.map((view) => [view.id, view.label]),
-);
-const RAIL_KEY = "kravein.railExpanded";
-
-function useHashView(): [ViewId, (view: ViewId) => void] {
-  const [view, setView] = useState<ViewId>("console");
+/** The route lives in the URL hash; this keeps React state and the hash in step. */
+function useRoute(): [Route, (route: Route) => void] {
+  const [route, setRoute] = useState<Route>({ kind: "home" });
 
   useEffect(() => {
-    const read = () => {
-      const id = window.location.hash.replace(/^#\/?/, "");
-      if (IDS.has(id)) setView(id as ViewId);
-    };
+    const read = () => setRoute(parseHash(window.location.hash));
     read();
     window.addEventListener("hashchange", read);
     return () => window.removeEventListener("hashchange", read);
   }, []);
 
-  return [
-    view,
-    useCallback((next: ViewId) => {
-      window.location.hash = `#/${next}`;
-      setView(next);
-    }, []),
-  ];
+  const go = useCallback((next: Route) => {
+    const hash = routeHash(next);
+    // `pushState` keeps the token-free path and search and does not fire
+    // `hashchange`, so state is set here; the listener covers Back/Forward.
+    history.pushState(null, "", `${window.location.pathname}${window.location.search}${hash}`);
+    setRoute(next);
+  }, []);
+
+  return [route, go];
 }
 
 export default function Page() {
@@ -81,6 +87,8 @@ export default function Page() {
     messages,
     busy,
     panelConfirms,
+    agents,
+    dispatchAgents,
     ask,
     run,
     cancel,
@@ -104,17 +112,17 @@ export default function Page() {
     voiceStopping,
   } = useKravein();
 
-  const [view, setView] = useHashView();
+  const [route, go] = useRoute();
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [railExpanded, setRailExpanded] = useState(false);
-  const [navOpen, setNavOpen] = useState(false);
-  const closeNav = useCallback(() => setNavOpen(false), []);
+  const closePane = useCallback(() => go({ kind: "home" }), [go]);
+  const openModule = useCallback((id: ModuleId) => go({ kind: "module", id }), [go]);
+  const openAgent = useCallback((name: string) => go({ kind: "agent", name }), [go]);
 
   const policy = usePolicy();
   const skills = useResource<{ skills: SkillInfo[] }>("/api/skills");
   const state = useResource<StateSnapshot>("/api/state");
-  // Polled once here and shared with the top bar, so every screen shows the
-  // same vitals rather than each maintaining its own timer.
+  // Polled once here and shared, so every pane shows the same vitals rather
+  // than each maintaining its own timer.
   const system = useResource<SystemSnapshot>("/api/system", 3000);
   const voice = useResource<{
     stt_backend: string;
@@ -123,12 +131,37 @@ export default function Page() {
     live_configured: boolean;
   }>("/api/voice");
 
-  // There are two independent pipelines and either one is enough. The
-  // on-device path needs both halves — something to hear with and something to
-  // answer through — while Live needs only a Gemini key, since it does both
-  // itself. Gating everything on the local halves is what disabled voice
-  // entirely on a machine with a key but no local speech model, even though
-  // the server would happily have started Live.
+  // Identity and a correct-at-once snapshot from the engine (#146). Older
+  // servers answer 404; the store then keeps deriving from frames. Re-asked on
+  // every hello, so a reconnect or a resume starts from the server's truth.
+  useEffect(() => {
+    if (!hello) return;
+    let live = true;
+    api<{ agents: ProfileInfo[]; orchestrator_enabled?: boolean }>("/api/agents")
+      .then((r) => {
+        if (live && Array.isArray(r?.agents)) {
+          dispatchAgents({
+            t: "profiles",
+            agents: r.agents,
+            orchestratorEnabled: r.orchestrator_enabled,
+          });
+        }
+      })
+      .catch(() => undefined);
+    api<{ states: AgentStateFrame[] }>("/api/agents/state")
+      .then((r) => {
+        if (live && Array.isArray(r?.states)) dispatchAgents({ t: "snapshot", states: r.states });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [hello, dispatchAgents]);
+
+  // There are two independent voice pipelines and either one is enough. The
+  // on-device path needs both halves (hearing and answering) while Live needs
+  // only a Gemini key. Gating everything on the local halves disabled voice on
+  // a machine with a key but no local speech model.
   const localReady = Boolean(voice.data?.stt_backend && voice.data?.tts_available);
   const liveConfigured = Boolean(voice.data?.live_configured);
   const voiceReady = localReady || liveConfigured;
@@ -150,22 +183,8 @@ export default function Page() {
       ? "This device's mic and speaker need Gemini Live (no API key set)."
       : "");
 
-  // Send the preference, not a decision. `voice.mode` in settings picks the
-  // pipeline and the server resolves it — "auto" prefers Live when a key is
-  // present, because it answers in ~7s against ~19s and hears continuously
-  // rather than an utterance at a time.
+  // Send the preference, not a decision: the server resolves "auto".
   const selectVoice = useCallback(() => startVoice("auto"), [startVoice]);
-
-  useEffect(() => {
-    setRailExpanded(localStorage.getItem(RAIL_KEY) === "1");
-  }, []);
-
-  const toggleRail = useCallback(() => {
-    setRailExpanded((open) => {
-      localStorage.setItem(RAIL_KEY, open ? "0" : "1");
-      return !open;
-    });
-  }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -173,8 +192,6 @@ export default function Page() {
         event.preventDefault();
         setPaletteOpen((open) => !open);
       }
-      // There is no panel to show or hide any more, so this starts and stops
-      // the session itself.
       if (
         (event.metaKey || event.ctrlKey) &&
         event.shiftKey &&
@@ -189,109 +206,167 @@ export default function Page() {
     return () => window.removeEventListener("keydown", onKey);
   }, [voicePhase, stopVoice, selectVoice]);
 
+  // Everything the palette can open, above the 100+ skills it can run.
+  const commands = useMemo<PaletteCommand[]>(() => {
+    const list: PaletteCommand[] = [
+      { id: "home", label: "Conversation", hint: "Back to the stream", run: closePane },
+      {
+        id: "clear",
+        label: "Clear conversation",
+        hint: busy ? "Wait for the current turn to finish" : "Start a fresh conversation",
+        // Same guard as the Clear button: never reset mid-turn.
+        run: () => {
+          if (!busy) reset();
+        },
+      },
+    ];
+    for (const m of MODULES.filter((x) => !x.soon)) {
+      list.push({
+        id: m.id,
+        label: m.label,
+        hint: `Open ${m.label}${m.aliases.length ? ` · ${m.aliases.join(", ")}` : ""}`,
+        run: () => openModule(m.id),
+      });
+    }
+    for (const name of agents.order) {
+      list.push({
+        id: `agent-${name}`,
+        label: name === ORCHESTRATOR ? "Orchestrator" : name,
+        hint: `Agent details · ${agents.agents[name].purpose || "live state"}`,
+        run: () => openAgent(name),
+      });
+    }
+    return list;
+  }, [agents.order, agents.agents, busy, reset, closePane, openModule, openAgent]);
+
+  const voiceLive = isVoiceLive(voicePhase);
+  const paneOpen = route.kind !== "home";
+  const confirms = overlayConfirms(panelConfirms, messages, paneOpen);
+
+  const pane = (() => {
+    if (route.kind === "agent") {
+      return {
+        title: route.name === ORCHESTRATOR ? "Orchestrator" : route.name,
+        eyebrow: "Agent",
+        body: <AgentPane name={route.name} model={agents} onReview={focusConfirmation} />,
+      };
+    }
+    if (route.kind !== "module") return null;
+    const bodies: Record<ModuleId, React.ReactNode> = {
+      windows: <WindowsView run={run} />,
+      apps: <AppsView run={run} />,
+      files: <FilesView run={run} />,
+      screen: <ScreenView run={run} />,
+      system: <SystemView run={run} system={system.data} />,
+      control: <ControlView run={run} system={system.data} />,
+      habits: <HabitsView run={run} routineEvents={routineEvents} />,
+      schedule: <JobsView run={run} jobEvents={jobEvents} />,
+      phones: <PhonesView />,
+      brain: <BrainView run={run} />,
+      activity: <ActivityView />,
+      settings: <SettingsView policy={policy} />,
+      proposals: null,
+    };
+    return { title: moduleLabel(route.id), eyebrow: "Module", body: bodies[route.id] };
+  })();
+
   return (
-    <div className="flex h-dvh overflow-hidden">
-      <Rail
-        view={view}
-        onSelect={setView}
-        expanded={railExpanded}
-        onToggle={toggleRail}
+    <div className="relative flex h-dvh flex-col overflow-hidden" style={{ zIndex: 1 }}>
+      <Hud
+        connection={connection}
+        assistant={hello?.assistantName}
+        model={hello ? `${hello.provider} · ${hello.model}` : undefined}
+        hostname={state.data?.hostname}
+        system={system.data}
+        policyMode={policy.anchored?.policy.mode}
+        onHome={closePane}
+        onPalette={() => setPaletteOpen(true)}
+        onOpenSettings={() => openModule("settings")}
+        voiceActive={voiceLive}
+        onToggleVoice={() => (voiceLive ? stopVoice() : selectVoice())}
       />
 
-      <NavDrawer open={navOpen} view={view} onSelect={setView} onClose={closeNav} />
+      <AutoBanner policy={policy} />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar
-          onMenu={() => setNavOpen(true)}
-          title={TITLES[view] ?? "Kravein"}
-          hostname={state.data?.hostname}
-          environment={hello?.environment}
-          system={system.data}
-          connection={connection}
-          onPalette={() => setPaletteOpen(true)}
-          voiceActive={isVoiceLive(voicePhase)}
-          voiceOpen={isVoiceLive(voicePhase)}
-          onToggleVoice={() => (isVoiceLive(voicePhase) ? stopVoice() : selectVoice())}
-        />
-
-        <AutoBanner policy={policy} />
-
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-        <main className="min-h-0 flex-1 overflow-hidden">
+      {/* The command deck: composer above, dock below, both bottom centre. The
+          left edge is empty canvas; `main` leaves room for the dock under the
+          composer (bar height on a phone, capsule + gap on desktop). */}
+      <main className="relative flex min-h-0 flex-1 flex-col pb-[var(--dock-height)] sm:pb-[4.75rem] lg:pb-[9.75rem]">
+        {connection === "unauthorized" && (
           <div
-            key={view}
-            className="mx-auto flex h-full flex-col px-3 py-3 sm:px-6 sm:py-5"
-            style={{
-              maxWidth: "var(--content-max)",
-              animation: "view-in var(--motion-base) var(--ease)",
-            }}
+            className="mx-3 mt-3 rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"
+            style={{ borderLeftColor: "var(--critical)", background: "var(--critical-dim)" }}
           >
-            {connection === "unauthorized" && (
-              <div
-                className="mb-4 rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"
-                style={{
-                  borderLeftColor: "var(--critical)",
-                  background: "var(--critical-dim)",
-                }}
-              >
-                No valid token. Start the server with{" "}
-                <code className="font-[family-name:var(--font-mono)]">kravein serve</code>{" "}
-                and open the URL it prints — it carries the token.
-              </div>
-            )}
-
-            {view === "console" && (
-              <Console
-                messages={messages}
-                busy={busy}
-                connection={connection}
-                skills={hello?.skills}
-                onAsk={ask}
-                onRespond={respondToConfirm}
-                onReset={reset}
-                onCancel={cancel}
-                cancelling={cancelling}
-                voicePhase={voicePhase}
-                voiceStopping={voiceStopping}
-                voiceMode={voiceMode}
-                voiceError={voiceError}
-                voiceNote={voiceNotes[voiceNotes.length - 1] ?? ""}
-                voiceReady={audioChoice === "device" ? !deviceAudioReason : voiceReady}
-                // Switching pipelines is a laptop-mic thing: device audio only
-                // exists on Live.
-                canSwitchPipeline={localReady && liveConfigured && audioChoice === "laptop"}
-                voiceUnavailableReason={
-                  audioChoice === "device" ? deviceAudioReason : voiceUnavailableReason
-                }
-                audioChoice={audioChoice}
-                onAudioChoice={setAudioChoice}
-                deviceAudioReason={deviceAudioReason}
-                onSelectText={stopVoice}
-                onSelectVoice={selectVoice}
-                onRestartVoice={restartVoice}
-                onDismissVoiceError={dismissVoiceError}
-              />
-            )}
-            {view === "schedule" && <JobsView run={run} jobEvents={jobEvents} />}
-            {view === "habits" && <HabitsView run={run} routineEvents={routineEvents} />}
-            {view === "system" && <SystemView run={run} system={system.data} />}
-            {view === "windows" && <WindowsView run={run} />}
-            {view === "files" && <FilesView run={run} />}
-            {view === "apps" && <AppsView run={run} />}
-            {view === "control" && <ControlView run={run} system={system.data} />}
-            {view === "phones" && <PhonesView />}
-            {view === "screen" && <ScreenView run={run} />}
-            {view === "activity" && <ActivityView />}
-            {view === "brain" && <BrainView run={run} />}
-            {view === "settings" && <SettingsView policy={policy} />}
+            No valid token. Start the server with{" "}
+            <code className="font-[family-name:var(--font-mono)]">kravein serve</code> and open
+            the URL it prints — it carries the token.
           </div>
-        </main>
+        )}
 
+        <AgentStrip
+          model={agents}
+          voiceThinking={voicePhase === "thinking"}
+          onOpenAgent={openAgent}
+          onReview={focusConfirmation}
+        />
+        {/* Wide screens: the constellation takes the left half and the stream
+            the right, so neither is a small island in an empty canvas. Narrower
+            desktops stack them. */}
+        <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(0,1fr)]">
+        <div className="hidden shrink-0 sm:block max-lg:h-[clamp(20rem,44dvh,28rem)] lg:min-h-0 lg:h-auto">
+          <Constellation
+            model={agents}
+            voiceThinking={voicePhase === "thinking"}
+            onOpenAgent={openAgent}
+            onReview={focusConfirmation}
+          />
         </div>
-      </div>
+
+        <div className="min-h-0 flex-1">
+          <Console
+            messages={messages}
+            busy={busy}
+            connection={connection}
+            skills={hello?.skills}
+            onAsk={ask}
+            onRespond={respondToConfirm}
+            onReset={reset}
+            onCancel={cancel}
+            cancelling={cancelling}
+            voicePhase={voicePhase}
+            voiceStopping={voiceStopping}
+            voiceMode={voiceMode}
+            voiceError={voiceError}
+            voiceNote={voiceNotes[voiceNotes.length - 1] ?? ""}
+            voiceReady={audioChoice === "device" ? !deviceAudioReason : voiceReady}
+            // Switching pipelines is a laptop-mic thing: device audio only
+            // exists on Live.
+            canSwitchPipeline={localReady && liveConfigured && audioChoice === "laptop"}
+            voiceUnavailableReason={
+              audioChoice === "device" ? deviceAudioReason : voiceUnavailableReason
+            }
+            audioChoice={audioChoice}
+            onAudioChoice={setAudioChoice}
+            deviceAudioReason={deviceAudioReason}
+            onSelectText={stopVoice}
+            onSelectVoice={selectVoice}
+            onRestartVoice={restartVoice}
+            onDismissVoiceError={dismissVoiceError}
+          />
+        </div>
+        </div>
+      </main>
+
+      <Dock route={route} onOpen={openModule} />
+
+      {pane && (
+        <Pane title={pane.title} eyebrow={pane.eyebrow} onClose={closePane}>
+          {pane.body}
+        </Pane>
+      )}
 
       <ConfirmOverlay
-        confirms={panelConfirms}
+        confirms={confirms}
         onRespond={respondToConfirm}
         onDismiss={dismissPanelConfirm}
       />
@@ -299,6 +374,7 @@ export default function Page() {
       <Palette
         open={paletteOpen}
         skills={skills.data?.skills ?? []}
+        commands={commands}
         onClose={() => setPaletteOpen(false)}
         onRun={(name, args) => {
           void run(name, args).catch(() => undefined);

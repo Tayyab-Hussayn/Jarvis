@@ -1,87 +1,40 @@
 "use client";
 
 /**
- * Chrome: the left rail, the top bar with live vitals, the dock, and the
- * global confirmation overlay.
+ * Chrome for the Command Constellation layout: the HUD bar, the floating dock,
+ * the pane sheet, the always-on-top confirmation overlay and `Screen`.
  *
- * Two rules this file exists to hold:
+ * There is no sidebar. Modules live in the dock and open as panes over the
+ * canvas; the conversation and the agents stay underneath.
  *
- * 1. The confirmation overlay floats above everything. A destructive action
- *    started from a panel blocks the agent thread exactly like one the model
- *    asked for, but the user may have navigated away from the screen that
- *    started it. If the block were not visible everywhere, the worker would
- *    sit there until it timed out and denied, and the UI would look merely
- *    broken.
- * 2. Vitals live in the top bar, not on a screen you have to navigate to. For
- *    an assistant whose whole promise is control over the machine, the
- *    machine's state should never be more than a glance away.
+ * Rules this file exists to hold:
+ *
+ * 1. The confirmation overlay floats above EVERYTHING (z-confirm > palette >
+ *    pane > dock > HUD). A destructive action blocks the agent thread, and
+ *    the user may be looking at any pane. A hidden card parks the worker until
+ *    the 120 s timeout denies, and the UI would look merely broken.
+ * 2. A pane is closable from the keyboard (Esc), returns focus to what opened
+ *    it, and never traps the user: the dock and HUD stay reachable.
+ * 3. The scroll container is `Screen`'s content wrapper. `overflow-y-auto`
+ *    needs `min-h-0` on a flex child or the content is simply unreachable.
  */
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { ConfirmView, SystemSnapshot } from "@/lib/protocol";
 import type { Connection } from "@/lib/useKravein";
+import {
+  MODULES,
+  escapeClosesPane,
+  focusReturnTarget,
+  roveIndex,
+  type ModuleId,
+  type Route,
+} from "@/lib/panes";
+import type { PolicyMode } from "@/lib/policy";
+import { classNames } from "@/lib/format";
 import { ConfirmCard } from "./ConfirmCard";
 import { Icon, type IconName } from "./icons";
-import { classNames } from "@/lib/format";
-
-/**
- * Grouped, because these are three different kinds of thing: the agent, the
- * machine's surfaces, and introspection. A flat run of nine made them all look
- * equivalent.
- */
-export type ViewId =
-  | "console"
-  | "schedule"
-  | "habits"
-  | "system"
-  | "windows"
-  | "files"
-  | "apps"
-  | "control"
-  | "phones"
-  | "screen"
-  | "activity"
-  | "brain"
-  | "settings";
-
-export interface NavItem {
-  id: ViewId;
-  label: string;
-  icon: IconName;
-}
-
-export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  {
-    label: "Agent",
-    items: [{ id: "console", label: "Console", icon: "console" }],
-  },
-  {
-    label: "Machine",
-    items: [
-      { id: "system", label: "System", icon: "system" },
-      { id: "schedule", label: "Schedule", icon: "schedule" },
-      // Next to Schedule, not in Agent: both answer "what happens when".
-      { id: "habits", label: "Habits", icon: "habits" },
-      { id: "windows", label: "Windows", icon: "windows" },
-      { id: "files", label: "Files", icon: "files" },
-      { id: "apps", label: "Apps", icon: "apps" },
-      { id: "control", label: "Control", icon: "control" },
-      { id: "phones", label: "Phones", icon: "phones" },
-      { id: "screen", label: "Screen", icon: "screen" },
-    ],
-  },
-  {
-    label: "Inspect",
-    items: [
-      { id: "activity", label: "Activity", icon: "activity" },
-      { id: "brain", label: "Brain", icon: "brain" },
-      { id: "settings", label: "Settings", icon: "settings" },
-    ],
-  },
-];
-
-export const VIEWS: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 const STATUS: Record<Connection, { label: string; colour: string }> = {
   connecting: { label: "Connecting", colour: "var(--moderate)" },
@@ -92,455 +45,98 @@ const STATUS: Record<Connection, { label: string; colour: string }> = {
   replaced: { label: "Open in another window", colour: "var(--moderate)" },
 };
 
-/* -- rail ------------------------------------------------------------- */
+/* -- HUD -------------------------------------------------------------- */
 
-function RailItem({
-  label,
-  icon,
-  active,
-  badge,
-  expanded,
-  onClick,
-}: {
-  label: string;
-  icon: IconName;
-  active: boolean;
-  badge?: number;
-  expanded: boolean;
-  onClick: () => void;
-}) {
+function Vital({ label, percent }: { label: string; percent: number }) {
+  const hot = percent >= 90;
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={expanded ? undefined : label}
-      aria-label={label}
-      aria-current={active ? "page" : undefined}
-      className={classNames(
-        "group relative flex h-10 w-full items-center gap-3 rounded-[var(--radius)] px-3",
-        // A subtle tint plus an indicator bar, not a solid fill. Solid accent
-        // is reserved for primary actions; spending it on navigation left
-        // nothing louder for the things that actually matter.
-        active
-          ? "bg-[var(--accent-dim)] text-[var(--accent)]"
-          : "text-[var(--text-muted)] hover:bg-[var(--glass-highlight)] hover:text-[var(--text)]",
-      )}
-      style={{
-        transition: "background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease)",
-        boxShadow: active ? "inset 0 0 0 1px var(--accent-line), var(--glow-soft)" : undefined,
-      }}
-    >
-      <span
-        aria-hidden
-        className="absolute left-0 top-1/2 w-[3px] -translate-y-1/2 rounded-r-[var(--radius-full)]"
-        style={{
-          height: active ? "18px" : "0px",
-          background: "var(--accent)",
-          boxShadow: active ? "var(--glow-soft)" : undefined,
-          transition: "height var(--motion-base) var(--ease-out)",
-        }}
-      />
-      <Icon name={icon} size={19} className="shrink-0" />
-      {expanded && (
-        <span className="min-w-0 flex-1 truncate text-left text-[length:var(--text-sm)]">
-          {label}
-        </span>
-      )}
-      {expanded && badge !== undefined && badge > 0 && (
-        <span
-          className="shrink-0 rounded-[var(--radius-full)] px-1.5 text-[length:var(--text-xs)] font-semibold tabular-nums"
-          style={{ background: "var(--critical-dim)", color: "var(--critical)" }}
-        >
-          {badge}
-        </span>
-      )}
-      {!expanded && (
-        <span className="pointer-events-none absolute left-full z-30 ml-2 hidden whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-1 text-[length:var(--text-xs)] text-[var(--text)] shadow-lg group-hover:block">
-          {label}
-        </span>
-      )}
-    </button>
-  );
-}
-
-export function Rail({
-  view,
-  onSelect,
-  expanded,
-  onToggle,
-  badges,
-}: {
-  view: ViewId;
-  onSelect: (view: ViewId) => void;
-  expanded: boolean;
-  onToggle: () => void;
-  badges?: Partial<Record<ViewId, number>>;
-}) {
-  return (
-    <nav
-      className="glass glass-strong hidden shrink-0 flex-col rounded-none border-y-0 border-l-0 px-2.5 py-3 sm:flex"
-      style={{
-        width: expanded ? "var(--rail-width-open)" : "var(--rail-width)",
-        transition: "width var(--motion-base) var(--ease)",
-      }}
-      aria-label="Sections"
-    >
-      {/* Wordmark, not a lime tile — the logo previously matched the active
-          nav item so closely that it read as a tenth destination. */}
-      <div className="mb-4 flex h-10 items-center gap-2.5 px-1">
-        <span
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[length:var(--text-xs)] font-bold"
-          style={{
-            background: "var(--accent-dim)",
-            color: "var(--accent)",
-            border: "1.5px solid var(--accent)",
-            boxShadow: "var(--glow-soft)",
-          }}
-        >
-          K
-        </span>
-        {expanded && (
-          <span className="text-gradient truncate text-[length:var(--text-base)] font-semibold tracking-[-0.02em]">
-            Kravein
-          </span>
-        )}
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
-        {NAV_GROUPS.map((group) => (
-          <div key={group.label}>
-            {expanded ? (
-              <div className="mb-1 px-3 text-[length:var(--text-xs)] uppercase tracking-[0.1em] text-[var(--text-faint)]">
-                {group.label}
-              </div>
-            ) : (
-              <div
-                aria-hidden
-                className="mx-3 mb-2 border-t border-[var(--border)] first:border-0"
-              />
-            )}
-            <div className="space-y-0.5">
-              {group.items.map((item) => (
-                <RailItem
-                  key={item.id}
-                  label={item.label}
-                  icon={item.icon}
-                  active={view === item.id}
-                  badge={badges?.[item.id]}
-                  expanded={expanded}
-                  onClick={() => onSelect(item.id)}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"}
-        title={expanded ? "Collapse sidebar" : "Expand sidebar"}
-        className="mt-2 flex h-8 items-center justify-center rounded-[var(--radius)] text-[var(--text-faint)] hover:bg-[var(--surface-raised)] hover:text-[var(--text)]"
-        style={{ transition: "all var(--motion-fast) var(--ease)" }}
-      >
-        <Icon
-          name="chevron"
-          size={16}
-          className={expanded ? "rotate-180" : undefined}
-        />
-      </button>
-    </nav>
-  );
-}
-
-/**
- * Phone-width navigation: the rail is hidden below 640px and this drawer
- * replaces it. Thirteen destinations do not fit a bottom bar, and a drawer
- * leaves the whole height to the content and the keyboard.
- */
-export function NavDrawer({
-  open,
-  view,
-  onSelect,
-  onClose,
-  badges,
-}: {
-  open: boolean;
-  view: ViewId;
-  onSelect: (view: ViewId) => void;
-  onClose: () => void;
-  badges?: Partial<Record<ViewId, number>>;
-}) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-40 sm:hidden">
-      <button
-        type="button"
-        aria-label="Close menu"
-        onClick={onClose}
-        className="absolute inset-0 backdrop-blur-sm"
-        style={{ background: "var(--scrim)" }}
-      />
-      <nav
-        aria-label="Navigation drawer"
-        className="glass glass-strong absolute inset-y-0 left-0 flex w-[min(18rem,85vw)] flex-col overflow-y-auto rounded-none border-y-0 border-l-0 px-3 py-3"
-        style={{ animation: "panel-in var(--motion-base) var(--ease-out)" }}
-      >
-        <div className="mb-3 flex h-11 items-center justify-between px-1">
-          <span className="text-gradient text-[length:var(--text-base)] font-semibold tracking-[-0.02em]">Kravein</span>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close menu"
-            className="flex h-11 w-11 items-center justify-center rounded-[var(--radius)] text-[var(--text-muted)]"
-          >
-            <Icon name="close" size={18} />
-          </button>
-        </div>
-        {NAV_GROUPS.map((group) => (
-          <div key={group.label} className="mb-3">
-            <div className="mb-1 px-3 text-[length:var(--text-xs)] uppercase tracking-[0.1em] text-[var(--text-faint)]">
-              {group.label}
-            </div>
-            {group.items.map((item) => {
-              const active = view === item.id;
-              const badge = badges?.[item.id];
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    onSelect(item.id);
-                    onClose();
-                  }}
-                  aria-current={active ? "page" : undefined}
-                  className={classNames(
-                    "flex h-11 w-full items-center gap-3 rounded-[var(--radius)] px-3",
-                    active
-                      ? "bg-[var(--accent-dim)] text-[var(--accent)]"
-                      : "text-[var(--text-muted)] active:bg-[var(--surface-raised)]",
-                  )}
-                >
-                  <Icon name={item.icon} size={19} className="shrink-0" />
-                  <span className="min-w-0 flex-1 truncate text-left text-[length:var(--text-sm)]">
-                    {item.label}
-                  </span>
-                  {badge !== undefined && badge > 0 && (
-                    <span
-                      className="shrink-0 rounded-[var(--radius-full)] px-1.5 text-[length:var(--text-xs)] font-semibold tabular-nums"
-                      style={{ background: "var(--critical-dim)", color: "var(--critical)" }}
-                    >
-                      {badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        ))}
-      </nav>
-    </div>
-  );
-}
-
-/* -- top bar ---------------------------------------------------------- */
-
-function Vital({
-  label,
-  value,
-  percent,
-  tone,
-}: {
-  label: string;
-  value: string;
-  percent?: number;
-  tone?: string;
-}) {
-  const colour =
-    tone ??
-    (percent === undefined
-      ? "var(--accent)"
-      : percent >= 90
-        ? "var(--critical)"
-        : percent >= 75
-          ? "var(--moderate)"
-          : "var(--accent)");
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[length:var(--text-xs)] uppercase tracking-[0.08em] text-[var(--text-faint)]">
-        {label}
-      </span>
+    <span className="flex items-baseline gap-1.5">
+      <span className="eyebrow">{label}</span>
       <span
         className="tabular-nums text-[length:var(--text-sm)] font-semibold"
-        style={{ color: colour }}
+        style={{ color: hot ? "var(--critical)" : "var(--text)" }}
       >
-        {value}
+        {Math.round(percent)}%
       </span>
-      {percent !== undefined && (
-        <span
-          aria-hidden
-          className="hidden h-1 w-10 overflow-hidden rounded-[var(--radius-full)] bg-[var(--surface-sunken)] lg:block"
-        >
-          <span
-            className="block h-full rounded-[var(--radius-full)]"
-            style={{
-              width: `${Math.min(100, Math.max(0, percent))}%`,
-              background: colour,
-              transition: "width var(--motion-base) var(--ease)",
-            }}
-          />
-        </span>
-      )}
-    </div>
+    </span>
   );
 }
 
-/**
- * Persistent header: where you are, what machine this is, and how it is doing.
- * After the Cardiology reference's inline vitals row.
- */
-export function TopBar({
-  title,
-  hostname,
-  environment,
-  system,
+const MODE_CHIP: Record<PolicyMode, { label: string; hint: string }> = {
+  ask: { label: "Ask", hint: "Risky actions ask you first" },
+  decline: { label: "Decline", hint: "Risky actions are declined without asking" },
+  auto: { label: "Auto", hint: "Risky actions run without asking" },
+};
+
+function Clock() {
+  const [now, setNow] = useState<Date | null>(null);
+  // Set after mount: a server-rendered clock would mismatch on hydration.
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 15_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, []);
+  if (!now) return null;
+  return (
+    <time
+      dateTime={now.toISOString()}
+      className="tabular-nums text-[length:var(--text-sm)] text-[var(--text-muted)]"
+    >
+      {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+    </time>
+  );
+}
+
+export function Hud({
   connection,
+  assistant,
+  model,
+  hostname,
+  system,
+  policyMode,
+  onHome,
   onPalette,
+  onOpenSettings,
   voiceActive,
-  voiceOpen,
   onToggleVoice,
-  onMenu,
 }: {
-  title: string;
-  hostname?: string;
-  environment?: string;
-  system: SystemSnapshot | null;
   connection: Connection;
+  assistant?: string;
+  model?: string;
+  hostname?: string;
+  system: SystemSnapshot | null;
+  policyMode?: PolicyMode;
+  onHome: () => void;
   onPalette: () => void;
+  onOpenSettings: () => void;
   voiceActive?: boolean;
-  voiceOpen?: boolean;
   onToggleVoice?: () => void;
-  onMenu?: () => void;
 }) {
   const status = STATUS[connection];
+  const mode = policyMode ? MODE_CHIP[policyMode] : null;
   return (
-    <header className="glass glass-strong flex h-14 shrink-0 items-center gap-2 rounded-none border-x-0 border-t-0 px-3 sm:gap-4 sm:px-5">
-      {onMenu && (
-        <button
-          type="button"
-          onClick={onMenu}
-          aria-label="Open menu"
-          className="-ml-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius)] text-[var(--text-muted)] sm:hidden"
-        >
-          <Icon name="menu" size={20} />
-        </button>
-      )}
-      <div className="min-w-0">
-        <h1 className="truncate text-[length:var(--text-lg)] font-semibold tracking-[-0.02em]">
-          {title}
-        </h1>
-        {environment && (
-          <p className="truncate text-[length:var(--text-xs)] text-[var(--text-faint)]">
-            {hostname ? `${hostname} · ` : ""}
-            {environment}
-          </p>
-        )}
-      </div>
-
-      <div className="ml-auto hidden items-center gap-5 md:flex">
-        {system?.available && (
-          <>
-            <Vital
-              label="CPU"
-              value={`${Math.round(system.cpu_percent ?? 0)}%`}
-              percent={system.cpu_percent}
-            />
-            <Vital
-              label="MEM"
-              value={`${Math.round(system.memory?.percent ?? 0)}%`}
-              percent={system.memory?.percent}
-            />
-            <Vital
-              label="DISK"
-              value={`${Math.round(system.disk?.percent ?? 0)}%`}
-              percent={system.disk?.percent}
-            />
-            {system.battery && (
-              <Vital
-                label="BAT"
-                value={`${Math.round(system.battery.percent)}%`}
-                percent={system.battery.percent}
-                tone={
-                  system.battery.percent < 20 && !system.battery.plugged
-                    ? "var(--critical)"
-                    : undefined
-                }
-              />
-            )}
-          </>
-        )}
-      </div>
-
-      {onToggleVoice && (
-        <button
-          type="button"
-          onClick={onToggleVoice}
-          aria-pressed={Boolean(voiceOpen)}
-          title={voiceOpen ? "Hide live voice" : "Live voice"}
-          className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border px-3 py-1.5 text-[length:var(--text-xs)] max-sm:min-h-10 max-sm:min-w-10 max-sm:justify-center"
-          style={{
-            transition: "all var(--motion-fast) var(--ease)",
-            borderColor: voiceActive
-              ? "var(--accent)"
-              : voiceOpen
-                ? "var(--border-strong)"
-                : "var(--border-strong)",
-            background: voiceActive ? "var(--accent-dim)" : "transparent",
-            boxShadow: voiceActive ? "var(--glow-soft)" : undefined,
-            color: voiceActive ? "var(--accent)" : "var(--text-muted)",
-          }}
-        >
-          <Icon name="mic" size={14} />
-          <span className="hidden sm:inline">Voice</span>
-          {voiceActive && (
-            <span
-              aria-hidden
-              className="inline-block h-1.5 w-1.5 rounded-full"
-              style={{
-                background: "var(--accent)",
-                animation: "pulse 1.1s ease-in-out infinite",
-              }}
-            />
-          )}
-        </button>
-      )}
-
+    <header
+      className="glass relative flex shrink-0 items-center gap-2 rounded-none border-x-0 border-t-0 px-3 sm:gap-4 sm:px-5"
+      style={{ height: "var(--hud-height)", zIndex: "var(--z-hud)" as unknown as number }}
+    >
       <button
         type="button"
-        onClick={onPalette}
-        className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border border-[var(--border-strong)] px-3 py-1.5 text-[length:var(--text-xs)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] max-sm:min-h-10 max-sm:min-w-10 max-sm:justify-center"
-        style={{ transition: "all var(--motion-fast) var(--ease)" }}
+        onClick={onHome}
+        aria-label="Kravein, back to the conversation"
+        className="wordmark -mx-1 shrink-0 rounded-[var(--radius-sm)] px-1 text-[length:var(--text-base)] font-semibold"
+        style={{ minWidth: 0 }}
       >
-        <Icon name="search" size={14} />
-        <span className="hidden sm:inline">Run a skill</span>
-        <kbd className="hidden rounded-[var(--radius-sm)] border border-[var(--border-strong)] px-1 font-[family-name:var(--font-mono)] sm:inline">
-          ⌘K
-        </kbd>
+        KRAVEIN
       </button>
 
       <span
-        className="flex shrink-0 items-center gap-2 text-[length:var(--text-xs)]"
+        className="flex min-w-0 shrink-0 items-center gap-2 text-[length:var(--text-xs)]"
         title={status.label}
+        role="status"
       >
         <span
           aria-hidden
@@ -554,11 +150,280 @@ export function TopBar({
                 : undefined,
           }}
         />
-        <span className="hidden lg:inline" style={{ color: status.colour }}>
+        {/* The word is always there for anything but a healthy link; colour is
+            never the only signal. */}
+        <span
+          className={connection === "open" ? "hidden lg:inline" : ""}
+          style={{ color: status.colour }}
+        >
           {status.label}
         </span>
       </span>
+
+      {model && (
+        <span
+          className="hidden min-w-0 max-w-[16rem] truncate rounded-[var(--radius-full)] border border-[var(--border-strong)] px-2.5 py-0.5 font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-muted)] md:inline"
+          title={`${assistant ?? "Kravein"} on ${hostname ?? "this machine"}: ${model}`}
+        >
+          {model}
+        </span>
+      )}
+
+      <div className="ml-auto flex items-center gap-3 sm:gap-4">
+        {system?.available && (
+          <div className="hidden items-center gap-4 lg:flex">
+            <Vital label="CPU" percent={system.cpu_percent ?? 0} />
+            <Vital label="MEM" percent={system.memory?.percent ?? 0} />
+          </div>
+        )}
+
+        {mode && (
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title={`${mode.hint}. Open settings.`}
+            aria-label={`Confirmation mode: ${mode.label}. ${mode.hint}. Open settings`}
+            className="flex shrink-0 items-center gap-1.5 rounded-[var(--radius-full)] border px-2.5 py-1 text-[length:var(--text-xs)] font-medium"
+            style={{
+              borderColor: policyMode === "auto" ? "var(--critical)" : "var(--border-strong)",
+              color: policyMode === "auto" ? "var(--critical)" : "var(--text-muted)",
+              background: policyMode === "auto" ? "var(--critical-dim)" : "transparent",
+            }}
+          >
+            <Icon name="settings" size={12} />
+            <span className="hidden sm:inline">Confirm:</span>
+            {mode.label}
+          </button>
+        )}
+
+        {onToggleVoice && (
+          <button
+            type="button"
+            onClick={onToggleVoice}
+            aria-pressed={Boolean(voiceActive)}
+            title={voiceActive ? "Stop live voice" : "Start live voice"}
+            className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border px-3 py-1 text-[length:var(--text-xs)]"
+            style={{
+              transition: "all var(--motion-fast) var(--ease)",
+              borderColor: voiceActive ? "var(--accent)" : "var(--border-strong)",
+              background: voiceActive ? "var(--accent-dim)" : "transparent",
+              boxShadow: voiceActive ? "var(--glow-soft)" : undefined,
+              color: voiceActive ? "var(--accent)" : "var(--text-muted)",
+            }}
+          >
+            <Icon name="mic" size={14} />
+            <span className="hidden sm:inline">{voiceActive ? "Live" : "Voice"}</span>
+            {voiceActive && (
+              <span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ background: "var(--accent)", animation: "pulse 1.1s ease-in-out infinite" }}
+              />
+            )}
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={onPalette}
+          aria-label="Open the command palette"
+          className="flex shrink-0 items-center gap-2 rounded-[var(--radius-full)] border border-[var(--border-strong)] px-3 py-1 text-[length:var(--text-xs)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          style={{ transition: "all var(--motion-fast) var(--ease)" }}
+        >
+          <Icon name="search" size={14} />
+          <span className="hidden sm:inline">Search</span>
+          <kbd className="hidden rounded-[var(--radius-sm)] border border-[var(--border-strong)] px-1 font-[family-name:var(--font-mono)] sm:inline">
+            ⌘K
+          </kbd>
+        </button>
+
+        <span className="hidden sm:inline">
+          <Clock />
+        </span>
+      </div>
     </header>
+  );
+}
+
+/* -- dock ------------------------------------------------------------- */
+
+export function Dock({
+  route,
+  onOpen,
+  badges,
+}: {
+  route: Route;
+  onOpen: (id: ModuleId) => void;
+  badges?: Partial<Record<ModuleId, number>>;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    const items = Array.from(
+      listRef.current?.querySelectorAll<HTMLElement>("button[data-dock]:not([aria-disabled=true])") ?? [],
+    );
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    if (at < 0) return;
+    const next = roveIndex(at, event.key, items.length);
+    if (next === null) return;
+    event.preventDefault();
+    items[next].focus();
+  };
+
+  return (
+    <nav
+      aria-label="Modules"
+      className="fixed bottom-0 left-0 right-0 sm:bottom-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2"
+      style={{ zIndex: "var(--z-dock)" as unknown as number }}
+    >
+      <div
+        ref={listRef}
+        onKeyDown={onKeyDown}
+        className={classNames(
+          "glass glass-strong no-scrollbar flex items-center gap-0.5 overflow-x-auto px-2",
+          // Phone: a full-width bottom bar. Desktop: a floating chrome capsule
+          // at the bottom centre, directly under the composer (one deck).
+          "max-sm:rounded-none max-sm:border-x-0 max-sm:border-b-0",
+          "sm:overflow-visible sm:rounded-[var(--radius-full)] sm:px-3 sm:py-1.5",
+        )}
+        style={{ boxShadow: "var(--shadow-dock)", minHeight: "var(--dock-height)" }}
+      >
+        {MODULES.map((mod) => {
+          const active = route.kind === "module" && route.id === mod.id;
+          const badge = badges?.[mod.id];
+          return (
+            <button
+              key={mod.id}
+              type="button"
+              data-dock={mod.id}
+              aria-label={mod.soon ? `${mod.label} (coming soon)` : mod.label}
+              aria-current={active ? "page" : undefined}
+              aria-disabled={mod.soon ? true : undefined}
+              onClick={() => !mod.soon && onOpen(mod.id)}
+              className={classNames(
+                "group relative flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-lg)]",
+                mod.soon && "cursor-default opacity-45",
+                active
+                  ? "text-[var(--gradient-accent-contrast)]"
+                  : "text-[var(--text-muted)] hover:bg-[var(--glass-highlight)] hover:text-[var(--text-strong)]",
+              )}
+              style={{
+                transition: "background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease)",
+                // The open module is lit in laser.
+                background: active ? "var(--gradient-accent)" : undefined,
+                boxShadow: active ? "var(--glow)" : undefined,
+              }}
+            >
+              <Icon name={mod.icon as IconName} size={19} />
+              {badge !== undefined && badge > 0 && (
+                <span
+                  className="absolute right-0.5 top-0.5 min-w-4 rounded-[var(--radius-full)] px-1 text-center text-[length:var(--text-xs)] font-semibold leading-4"
+                  style={{ background: "var(--laser)", color: "var(--gradient-accent-contrast)" }}
+                >
+                  {badge}
+                </span>
+              )}
+              <span
+                role="presentation"
+                className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-3 hidden -translate-x-1/2 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-1 text-[length:var(--text-xs)] text-[var(--text)] shadow-lg group-hover:sm:block group-focus-visible:sm:block"
+              >
+                {mod.label}
+                {mod.soon ? " · soon" : ""}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+/* -- pane ------------------------------------------------------------- */
+
+/**
+ * A glass sheet over the canvas. Mounted once while any module or agent is
+ * open (not keyed by route), so the opener it returns focus to is the control
+ * the user first used, not whichever dock button they pressed last.
+ */
+export function Pane({
+  title,
+  eyebrow,
+  onClose,
+  children,
+}: {
+  title: string;
+  eyebrow?: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const sheetRef = useRef<HTMLElement>(null);
+  const closeRef = useRef(onClose);
+  // Kept current after each render, so the Esc listener (installed once) never
+  // calls a stale close.
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
+
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    sheetRef.current?.focus({ preventScroll: true });
+
+    const onKey = (event: KeyboardEvent) => {
+      if (!escapeClosesPane(event)) return;
+      event.preventDefault();
+      closeRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      // Back to what opened the pane; if that is gone (a node that re-rendered),
+      // to the composer so the keyboard is never stranded on <body>.
+      const fallback = document.querySelector<HTMLElement>("[data-composer]");
+      focusReturnTarget(opener, fallback)?.focus({ preventScroll: true });
+    };
+  }, []);
+
+  return (
+    <>
+      {/* Click-away scrim, below the dock so modules stay switchable. */}
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label="Close pane"
+        onClick={onClose}
+        className="fixed inset-0 cursor-default"
+        style={{ zIndex: "calc(var(--z-dock) - 1)" as unknown as number, background: "var(--scrim)", minHeight: 0 }}
+      />
+      <section
+        ref={sheetRef}
+        role="dialog"
+        aria-label={title}
+        tabIndex={-1}
+        className="glass-pane pane-sheet fixed flex flex-col overflow-hidden outline-none"
+        style={{ zIndex: "var(--z-pane)" as unknown as number }}
+      >
+        <header className="flex shrink-0 items-center gap-3 border-b border-[var(--border)] px-4 py-3 sm:px-6">
+          <div className="min-w-0 flex-1">
+            {eyebrow && <div className="eyebrow">{eyebrow}</div>}
+            <h2 className="truncate text-[length:var(--text-lg)] font-semibold text-[var(--text-strong)]">
+              {title}
+            </h2>
+          </div>
+          <kbd className="hidden rounded-[var(--radius-sm)] border border-[var(--border-strong)] px-1.5 py-0.5 font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-faint)] sm:inline">
+            Esc
+          </kbd>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={`Close ${title}`}
+            className="flex h-9 w-9 items-center justify-center rounded-[var(--radius)] text-[var(--text-muted)] hover:bg-[var(--glass-highlight)] hover:text-[var(--text-strong)]"
+          >
+            <Icon name="close" size={18} />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-hidden px-3 py-3 sm:px-6 sm:py-4">{children}</div>
+      </section>
+    </>
   );
 }
 
@@ -575,7 +440,11 @@ export function ConfirmOverlay({
 }) {
   if (confirms.length === 0) return null;
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-2 z-50 flex justify-center px-2 sm:top-4 sm:px-4">
+    <div
+      data-confirm-overlay
+      className="pointer-events-none fixed inset-x-0 top-2 flex justify-center px-2 sm:top-4 sm:px-4"
+      style={{ zIndex: "var(--z-confirm)" as unknown as number }}
+    >
       <div className="pointer-events-auto max-h-[calc(100dvh-1rem)] w-full max-w-lg space-y-2 overflow-y-auto">
         {confirms.map((confirm) => (
           <div key={confirm.confirmId} className="relative">
@@ -597,7 +466,15 @@ export function ConfirmOverlay({
   );
 }
 
-/** Per-screen wrapper. The title now lives in the top bar, so this is layout only. */
+/** Move keyboard focus to the first open confirmation, wherever it lives. */
+export function focusConfirmation(): void {
+  const target =
+    document.querySelector<HTMLElement>("[data-confirm-overlay] button") ??
+    document.querySelector<HTMLElement>("[data-confirm-card] button");
+  target?.focus();
+}
+
+/** Per-pane wrapper: layout only, the title lives in the pane header. */
 export function Screen({
   actions,
   children,
@@ -624,17 +501,10 @@ export function Screen({
           `flex-1` plus `min-h-0` is what makes `overflow-y-auto` actually
           engage: without `min-h-0` a flex child refuses to shrink below its
           content, so the element grows instead of scrolling and the overflow
-          escapes into `<main>`, which is `overflow-hidden` — content simply
-          disappears off the bottom with no way to reach it.
-
-          Panels used to each add their own `overflow-y-auto`, but on a div
-          with no height constraint, which is why five screens (Apps, Settings,
-          Control, Screen, Schedule) silently clipped — over 1,000px of Apps
-          was unreachable. One scroller here, and every current and future
-          panel gets it for free.
-
-          Scrollbar styling is global (`*` and `::-webkit-scrollbar` in
-          globals.css), so this matches the rail's without any extra rules. */}
+          escapes into an `overflow-hidden` ancestor, where it is simply
+          unreachable. Panels used to each add their own `overflow-y-auto` on a
+          div with no height constraint, which is why five screens clipped.
+          One scroller here and every current and future panel gets it. */}
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">{children}</div>
     </div>
   );

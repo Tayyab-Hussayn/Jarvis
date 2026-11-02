@@ -383,7 +383,7 @@ function JobForm({
               onClick={() => setMode(option)}
               className="rounded-[var(--radius-sm)] px-3 py-1 text-[length:var(--text-xs)]"
               style={{
-                background: mode === option ? "var(--accent)" : "transparent",
+                background: mode === option ? "var(--laser)" : "transparent",
                 color: mode === option ? "var(--accent-contrast)" : "var(--text-muted)",
                 transition: "all var(--motion-fast) var(--ease)",
               }}

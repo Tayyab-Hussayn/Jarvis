@@ -1,13 +1,14 @@
 ---
 type: module
 owner: web
-updated: 2026-10-24
+updated: 2026-11-02
 ---
 
 # web
 
 ## Code map
 - `web/` Next.js app (screens, `TurnGraph`, `Screen`) → `npm run build` → `kravein/web-dist/` · `kravein/server.py` FastAPI + ws · `events.py` Session frames · `webauth.py` token/Origin/Host
+- v2 shell (#145): `web/app/page.tsx` (route, wiring) · `components/Shell.tsx` (Hud, Dock, Pane, ConfirmOverlay, Screen) · `Constellation.tsx` + `agentVisual.tsx` + `AgentPane.tsx` · `lib/agents.ts` (state store) · `lib/panes.ts` (hash routes) · tests `agents.test.ts`, `panes.test.ts`, `confirm.test.ts`, `format.test.ts`
 - `kravein/phone.py` phone channel: offers, device store, `PhoneLink`, `call()` · `kravein/phone_protocol.json` the phone vocabulary · tests in `tests/web/test_phone_channel.py`
 
 - Phones panel: `web/components/PhonesView.tsx` (pair + paired list) · pure logic in `web/lib/phones.ts`, QR matrix in `web/lib/qr.ts` (`qrcode-generator`, offline) · tests `web/lib/phones.test.ts`
@@ -26,10 +27,10 @@ updated: 2026-10-24
 ```bash
 .venv/bin/python -m pytest tests/web tests/test_web_transport.py -q     # 97+17 + 87
 cd web && npm test          # node --test lib/: phones, QR matrix, policy, pcm, playback
-node web/scripts/check_contrast.mjs        # WCAG AA on token pairs, both themes
+node web/scripts/check_contrast.mjs        # WCAG AA on token pairs (dark, one theme)
 cd web && npm run build
 .venv/bin/python tools/check_layout.py     # only when the UI changed
-PYTHONPATH=. .venv/bin/python web/scripts/check_phone_layout.py   # 390x844: no sideways scroll, targets >=40px, drawer, composer above keyboard
+PYTHONPATH=. .venv/bin/python web/scripts/check_phone_layout.py [w h]  # default 390x844; every pane + agent panes: no sideways scroll, targets >=40px (phone), panes scrollable, dock, composer above keyboard. tools/check_layout.py only walks <main>, so it no longer sees panes
 ```
 
 ## Phone channel
@@ -66,31 +67,27 @@ The page's own mic and speaker drive a Gemini Live session on the laptop.
 - **UI invariant:** the selector and banner show only what the server last answered (`parsePolicy` rejects malformed replies); no optimistic state. The banner counts down locally from `seconds_left` re-anchored on each answer, polls every 5 s, and re-asks the server when its own countdown hits 0. Another tab's change or an expiry shows within 5 s.
 - `config._deep_merge` shares nested dicts with `DEFAULT_SETTINGS`, so writing the `safety` section mutates the defaults in-process; `test_policy_api.py` deep-copies them. Reported to the orchestrator (config.py is not ours).
 
-## Design tokens (#54, "aurora")
-Single source: `web/app/tokens.css` (CSS variables; Tailwind maps `bg-surface` etc. via `@theme inline`). No hex/rgba in components. Dark first; `prefers-color-scheme: light` overrides. The Android shell should copy these values.
+## Kravein v2 UI, "Command Constellation" (#145)
+Spec: `kb/design/kravein-v2-ui.md`. No sidebar: HUD bar, constellation, transmission stream, floating composer capsule, dock, panes.
 
-| Token | Dark | Light |
-|---|---|---|
-| `--bg` / `--surface` / `--surface-raised` / `--surface-sunken` | `#04060c` / `#0b1019` / `#121a28` / `#070b13` | `#eef2f9` / `#f8faff` / `#ffffff` / `#e4eaf4` |
-| `--border` / `--border-strong` | `#1b2638` / `#2b3a54` | `#d5deec` / `#b3c0d6` |
-| `--glass` / `--glass-strong` / `--glass-border` | `rgba(14,21,34,.72)` / `rgba(18,27,43,.88)` / `rgba(140,180,255,.14)` | white .72 / .92 / `rgba(40,70,120,.14)` |
-| `--blur` | 18px (+ saturate 140%) | same |
-| `--text` / `--text-muted` / `--text-faint` | `#eaf0fb` / `#a6b3c8` / `#8493ab` | `#0c1424` / `#44536b` / `#566580` |
-| `--accent` (cyan→teal) / `--accent-contrast` | `#3de3ff` / `#031016` | `#006b82` / `#ffffff` |
-| `--accent-2` (violet) | `#9d8cff` | `#5a45d6` |
-| `--gradient-accent` | `135deg #3de3ff → #7b8cff` | `135deg #006b82 → #4a47d0` |
-| `--glow` / `--glow-soft` | 1px accent-line ring + 18px cyan halo / 14px halo | hairline ring / none |
-| danger `--moderate` / `--destructive` / `--critical` | `#ffc94d` / `#ff8f4a` / `#ff6b7a` | `#8a5a00` / `#a63f06` / `#b3182f` |
-| radii `--radius-sm/--radius/-md/-lg/-xl` | 8 / 12 / 14 / 18 / 24 px, `-full` 999 | same |
-| type | Inter stack (never `system-ui`); xs .6875 sm .8125 base .9375 lg 1.125 xl 1.5 2xl 2 stat 2.125 rem; label tracking .1em | same |
-| motion | fast 110 / base 200 / slow 360 ms; `--ease` (.2,0,.2,1), `--ease-out` (.16,1,.3,1) | same |
+- **Tokens:** single source `web/app/tokens.css` (Tailwind maps `bg-surface` etc. via `@theme inline`), dark only. Palette obsidian `#080808`, charcoal `#17171c`, graphite `#22232a`, steel `#929da7`, chrome `#cdcbca`, laser `#d41514` (fills, white text), coral `#ff4b32` (waiting). `--accent` `#ff5c5c` is the text/line-capable red (>= 4.5:1; deliberately not the orange coral). Selected chips, toggles, primary buttons and the lit dock module FILL with `--laser`/`--gradient-accent` and carry `--accent-contrast` (white). Coral means "waiting for you" only (node badge, dashed connector, confirm card accent). Gradients live in tokens (`--halo-*`, `--node-*`, `--sphere-*`); no hex/rgba in components. z-scale `--z-hud < dock < pane < palette < confirm`. `node web/scripts/check_contrast.mjs` (resolves `var()` aliases) fails below AA; run it after any token change.
+- **Fonts:** `next/font/google` in `layout.tsx` (Unbounded display, Inter Tight UI, JetBrains Mono), downloaded at build and served from the export (nothing fetched at runtime, verified: no googleapis in `out/`). tokens.css reads `--nf-*` with concrete fallbacks. Never `system-ui`.
+- **Routing:** `lib/panes.ts` (pure): `#name`, old `#/name`, aliases (`#jobs`, `#audit`, `#memory`), `#agent/<name>`; unknown or not-built (`#proposals`) is home. `page.tsx` `useRoute` keeps hash and state in step (`pushState`, Back works).
+- **Chrome:** `components/Shell.tsx`: `Hud`, `Dock` (bottom-centre chrome capsule on desktop, directly under the composer = one command deck; full-width bottom bar on phone; the open module is lit in laser; arrow-key roving), `Pane` (mounted once while any pane is open so focus returns to the first opener; Esc via `escapeClosesPane`; scrim sits below the dock), `ConfirmOverlay` (z-confirm, `data-confirm-overlay`), `Screen` (the scroll contract), `focusConfirmation()`.
+- **Confirmations are never hidden:** `lib/confirm.ts overlayConfirms` adds every still-pending inline chat confirmation to the overlay while a pane is open. Test asserts the z order from tokens.css.
+- **Agent store:** `lib/agents.ts` pure reducer `reduce(model, event, now)`; `useKravein` feeds every non-panel frame (`p…` panel runs excluded) and exposes `agents`/`dispatchAgents`. Derivation (until the server speaks): `turn_start`→thinking, tool frames (+`agent`/`delegation`)→working, the Orchestrator's `delegate` call lights the target and bumps `outSeq` (out pulse), its result is parsed (`[name report #id] outcome: …`) into done/failed/declined + report and bumps `backSeq` (back pulse), a confirmation whose action is `name: …` puts that agent in waiting. Engine #146 `agent_state` frames take over (`authoritative`): derivation then only records steps/delegations. The server sends done+idle back to back, so the store HOLDS the outcome and a 4.5 s timer (`settle`) returns it to idle. `/api/agents` and `/api/agents/state` are fetched on every hello; the snapshot may only raise an idle untouched agent (it can land after live frames). Voice tool calls produce no `agent_state` yet; the core shows thinking while `voicePhase === "thinking"`.
+- **Constellation:** `components/Constellation.tsx` (`Constellation` desktop, `AgentStrip` phone), `agentVisual.tsx` (ring/glyph/pill per state; every state has its own shape and word, never colour alone), `AgentPane.tsx`. SVG + CSS only: sub-agents on the upper arc, a slow +-9deg swing (paused while anything is active or hovered), pulses are `stroke-dashoffset` animations restarted by changing a React `key` on `outSeq`/`backSeq`. No per-frame React renders. The reduced-motion rule in globals.css stops all loops; shapes and labels still carry state.
+- **Layout:** `lg` (>=1024): grid, constellation left / stream right; the composer is a fixed capsule at the bottom centre (`lg:fixed` in `Console`) with the dock beneath it, and `main` reserves `lg:pb-[9.75rem]` for the deck. Below `lg` they stack and the composer is in the flow. The constellation wrapper is a size container (`containerType: size`), and `--s`/`--node`/`--orb` scale the stage, nodes and orb with the space (`cqw/cqh`). Nodes are chrome-bezel glass domes, the orb has chrome body + horizon + specular + laser lens + floor glow (all tokens), connectors are quadratic arcs (idle = dashed `dash-flow`, working = laser + pulses).
+- **Confirm card:** Deny is `autoFocus` (safe default for Enter/Space), Approve is the primary (laser) button.
+- **Stream:** `TurnGraph` folds a delegate's tool calls (`tool.agent`) into one collapsed, expandable node labelled by agent. `Console` is the stream + composer capsule (`data-composer` on the textarea; Clear is hidden on phones, the palette has "Clear conversation").
+- **Palette:** `Palette` takes `commands` (modules, agents, conversation, clear) listed above the skills.
+- **Proposals:** dock slot exists (`soon`), the pane is a follow-up.
 
-- Classes (globals.css, `@layer components` so Tailwind utilities still win): `.glass`, `.glass-strong`, `.glow`, `.text-gradient`, `.btn-primary`, `.field-glow`. Keyframes `think` (agent thinking dots, `Thinking` in `TurnGraph.tsx`), `halo`, `node-in`, `view-in`. The reduced-motion rule in globals.css zeroes all animation.
-- Contrast: `node web/scripts/check_contrast.mjs` reads tokens.css and fails below WCAG AA (4.5:1) for every text pair in both themes; run it after any token change.
-- Why `@layer components`: an unlayered `.glass { border }` silently overrode every Tailwind utility (`border-x-0`, `hover:bg-*`) on the same element.
+
 
 ## Gotchas
-- **Phone width (<640px, Android WebView):** the rail is `hidden sm:flex`; `NavDrawer` (Shell.tsx, opened by the top bar's menu button) replaces it. Touch targets are enforced by one `@media (max-width: 639px)` rule in `globals.css` (min 40px on buttons/inputs), not per component. `layout.tsx` sets `interactiveWidget: "resizes-content"` so the on-screen keyboard shrinks the layout instead of covering the composer. Desktop is unchanged above the breakpoint.
+- **`backdrop-filter` needs the unprefixed property alone in the source.** Writing both `backdrop-filter` and `-webkit-backdrop-filter` made the CSS minifier (lightningcss) emit only the `-webkit-` form, which Chrome reports as `none`: no glass blur anywhere. Write `backdrop-filter` only; check the built CSS (`grep -o 'backdrop-filter:[^;}]*' out/_next/static/chunks/*.css`) or `getComputedStyle(el).backdropFilter`.
+- **Phone width (<640px, Android WebView):** the dock becomes a bottom bar, panes become bottom sheets above it and the constellation becomes `AgentStrip`. Touch targets are enforced by one `@media (max-width: 639px)` rule in `globals.css` (min 40px on buttons/inputs), not per component. `layout.tsx` sets `interactiveWidget: "resizes-content"` so the on-screen keyboard shrinks the layout instead of covering the composer. Desktop is unchanged above the breakpoint.
 - No `from __future__ import annotations` in `server.py`. Every request gets a reply frame. Confirmation frames are never dropped.
 - Never pass `host=` to `audit.record`: it overwrites the record's own machine-name field.
 - A test that expects a refused phone socket must probe it (`ping`); an accepted socket waits for `hello` forever, so a plain `receive_text()` hangs instead of failing.
