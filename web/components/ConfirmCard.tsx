@@ -98,8 +98,13 @@ export function ConfirmCard({
 
       {pending ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button onClick={() => onRespond(confirm.confirmId, false)}>Deny</Button>
-          <Button variant={armed ? "danger" : "default"} onClick={approve}>
+          {/* Deny is focused first: Enter or Space on a card nobody has read
+              must land on the safe answer. Approve is the primary style, so
+              it is the obvious thing to reach for deliberately. */}
+          <Button autoFocus onClick={() => onRespond(confirm.confirmId, false)}>
+            Deny
+          </Button>
+          <Button variant={armed ? "danger" : "primary"} onClick={approve}>
             {needsDoubleClick && !armed ? "Approve…" : "Approve"}
           </Button>
           <span

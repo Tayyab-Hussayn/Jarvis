@@ -124,7 +124,8 @@ export function ModeToggle({
           style={{
             left: mode === "text" ? "0.375rem" : "50%",
             width: "calc(50% - 0.375rem)",
-            background: "var(--accent)",
+            background: "var(--gradient-accent)",
+            boxShadow: "var(--glow-soft)",
             transition: "left var(--motion-base) var(--ease)",
             opacity: busy ? 0.55 : 1,
           }}

@@ -288,7 +288,10 @@ export default function Page() {
 
       <AutoBanner policy={policy} />
 
-      <main className="relative flex min-h-0 flex-1 flex-col pb-[var(--dock-height)] sm:pb-0 sm:pl-[4.5rem]">
+      {/* The command deck: composer above, dock below, both bottom centre. The
+          left edge is empty canvas; `main` leaves room for the dock under the
+          composer (bar height on a phone, capsule + gap on desktop). */}
+      <main className="relative flex min-h-0 flex-1 flex-col pb-[var(--dock-height)] sm:pb-[4.75rem] lg:pb-[9.75rem]">
         {connection === "unauthorized" && (
           <div
             className="mx-3 mt-3 rounded-[var(--radius)] border-l-2 px-3 py-2 text-[length:var(--text-sm)]"
@@ -306,12 +309,18 @@ export default function Page() {
           onOpenAgent={openAgent}
           onReview={focusConfirmation}
         />
-        <Constellation
-          model={agents}
-          voiceThinking={voicePhase === "thinking"}
-          onOpenAgent={openAgent}
-          onReview={focusConfirmation}
-        />
+        {/* Wide screens: the constellation takes the left half and the stream
+            the right, so neither is a small island in an empty canvas. Narrower
+            desktops stack them. */}
+        <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(0,1fr)]">
+        <div className="hidden shrink-0 sm:block max-lg:h-[clamp(20rem,44dvh,28rem)] lg:min-h-0 lg:h-auto">
+          <Constellation
+            model={agents}
+            voiceThinking={voicePhase === "thinking"}
+            onOpenAgent={openAgent}
+            onReview={focusConfirmation}
+          />
+        </div>
 
         <div className="min-h-0 flex-1">
           <Console
@@ -344,6 +353,7 @@ export default function Page() {
             onRestartVoice={restartVoice}
             onDismissVoiceError={dismissVoiceError}
           />
+        </div>
         </div>
       </main>
 

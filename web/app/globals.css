@@ -102,7 +102,6 @@ h3 {
 @supports (backdrop-filter: blur(1px)) {
   .glass {
     backdrop-filter: blur(var(--blur)) saturate(140%);
-    -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
   }
 }
 .glass-strong {
@@ -115,14 +114,19 @@ h3 {
 
 /* Smoked glass for panes: darker and with an inner chrome highlight. */
 .glass-pane {
-  background: linear-gradient(180deg, rgba(28, 28, 33, 0.97), rgba(12, 12, 15, 0.985));
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--shadow-panel), inset 0 1px 0 var(--glass-highlight);
+  background: var(--pane-glass);
+  border: 0;
+  box-shadow: var(--shadow-panel), var(--pane-hairline);
+}
+/* Cards on the canvas: the same smoked glass at card scale. */
+.glass-card {
+  background: var(--pane-glass);
+  box-shadow: var(--shadow-card), var(--pane-hairline);
 }
 @supports (backdrop-filter: blur(1px)) {
-  .glass-pane {
-    backdrop-filter: blur(calc(var(--blur) + 6px)) saturate(130%);
-    -webkit-backdrop-filter: blur(calc(var(--blur) + 6px)) saturate(130%);
+  .glass-pane,
+  .glass-card {
+    backdrop-filter: blur(calc(var(--blur) + 8px)) saturate(145%);
   }
 }
 
@@ -336,6 +340,13 @@ h3 {
   animation-play-state: paused;
 }
 
+/* Idle connectors: a faint dashed flow toward the agents. */
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
 @keyframes flash-done {
   0% {
     box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.9);
@@ -378,8 +389,9 @@ h3 {
    dock bar, so the dock stays reachable and nothing scrolls sideways. */
 .pane-sheet {
   top: calc(var(--hud-height) + 0.75rem);
-  bottom: 1rem;
-  left: 5.5rem;
+  /* Above the command deck (composer + dock), which stays visible below. */
+  bottom: 6.25rem;
+  left: 1rem;
   right: 1rem;
   margin-inline: auto;
   max-width: 64rem;

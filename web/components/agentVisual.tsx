@@ -114,7 +114,7 @@ export function StateRing({
   size,
 }: {
   state: AgentStateName;
-  size: number;
+  size: number | string;
 }) {
   const colour = STATE_COLOUR[state];
   const r = 28;

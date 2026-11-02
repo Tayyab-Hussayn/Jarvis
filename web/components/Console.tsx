@@ -277,7 +277,13 @@ export function Console({
         </div>
       </div>
 
-      <div className="mx-auto w-full px-2 pb-2 pt-3 sm:px-6" style={{ maxWidth: "var(--stream-max)" }}>
+      {/* Wide screens: the composer is a fixed capsule at the bottom centre,
+          straddling both columns, with the dock directly beneath it (one
+          command deck). Below that it stays in the flow under the stream. */}
+      <div
+        className="mx-auto w-full px-2 pb-2 pt-3 sm:px-6 lg:fixed lg:bottom-[4.9rem] lg:left-1/2 lg:z-[var(--z-hud)] lg:-translate-x-1/2 lg:px-0 lg:pb-0 lg:pt-0"
+        style={{ maxWidth: "var(--stream-max)" }}
+      >
         {/* The session control strip. Present for as long as the microphone is
             open, so Stop is never more than one click away — the hero that
             used to carry it is gone once the first turn lands. */}

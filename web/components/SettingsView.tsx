@@ -221,7 +221,7 @@ function EditableRow({
           aria-label={humanise(row.key)}
           className="relative h-5 w-9 shrink-0 rounded-[var(--radius-full)] disabled:opacity-50"
           style={{
-            background: row.value ? "var(--accent)" : "var(--surface-sunken)",
+            background: row.value ? "var(--laser)" : "var(--surface-sunken)",
             border: "1px solid var(--border-strong)",
             transition: "background var(--motion-fast) var(--ease)",
           }}

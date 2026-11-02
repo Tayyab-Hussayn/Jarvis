@@ -273,7 +273,7 @@ export function Dock({
   return (
     <nav
       aria-label="Modules"
-      className="fixed bottom-0 left-0 right-0 sm:bottom-auto sm:left-4 sm:right-auto sm:top-1/2 sm:-translate-y-1/2"
+      className="fixed bottom-0 left-0 right-0 sm:bottom-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2"
       style={{ zIndex: "var(--z-dock)" as unknown as number }}
     >
       <div
@@ -281,9 +281,10 @@ export function Dock({
         onKeyDown={onKeyDown}
         className={classNames(
           "glass glass-strong no-scrollbar flex items-center gap-0.5 overflow-x-auto px-2",
-          // Phone: a bottom bar. Desktop: a floating vertical capsule.
+          // Phone: a full-width bottom bar. Desktop: a floating chrome capsule
+          // at the bottom centre, directly under the composer (one deck).
           "max-sm:rounded-none max-sm:border-x-0 max-sm:border-b-0",
-          "sm:flex-col sm:overflow-visible sm:rounded-[var(--radius-xl)] sm:py-2.5",
+          "sm:overflow-visible sm:rounded-[var(--radius-full)] sm:px-3 sm:py-1.5",
         )}
         style={{ boxShadow: "var(--shadow-dock)", minHeight: "var(--dock-height)" }}
       >
@@ -303,13 +304,14 @@ export function Dock({
                 "group relative flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-lg)]",
                 mod.soon && "cursor-default opacity-45",
                 active
-                  ? "text-[var(--accent)]"
+                  ? "text-[var(--gradient-accent-contrast)]"
                   : "text-[var(--text-muted)] hover:bg-[var(--glass-highlight)] hover:text-[var(--text-strong)]",
               )}
               style={{
                 transition: "background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease)",
-                background: active ? "var(--accent-dim)" : undefined,
-                boxShadow: active ? "inset 0 0 0 1px var(--accent-line), var(--glow-soft)" : undefined,
+                // The open module is lit in laser.
+                background: active ? "var(--gradient-accent)" : undefined,
+                boxShadow: active ? "var(--glow)" : undefined,
               }}
             >
               <Icon name={mod.icon as IconName} size={19} />
@@ -323,7 +325,7 @@ export function Dock({
               )}
               <span
                 role="presentation"
-                className="pointer-events-none absolute left-full z-10 ml-3 hidden whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-1 text-[length:var(--text-xs)] text-[var(--text)] shadow-lg group-hover:sm:block group-focus-visible:sm:block"
+                className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-3 hidden -translate-x-1/2 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-raised)] px-2 py-1 text-[length:var(--text-xs)] text-[var(--text)] shadow-lg group-hover:sm:block group-focus-visible:sm:block"
               >
                 {mod.label}
                 {mod.soon ? " · soon" : ""}

@@ -63,14 +63,14 @@
 
   /* -- accent: laser. --accent is the text/line-capable tone (>= 4.5:1 on
         every surface); --laser is the fill, with white text on it. ------ */
-  --accent: #ff6257;
-  --accent-hover: #ff8278;
-  /* Ink for text ON an --accent fill (selected chips, toggles): white on this
-     coral is only 3:1, so the ink is dark. White text goes on --laser, via
-     --gradient-accent-contrast. */
-  --accent-contrast: #1a0402;
+  /* A red-pink, deliberately NOT the orange-red coral: coral means "waiting
+     for you" and nothing else. Selected chips, toggles and primary buttons
+     FILL with --laser and carry --accent-contrast (white) on it. */
+  --accent: #ff5c5c;
+  --accent-hover: #ff8585;
+  --accent-contrast: #ffffff;
   --accent-dim: rgba(212, 21, 20, 0.16);
-  --accent-line: rgba(255, 98, 87, 0.45);
+  --accent-line: rgba(255, 92, 92, 0.45);
   --accent-2: var(--chrome);
   --accent-2-dim: rgba(205, 203, 202, 0.12);
   --gradient-accent: linear-gradient(135deg, #e5201e 0%, #a30f10 100%);
@@ -105,6 +105,23 @@
   --sphere-chrome: radial-gradient(circle at 34% 26%, #ffffff 0%, #cdcbca 22%, #7b8088 52%, #2a2c33 80%, #101114 100%);
   --sphere-shadow: inset 0 -6px 14px rgb(0 0 0 / 0.55), inset 0 2px 3px rgb(255 255 255 / 0.7), 0 10px 30px rgb(0 0 0 / 0.6);
   --sphere-lens: radial-gradient(circle, #ff6a5f 0%, #d41514 38%, #5a0707 78%, #1a0202 100%);
+  /* Orb layers, bottom to top: chrome body, reflected horizon, specular. */
+  --orb-horizon: linear-gradient(180deg, rgb(255 255 255 / 0.0) 0%, rgb(255 255 255 / 0.0) 45%, rgb(255 150 120 / 0.38) 49.5%, rgb(8 8 10 / 0.6) 52%, rgb(70 74 84 / 0.0) 100%);
+  --orb-specular: radial-gradient(ellipse 46% 30% at 31% 21%, rgb(255 255 255 / 0.95) 0%, rgb(255 255 255 / 0.0) 100%);
+  --orb-rim: inset 0 0 0 1px rgb(255 255 255 / 0.35), inset 0 -10px 18px rgb(0 0 0 / 0.55), inset 0 3px 5px rgb(255 255 255 / 0.65);
+  --floor-glow: radial-gradient(ellipse 50% 50% at 50% 50%, rgb(var(--laser-rgb) / 0.55) 0%, transparent 70%);
+  /* Node bezels: a chrome ring around a dark glass dome with a gloss arc. */
+  --bezel-chrome: conic-gradient(from 200deg, #f4f2f1, #7c828a, #d8d6d5, #3a3d44, #e9e7e6, #7c828a, #f4f2f1);
+  --bezel-hot: conic-gradient(from 200deg, #ffd9d4, #d41514, #ff7d70, #5a0707, #ffb3aa, #d41514, #ffd9d4);
+  --dome-glass: radial-gradient(circle at 50% 62%, #1d1e25 0%, #0b0b0f 78%);
+  --dome-hot: radial-gradient(circle at 50% 58%, #7a0f0e 0%, #2a0505 62%, #0f0102 100%);
+  --dome-gloss: linear-gradient(180deg, rgb(255 255 255 / 0.26), rgb(255 255 255 / 0.02));
+  --node-shadow: 0 8px 18px rgb(0 0 0 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.5);
+  /* Smoked glass for panes and cards: translucent enough that the blur reads. */
+  --pane-glass: linear-gradient(180deg, rgb(34 35 42 / 0.74), rgb(12 12 15 / 0.82));
+  --pane-hairline: 0 0 0 1px rgb(205 203 202 / 0.16), inset 0 1px 0 rgb(255 255 255 / 0.14);
+  /* Atmosphere behind the constellation. */
+  --stage-haze: radial-gradient(ellipse 60% 55% at 50% 58%, rgb(6 17 12 / 0.9) 0%, transparent 72%);
 
   /* -- agent states (each also has a shape/badge; never colour alone) -- */
   --state-idle: var(--steel);
@@ -189,7 +206,7 @@
   --hud-height: 3.25rem;
   --dock-height: 3.5rem;
   --content-max: 84rem;
-  --stream-max: 46rem;
+  --stream-max: 50rem;
 }
 
 /* Tailwind v4 reads its palette from these, so `bg-surface`, `text-muted`,

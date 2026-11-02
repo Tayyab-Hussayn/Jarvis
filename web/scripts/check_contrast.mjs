@@ -42,7 +42,7 @@ for (const fg of ["laser", "state-idle", "state-waiting", "state-done"]) {
   for (const bg of ["bg", "surface-raised"]) PAIRS.push([fg, bg, 3]);
 }
 PAIRS.push(
-  ["accent-contrast", "accent", 4.5],
+  ["accent-contrast", "laser", 4.5],
   ["gradient-accent-contrast", "laser", 4.5],
   ["critical-contrast", "critical", 4.5],
   ["panel-text", "panel", 4.5],
