@@ -27,6 +27,8 @@ from typing import Any, Callable, Protocol
 
 from . import audit, config, registry
 from .agent import SYSTEM_PROMPT
+from .agent import DECLINED_REPLY
+from .agents import history as _history
 from .platform import detect
 from .safety import Confirmer, TurnMemory, confirmer_scope
 
@@ -99,6 +101,14 @@ TOOL_TIMEOUT = 90.0
 TRANSLATE_TIMEOUT = 45.0
 
 Observer = Callable[[str, str], None]
+
+# Short targets the `[voice actions: …]` history line may name. Anything else
+# (commands, text, paths, queries) stays out: the line tells a later text turn
+# *what voice did*, it is not a copy of the arguments.
+_ACTION_TARGET_KEYS = ("agent", "app_name", "app", "workspace", "window", "target", "name")
+_FAILED_PREFIXES = ("error", "refused", "blocked", "denied", "could not", "couldn't",
+                    "failed", "unknown", "not allowed", "i won't", "okay, i won't")
+CONTEXT_DEFAULT_CHARS = 3000
 
 
 class Control(enum.Enum):
@@ -361,6 +371,7 @@ class LiveSession:
         model: str = "",
         source: "AudioSource | None" = None,
         sink: "AudioSink | None" = None,
+        agent: Any = None,
     ):
         # Default is the laptop's own mic and speaker; a phone or browser
         # passes a NetworkAudio for both (see its docstring).
@@ -398,6 +409,20 @@ class LiveSession:
         self._mic = bytearray()
         self._finals: set[asyncio.Task] = set()
 
+        # The Orchestrator context (see agent.make_voice_agent), or None for the
+        # old all-tools session. Everything below is inert without it.
+        self._agent = agent
+        self._rounds = 0                      # tool-call messages this Live turn
+        self._actions: list[str] = []         # what this turn did, for the history line
+        self._typed = ""                      # text sent with send_text (no transcription)
+        self._state_open = False
+        self._escalated = False
+        # Task reports waiting to be spoken, and whether the turn in progress is
+        # the announcement of one (then only `task_status` may be called: the
+        # report is a sub-agent's output, i.e. untrusted).
+        self._pending_reports: list[str] = []
+        self._report_turn = False
+
     # -- helpers ---------------------------------------------------------
 
     def _emit(self, kind: str, text: str) -> None:
@@ -416,6 +441,136 @@ class LiveSession:
             # thread directly would not wake anything waiting on it.
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(event.set)
+
+    # -- Orchestrator context --------------------------------------------
+
+    def _agent_event(self, kind: str, text: str = "", **data: Any) -> None:
+        """Feed the Orchestrator's observer (state tracker) — never the voice UI."""
+        if self._agent is not None:
+            self._agent._emit(kind, text, **data)
+
+    def _open_state(self, task: str = "") -> None:
+        """Start of a spoken turn: the Orchestrator is thinking."""
+        if self._agent is None or self._state_open:
+            return
+        self._state_open = True
+        a = self._agent
+        # `decide_proposal` and `propose` key off these; one per Live turn.
+        a.turn_no = getattr(a, "turn_no", 0) + 1
+        a.turn_text = task
+        a._stop = self._stop
+        self._agent_event("agent_state", phase="turn_start", agent=_orch_name(a),
+                          task=task or "voice")
+
+    def _close_state(self, outcome: str = "done", summary: str = "") -> None:
+        if self._agent is None or not self._state_open:
+            return
+        self._state_open = False
+        self._agent_event("agent_state", phase="turn_end", agent=_orch_name(self._agent),
+                          outcome=outcome, summary=summary)
+
+    def _record_turn(self, heard: str, said: str, actions: list[str]) -> None:
+        """Append this spoken turn to the Orchestrator's persistent thread.
+
+        Text only (what was heard, what was said, one `[voice actions: …]` line):
+        no tool calls or signatures, so the store keeps no pairing to break. The
+        text agent reloads the thread when it next runs (`Agent._refresh`).
+        """
+        a = self._agent
+        if a is None or not a.thread_id or not (heard or said or actions):
+            return
+        reply = said
+        if actions:
+            line = "[voice actions: " + "; ".join(actions[:8]) + "]"
+            reply = f"{said}\n{line}" if said else line
+        user = heard or self._typed or "[voice turn]"
+        try:
+            _history.append(a._history_key, a.thread_id, [
+                {"role": "user", "content": user},
+                {"role": "assistant", "content": reply},
+            ])
+        except Exception as exc:
+            audit.record("voice.live_history_failed", error=str(exc)[:300])
+
+    def send_text(self, text: str) -> None:
+        """Say something to the session as typed text (tests, scripted checks).
+
+        Safe from any thread. It reaches the model like speech but produces no
+        input transcription, so the text is remembered for the history line.
+        """
+        loop, session = self._loop, self._session
+        if loop is None or session is None or loop.is_closed():
+            raise RuntimeError("the Live session is not connected")
+        self._typed = text
+
+        async def go() -> None:
+            self._open_state(text)
+            await session.send_realtime_input(text=text)
+
+        asyncio.run_coroutine_threadsafe(go(), loop)
+
+    def _context_seed(self) -> str:
+        """Recent text+voice conversation, budgeted, for the system instruction."""
+        a = self._agent
+        if a is None:
+            return ""
+        budget = int(config.get("voice.live_context_chars", CONTEXT_DEFAULT_CHARS))
+        if budget <= 0:
+            return ""
+        lines: list[str] = []
+        clip = min(400, max(60, budget // 4))      # one long reply must not eat the budget
+        for m in a.messages:
+            body = m.get("content")
+            if m.get("role") in ("user", "assistant") and isinstance(body, str) and body.strip():
+                who = "Owner" if m["role"] == "user" else "You"
+                lines.append(f"{who}: {' '.join(body.split())[:clip]}")
+        kept: list[str] = []
+        used = 0
+        for line in reversed(lines[-12:]):
+            used += len(line) + 1
+            if used > budget:
+                break
+            kept.append(line)
+        head = ""
+        if a.summary:
+            head = "Summary of earlier conversation: " + a.summary[: max(budget // 3, 300)] + "\n"
+        if not kept and not head:
+            return ""
+        return ("## Recent conversation (text and voice, same thread)\n" + head
+                + "\n".join(reversed(kept)))
+
+    def _allowed_now(self) -> "frozenset[str] | None":
+        """This round's tool set: the profile's, narrowed to `delegate` after
+        `agents.escalate_after_rounds` rounds in one spoken turn. Declarations
+        cannot change mid-session, so the narrowing is enforced in dispatch."""
+        a = self._agent
+        allowed = a._allowed
+        if self._report_turn and allowed is not None:
+            return frozenset({"task_status"}) & allowed
+        n = int(config.get("agents.escalate_after_rounds", 3))
+        if n > 0 and self._rounds > n and allowed and "delegate" in allowed and a._can_escalate():
+            if not self._escalated:
+                self._escalated = True
+                audit.record("agent.escalated", source="voice-live", rounds=self._rounds)
+            return frozenset({"delegate"})
+        return allowed
+
+    @staticmethod
+    def _action_label(name: str, args: dict, result: str) -> str:
+        target = ""
+        for key in _ACTION_TARGET_KEYS:
+            v = args.get(key)
+            if isinstance(v, str) and v.strip():
+                target = " ".join(v.split())[:30]
+                break
+        text = (result or "").strip()
+        if name == "delegate" and text.startswith("task "):
+            outcome = "started"            # the report comes later, as its own note
+        elif name == "delegate" and (m := re.search(r"outcome:\s*([a-z-]+)", text)):
+            outcome = m.group(1)
+        else:
+            outcome = "failed" if text.lower().startswith(_FAILED_PREFIXES) else "ok"
+        return f"{name}({target}) {outcome}" if target else f"{name} {outcome}"
 
     def _flush_heard(self) -> None:
         text = clean_transcript("".join(self._heard)).strip()
@@ -470,7 +625,10 @@ class LiveSession:
             and stt.translate_ready()
         )
 
-    async def _finish_heard(self, pcm: bytes, fallback: str, empty: bool = False) -> None:
+    async def _finish_heard(
+        self, pcm: bytes, fallback: str, empty: bool = False,
+        said: str = "", actions: list[str] | None = None,
+    ) -> None:
         """Emit the English transcript once Whisper has it, then end the turn.
 
         The reply never waits for this — audio keeps streaming while Whisper
@@ -488,6 +646,8 @@ class LiveSession:
             audit.record("voice.live_translate_failed", error=str(exc)[:300] or "timeout")
             text = ""
         text = text or fallback
+        if self._agent is not None:
+            self._record_turn(text, said, actions or [])
         if self._heard:
             # The user has already started the next turn; its partials own the
             # bubble now and a late rewrite would overwrite them.
@@ -521,6 +681,11 @@ class LiveSession:
         self._audio_bytes = 0
         self._tool_called = False
         self._memory = TurnMemory()
+        self._rounds = 0
+        self._actions = []
+        self._typed = ""
+        self._escalated = False
+        self._report_turn = False
 
     def _end_turn(self) -> bool:
         """Flush the transcripts, and say so when the model gave nothing back.
@@ -539,16 +704,26 @@ class LiveSession:
         empty = engaged and not spoke and not self._tool_called
         pcm = bytes(self._mic)
         defer = bool(raw_heard.strip()) and self._can_translate()
+        said_text = clean_transcript(raw_said)
+        actions = list(self._actions)
+        if self._agent is not None and (engaged or actions or self._typed):
+            self._close_state(
+                "failed" if empty else "done", said_text or EMPTY_REPLY_TEXT if empty else said_text)
         if defer:
             self._heard.clear()
             self._mic.clear()
-            task = asyncio.get_running_loop().create_task(self._finish_heard(pcm, heard, empty))
+            task = asyncio.get_running_loop().create_task(
+                self._finish_heard(pcm, heard, empty, said_text, actions))
             self._finals.add(task)
             task.add_done_callback(self._finals.discard)
         else:
             self._flush_heard()
+            if self._agent is not None and (engaged or actions or self._typed):
+                self._record_turn(heard, said_text, actions)
         self._flush_said()
         self._reset_turn()
+        if self._pending_reports:
+            asyncio.ensure_future(self._flush_reports())      # idle now: speak them
         if empty:
             audit.record(
                 "live.empty_reply", heard=heard[:200],
@@ -561,14 +736,24 @@ class LiveSession:
     def _system_prompt(self) -> str:
         from .skills.memory import context_for_prompt
 
-        prompt = SYSTEM_PROMPT.format(
-            name=config.get("assistant_name", "Kravein"),
-            environment=detect.environment().summary(),
-            home=config.HOME,
-        )
-        memory = context_for_prompt()
-        if memory:
-            prompt += "\n\n" + memory
+        if self._agent is not None:
+            # The very builder text uses: base prompt + the Orchestrator's
+            # SKILL.md + the memory block. Then what the thread already holds.
+            with self._agent._lock:
+                self._agent._refresh()
+            prompt = self._agent.system_prompt()
+            seed = self._context_seed()
+            if seed:
+                prompt += "\n\n" + seed
+        else:
+            prompt = SYSTEM_PROMPT.format(
+                name=config.get("assistant_name", "Kravein"),
+                environment=detect.environment().summary(),
+                home=config.HOME,
+            )
+            memory = context_for_prompt()
+            if memory:
+                prompt += "\n\n" + memory
 
         # The original added a wake-word instruction; keep that behaviour.
         wake = config.get("voice.wake_words", []) or []
@@ -590,6 +775,14 @@ class LiveSession:
             "\n\nYou are speaking out loud. Keep replies to a couple of short "
             "sentences unless the user asks for detail."
         )
+        if self._agent is not None and self._agent._allowed and "delegate" in self._agent._allowed:
+            prompt += (
+                " delegate returns at once and the sub-agent works in the background: "
+                "say in one short sentence that you handed it over and keep talking "
+                "normally. Its report is read to you later as a message starting "
+                "'[task ...'; then tell the owner the result in one short sentence. "
+                "Use task_status if the owner asks how it is going."
+            )
         return prompt
 
     def _roman(self) -> bool:
@@ -605,6 +798,14 @@ class LiveSession:
         # Accept "en" or "en_US" as well as "en-US".
         code = raw.replace("_", "-")
         return code if "-" in code else f"{code}-{code.upper()}"
+
+    def _declarations(self) -> list[dict]:
+        """The tools declared to the model: all of them, or the Orchestrator's."""
+        from .llm import _sanitize_tools
+
+        if self._agent is None or self._agent._allowed is None:
+            return _sanitize_tools(registry.tool_declarations())
+        return _sanitize_tools(registry.tool_declarations(names=self._agent._allowed))
 
     def _config(self) -> Any:
         from google.genai import types
@@ -626,7 +827,7 @@ class LiveSession:
             output_audio_transcription=transcription,
             input_audio_transcription=transcription,
             system_instruction=self._system_prompt(),
-            tools=[{"function_declarations": _sanitize_tools(registry.tool_declarations())}],
+            tools=[{"function_declarations": self._declarations()}],
             session_resumption=types.SessionResumptionConfig(),
             speech_config=types.SpeechConfig(
                 language_code=language,
@@ -672,7 +873,10 @@ class LiveSession:
 
     # -- tools -----------------------------------------------------------
 
-    async def _call_tool(self, name: str, args: dict) -> str:
+    async def _call_tool(
+        self, name: str, args: dict, timeout: float = TOOL_TIMEOUT,
+        memory: TurnMemory | None = None,
+    ) -> str:
         """Run one tool with a ceiling, always returning something to the model.
 
         Anything that raises or overruns comes back as an error string rather
@@ -682,14 +886,17 @@ class LiveSession:
         audit.record("voice.live_tool_start", tool=name)
         try:
             result = await asyncio.wait_for(
-                asyncio.to_thread(self._run_tool, name, args), timeout=TOOL_TIMEOUT
+                asyncio.to_thread(
+                    *((self._run_tool, name, args) if memory is None
+                      else (self._run_tool, name, args, memory))
+                ), timeout=timeout
             )
         except asyncio.TimeoutError:
             result = (
-                f"{name} did not finish within {TOOL_TIMEOUT:.0f}s and was left "
+                f"{name} did not finish within {timeout:.0f}s and was left "
                 "running. Tell the user it timed out; do not retry it silently."
             )
-            self._emit("error", f"{name} timed out after {TOOL_TIMEOUT:.0f}s")
+            self._emit("error", f"{name} timed out after {timeout:.0f}s")
             audit.record("voice.live_tool_timeout", tool=name)
         except asyncio.CancelledError:
             raise
@@ -705,10 +912,96 @@ class LiveSession:
         self._emit("tool_result", result)
         return result
 
-    def _run_tool(self, name: str, args: dict) -> str:
+    def _run_tool(self, name: str, args: dict, memory: TurnMemory | None = None) -> str:
         self._emit("tool", f"{name}({', '.join(f'{k}={v!r}' for k, v in list(args.items())[:3])})")
-        with confirmer_scope(self.confirmer, self._memory):
-            return registry.dispatch(name, args, source="voice-live")
+        # The denial memory of the Live turn that made the call; a background
+        # delegate keeps its own even after the next turn has reset `self._memory`.
+        memory = memory or self._memory
+        if self._agent is None:
+            with confirmer_scope(self.confirmer, memory):
+                return registry.dispatch(name, args, source="voice-live")
+        return self._run_tool_as_orchestrator(name, args, memory)
+
+    def _run_tool_as_orchestrator(self, name: str, args: dict, memory: TurnMemory) -> str:
+        a = self._agent
+        call_id = f"live-{self.turns}-{name}"
+        if memory.retried_declined:
+            # The owner said no to this target and the model tried it again. The
+            # text loop ends the turn here; Live cannot end a model turn, so every
+            # further call is refused until the next one.
+            audit.record("safety.declined_turn_stop", source="voice-live", at="live",
+                         tool=name)
+            self._actions.append(f"{name} declined")
+            return DECLINED_REPLY + " Do not try another way; tell the owner you stopped."
+        allowed = self._allowed_now()
+        self._agent_event("tool", name, name=name, args=args, call_id=call_id)
+        a._stop = self._stop
+        with confirmer_scope(self.confirmer, memory):
+            result = registry.dispatch(
+                name, args, source="voice-live", context=a, allowed=allowed)
+        self._agent_event("tool_result", result, name=name, call_id=call_id, result=result)
+        self._actions.append(self._action_label(name, args, result))
+        return result
+
+    # -- task reports, spoken -----------------------------------------------
+
+    def accepts_reports(self) -> bool:
+        """True while this Orchestrator session can speak a task report."""
+        return (
+            self._agent is not None and self._session is not None
+            and self._loop is not None and not self._stop.is_set()
+        )
+
+    def announce(self, texts: list[str]) -> None:
+        """Queue finished-task reports (marked notes) to be spoken. Any thread.
+
+        They are read to the model as typed text the moment it is idle, or at the
+        end of the turn in progress, and it tells the owner the result aloud.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        self._pending_reports.extend(texts)
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._flush_reports()))
+
+    def _note_reports(self, texts: list[str]) -> None:
+        """Put reports in the Orchestrator's thread as the marked notes they are."""
+        a = self._agent
+        if a is None or not a.thread_id or not texts:
+            return
+        try:
+            _history.append(a._history_key, a.thread_id,
+                            [{"role": "user", "content": t} for t in texts])
+        except Exception as exc:
+            audit.record("voice.live_history_failed", error=str(exc)[:300])
+
+    async def _flush_reports(self) -> None:
+        """Loop thread. Send queued reports if no turn is in progress."""
+        session = self._session
+        if (
+            session is None or not self._pending_reports or self._state_open
+            or self._said or self._heard or self._stop.is_set()
+        ):
+            return                       # `_end_turn` calls this again when idle
+        texts, self._pending_reports = self._pending_reports, []
+        message = "\n\n".join(texts) + "\n\nTell the owner the result in one short sentence."
+        # The report is a sub-agent's output. For this turn the only tool is
+        # task_status, and the turn text starts "[task " so decide_proposal
+        # refuses it too; the owner speaking (barge-in) or the turn ending
+        # restores the normal set.
+        self._report_turn = True
+        self._open_state(message)
+        self._note_reports(texts)            # text turns know it was announced
+        self._typed = "[voice: a task report was announced]"
+        audit.record("voice.live_report_announced", reports=len(texts))
+        try:
+            await session.send_realtime_input(text=message)
+        except Exception as exc:
+            self._report_turn = False
+            self._close_state("failed", "Could not announce a task report.")
+            self._pending_reports = texts + self._pending_reports
+            audit.record("voice.live_tool_send_failed", error=str(exc)[:300])
 
     async def _receive(self, audio_queue: asyncio.Queue) -> None:
         from google.genai import types
@@ -729,6 +1022,7 @@ class LiveSession:
                     inp = getattr(server, "input_transcription", None)
                     if inp is not None and getattr(inp, "text", ""):
                         self._heard.append(inp.text)
+                        self._open_state(clean_transcript("".join(self._heard)))
                         # Show it building, as one line that grows. Script we
                         # never display (Devanagari) shows a placeholder until
                         # the English transcript replaces it.
@@ -757,6 +1051,11 @@ class LiveSession:
                         # Audio already queued is the cut-off answer; playing
                         # it would talk over the user.
                         self._sink.interrupt()
+                        if self._agent is not None:
+                            self._record_turn(
+                                clean_transcript("".join(self._heard)),
+                                clean_transcript("".join(self._said)), list(self._actions))
+                            self._close_state("failed", "Interrupted.")
                         self._flush_heard()
                         self._flush_said()
                         self._reset_turn()
@@ -770,6 +1069,8 @@ class LiveSession:
                 tool_call = getattr(response, "tool_call", None)
                 if tool_call is not None:
                     self._tool_called = True
+                    self._rounds += 1
+                    self._open_state(clean_transcript("".join(self._heard)) or self._typed)
                     responses = []
                     for call in getattr(tool_call, "function_calls", []) or []:
                         # Every call must produce a FunctionResponse. A missing
@@ -853,6 +1154,10 @@ class LiveSession:
                 for task in everything:
                     task.cancel()
                 await asyncio.gather(*everything, return_exceptions=True)
+                self._close_state("failed", "The voice session ended.")
+                # Reports claimed but never spoken still belong in the thread.
+                pending, self._pending_reports = self._pending_reports, []
+                self._note_reports(pending)
                 for task in list(self._finals):
                     task.cancel()
                 await asyncio.gather(*self._finals, return_exceptions=True)
@@ -904,3 +1209,7 @@ class LiveSession:
             self._emit("error", f"Gemini Live could not start: {last}")
         audit.record("voice.live_stop", tool_calls=self.turns)
         return self.turns
+
+
+def _orch_name(agent: Any) -> str:
+    return agent.profile.name if getattr(agent, "profile", None) is not None else "orchestrator"

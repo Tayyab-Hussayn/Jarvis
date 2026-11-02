@@ -495,7 +495,11 @@ def run_live(observer: VoiceObserver | None = None) -> int:
             observer("error", why)
         return 0
 
+    from .agent import make_voice_agent
+    from .agents.history import principal_thread_id
     from .live import LiveSession
 
-    session = LiveSession(observer=observer)
+    # The CLI's own thread; the Orchestrator context only when the switch is on.
+    agent = make_voice_agent(observer=None, thread_id=principal_thread_id("cli", "local"))
+    session = LiveSession(observer=observer, agent=agent)
     return session.run()
