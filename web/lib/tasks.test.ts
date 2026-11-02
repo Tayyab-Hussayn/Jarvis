@@ -15,6 +15,7 @@ import {
   overlayAgents,
   parseTask,
   tasksFor,
+  trayTasks,
   type TasksModel,
 } from "./tasks.ts";
 
@@ -172,6 +173,21 @@ test("overlay: finished tasks stop 'working' but still pulse back", () => {
 test("overlay changes nothing when there are no tasks", () => {
   const model = initialModel();
   assert.equal(overlayAgents(model, initialTasks()), model);
+});
+
+test("the tray holds running tasks and unopened reports, plus anything pinned", () => {
+  let m = feed([
+    row({ id: "a", created: 1 }),
+    row({ id: "b", created: 2, status: "done", outcome: "done" }),
+    row({ id: "c", created: 3, status: "done", outcome: "done" }),
+  ]);
+  assert.deepEqual(trayTasks(m).map((t) => t.id).sort(), ["a", "b", "c"]);
+  m = markSeen(m, "b");
+  assert.deepEqual(trayTasks(m).map((t) => t.id).sort(), ["a", "c"]);
+  assert.deepEqual(trayTasks(m, ["b"]).map((t) => t.id).sort(), ["a", "b", "c"]);
+  // a finished task that was only ever hydrated is history, not tray content
+  const h = hydrate(initialTasks(), [row({ status: "done", outcome: "done" })], 0);
+  assert.deepEqual(trayTasks(h), []);
 });
 
 test("tasksFor lists one agent's tasks, newest first", () => {

@@ -175,6 +175,14 @@ export function activeTasks(model: TasksModel): Task[] {
   return model.order.map((id) => model.byId[id]).filter((t) => t && isActive(t.status));
 }
 
+/** What the tray shows: running work and reports nobody has opened yet.
+ *  Older finished tasks stay in the agent pane, so the tray cannot grow. */
+export function trayTasks(model: TasksModel, pinned: string[] = []): Task[] {
+  return model.order
+    .map((id) => model.byId[id])
+    .filter((t) => t && (isActive(t.status) || model.fresh[t.id] || pinned.includes(t.id)));
+}
+
 /** Every task, newest first. */
 export function tasksAll(model: TasksModel): Task[] {
   return model.order.map((id) => model.byId[id]).filter(Boolean);

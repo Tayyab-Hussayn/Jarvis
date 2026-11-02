@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ActivityView } from "@/components/ActivityView";
 import { AgentPane } from "@/components/AgentPane";
-import { StopNotice, TaskList } from "@/components/TaskChips";
+import { TaskList, TaskTray } from "@/components/TaskChips";
 import { overlayAgents, tasksAll, tasksFor, type Task } from "@/lib/tasks";
 import { AppsView } from "@/components/AppsView";
 import { AutoBanner } from "@/components/AutoBanner";
@@ -414,10 +414,17 @@ export default function Page() {
             onSelectVoice={selectVoice}
             onRestartVoice={restartVoice}
             onDismissVoiceError={dismissVoiceError}
-            taskSlot={taskListFor(tasksAll(tasks))}
-            noticeSlot={
-              <StopNotice tasks={tasks} onCancelAll={cancelAllTasks} onKeep={dismissTaskNotice} />
-            }
+            taskTray={(hero) => (
+              <TaskTray
+                tasks={tasks}
+                hero={hero}
+                cancelling={cancellingTasks}
+                onCancel={cancelTask}
+                onCancelAll={cancelAllTasks}
+                onKeep={dismissTaskNotice}
+                onSeen={markTaskSeen}
+              />
+            )}
           />
         </div>
         </div>
