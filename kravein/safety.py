@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from . import audit, config
 
@@ -545,6 +545,23 @@ def _deny(prompt: str, detail: str, danger: Danger) -> bool:
     return False
 
 
+def _attended(confirmer: Any) -> bool:
+    """False when the confirmer says nobody is there to be asked.
+
+    A background task's confirmer routes to the owner's live sessions and
+    carries ``attended()``: with none attached, auto-approve must not answer in
+    their place ("live owner sources only", 2026-10-23). Confirmers without the
+    attribute (every foreground one) are attended by definition.
+    """
+    check = getattr(confirmer, "attended", None)
+    if check is None:
+        return True
+    try:
+        return bool(check())
+    except Exception:
+        return False
+
+
 def get_confirmer() -> Confirmer:
     return getattr(_local, "confirmer", None) or _deny
 
@@ -898,6 +915,7 @@ def enforce(
         and verdict.danger == Danger.DESTRUCTIVE
         and source in AUTO_SOURCES
         and confirmer is not _deny
+        and _attended(confirmer)
         and _auto_seconds_left() > 0
     ):
         audit.record(

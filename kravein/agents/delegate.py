@@ -2,7 +2,14 @@
 
 Safety model (this is the part that must not be "improved" casually):
 
-* The sub-agent runs on the **caller's thread**, inside the caller's request.
+* ``delegate`` starts a **background task** by default (``tasks.py``, which has
+  its own safety notes: confirmations go to the owner's attached sessions or
+  deny, denial memory per task, reports are untrusted). ``wait=True`` — and any
+  process with no task host (CLI, jobs tick) — runs it on the caller's thread as
+  described below. Both paths call :func:`run_child`, so the rules below hold
+  for both; nothing in it reads the caller's thread (``Parent`` is a snapshot).
+* In blocking mode the sub-agent runs on the **caller's thread**, inside the
+  caller's request.
   Its confirmer is the owner's confirmer with one change: the card is prefixed
   with the agent name. It returns exactly what the owner's confirmer returned;
   nothing here can approve anything. Timeout, dropped socket and "no confirmer
@@ -25,7 +32,7 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .. import audit, config, safety
 from ..registry import skill
@@ -148,50 +155,46 @@ def _fallback(turn: Any) -> Report:
     )
 
 
-@skill(name="delegate", category="agents", danger=Danger.SAFE)
-def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> str:
-    """Hand a longer or uncertain task to a specialist sub-agent and get back a short report.
+@dataclass
+class Parent:
+    """Everything the sub-agent needs from the agent that delegated.
 
-    Use it for multi-step work, research, shell, packages, services or bulk file
-    work. The sub-agent asks the owner for confirmation itself; its raw tool
-    output is not returned, only the report.
-
-    Args:
-        agent: Name of the sub-agent profile, for example system-ops.
-        task: The whole task, self-contained: what to do and what done looks like.
-        context: Facts from this conversation the sub-agent needs (optional).
+    A snapshot, not a live object: a background task outlives the parent's turn,
+    its thread and its thread-local confirmer, so nothing here may refer to them.
     """
-    parent = _context
-    allowed = getattr(parent, "_allowed", None)
-    profile = getattr(parent, "profile", None)
-    if (
-        profile is None or profile.name != ORCHESTRATOR or allowed is None
-        or "delegate" not in allowed or getattr(parent, "depth", 1) != 0
-    ):
-        audit.record("delegate.refused", reason="caller is not the Orchestrator",
-                     caller=getattr(profile, "name", None))
-        return "delegate is only available to the Orchestrator."
 
-    name = (agent or "").strip().lower()
-    available = [n for n in list_profiles() if n != ORCHESTRATOR]
-    if name not in available:
-        return f"Unknown sub-agent '{agent}'. Available: {', '.join(available) or 'none'}."
-    task = (task or "").strip()
-    if not task:
-        return "delegate needs a task."
+    source: str
+    thread_id: str | None = None
+    principal: str = ""
+    turn_no: int = 0
+    origin: str = ""                  # which agent object (browser tab) started it
+    stop: Any = None                  # anything with is_set(): the owner's Stop
+    emit: Callable[[str, str, dict], None] | None = None   # activity sink
+    confirm: Callable[..., bool] | None = None             # None = nobody can be asked
+    memory: Any = None                # the denial memory this task shares
 
+
+def run_child(name: str, task: str, context: str, parent: Parent, did: str,
+              timeout: float | None = None) -> tuple[str, "Report"]:
+    """Run sub-agent ``name`` to completion and return ``(rendered, report)``.
+
+    The whole safety model in the module docstring lives here, once, for both
+    the blocking call and the background task. The caller's thread is never
+    consulted: the confirmer, memory and stop flag all come from ``parent``.
+    """
     try:
         sub_profile = load_profile(name)
         from ..agent import Agent
 
-        did = secrets.token_hex(4)
         limit = sub_profile.report_max_chars or int(config.get("agents.report_max_chars", 1500))
-        deadline = time.monotonic() + float(config.get("agents.delegate_timeout_seconds", 300))
-        stop = _LinkedStop(getattr(parent, "_stop", None), deadline)
+        if timeout is None:
+            timeout = float(config.get("agents.delegate_timeout_seconds", 300))
+        deadline = time.monotonic() + timeout
+        stop = _LinkedStop(parent.stop, deadline)
 
-        real = safety.get_confirmer()
-        unattended = real is safety._deny          # nobody to ask: stay that way
-        memory = safety.current_memory()
+        real = parent.confirm
+        unattended = real is None          # nobody to ask: stay that way
+        memory = parent.memory
         base_targets = len(memory.targets)
         base_retried = memory.retried_declined
         state = {"declined": False}
@@ -205,18 +208,22 @@ def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> 
                 state["declined"] = True
             return ok
 
-        parent_observer = getattr(parent, "observer", None)
+        # `attended()` travels with the confirmer: safety.enforce() uses it to
+        # refuse auto-approve when nobody is there to be asked.
+        attended = getattr(real, "attended", None)
+        if attended is not None:
+            confirm.attended = attended  # type: ignore[attr-defined]
+
+        sink = parent.emit
 
         def observer(kind: str, text: str, data: dict) -> None:
             # Activity only: the sub-agent's answer/error are not the turn's.
-            if parent_observer is None or kind not in (
-                "tool", "tool_result", "thinking", "agent_state"
-            ):
+            if sink is None or kind not in ("tool", "tool_result", "thinking", "agent_state"):
                 return
             data = {**data, "agent": name, "delegation": did}
             if data.get("call_id"):
                 data["call_id"] = f"{did}:{data['call_id']}"
-            parent_observer(kind, f"[{name}] {text}" if text else "", data)
+            sink(kind, f"[{name}] {text}" if text else "", data)
 
         child = Agent(
             source=parent.source,
@@ -230,7 +237,8 @@ def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> 
         )
     except ProfileError as exc:
         audit.record("delegate.refused", reason=str(exc), agent=name)
-        return f"Could not start sub-agent '{name}': {exc}"
+        text = f"Could not start sub-agent '{name}': {exc}"
+        return text, Report(outcome="failed", summary=text)
 
     child.extra_instructions = REPORT_INSTRUCTION
     # A retry of a target the owner already declined is refused before any card
@@ -285,14 +293,80 @@ def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> 
 
         audit.record("agent.delegate_end", outcome=report.outcome, tools=tools,
                      rounds=getattr(turn, "iterations", 0))
-        if parent_observer is not None:
+        if sink is not None:
             # The end of the delegation, with the outcome decided above: this is
             # what the UI shows (done / failed / declined), not the child's turn end.
             try:
-                parent_observer("agent_state", "", {
+                sink("agent_state", "", {
                     "phase": "delegate_end", "agent": name, "delegation": did,
                     "outcome": report.outcome, "summary": report.summary,
                 })
             except Exception:
                 pass
-    return render(report, agent=name, delegation=did, tools=tools, limit=limit)
+    return render(report, agent=name, delegation=did, tools=tools, limit=limit), report
+
+
+@skill(name="delegate", category="agents", danger=Danger.SAFE)
+def delegate(agent: str, task: str, context: str = "", wait: bool = False,
+             _context: Any = None) -> str:
+    """Hand a longer or uncertain task to a specialist sub-agent.
+
+    Use it for multi-step work, research, shell, packages, services or bulk file
+    work. By default the sub-agent works in the background: you get a task id
+    at once and can keep helping the owner; the report arrives on its own as a
+    "[task <id> report]" message, and task_status shows progress. The sub-agent
+    asks the owner for confirmation itself; its raw tool output is not returned,
+    only the report.
+
+    Args:
+        agent: Name of the sub-agent profile, for example system-ops.
+        task: The whole task, self-contained: what to do and what done looks like.
+        context: Facts from this conversation the sub-agent needs (optional).
+        wait: True only if you need the report in this same turn; blocks until it ends.
+    """
+    parent = _context
+    allowed = getattr(parent, "_allowed", None)
+    profile = getattr(parent, "profile", None)
+    if (
+        profile is None or profile.name != ORCHESTRATOR or allowed is None
+        or "delegate" not in allowed or getattr(parent, "depth", 1) != 0
+    ):
+        audit.record("delegate.refused", reason="caller is not the Orchestrator",
+                     caller=getattr(profile, "name", None))
+        return "delegate is only available to the Orchestrator."
+
+    name = (agent or "").strip().lower()
+    available = [n for n in list_profiles() if n != ORCHESTRATOR]
+    if name not in available:
+        return f"Unknown sub-agent '{agent}'. Available: {', '.join(available) or 'none'}."
+    task = (task or "").strip()
+    if not task:
+        return "delegate needs a task."
+
+    from . import tasks
+
+    real = safety.get_confirmer()
+    unattended = real is safety._deny              # nobody to ask: stay that way
+    principal = str(getattr(parent, "principal", "") or "")
+    host = tasks.get_host()
+    wait = wait or bool(getattr(parent, "delegate_wait", False))
+    if not wait and host is not None and principal:
+        # Background: the parent's thread, confirmer and memory will be gone
+        # when this runs, so only a snapshot crosses over.
+        mem = safety.TurnMemory()
+        mem.targets = set(safety.current_memory().targets)   # declined in this very turn
+        snap = Parent(
+            source=parent.source, thread_id=parent.thread_id, principal=principal,
+            turn_no=getattr(parent, "turn_no", 0), origin=str(id(parent)), memory=mem,
+        )
+        return tasks.manager.submit(snap, name, task, context, unattended=unattended)
+
+    parent_observer = getattr(parent, "observer", None)
+    snap = Parent(
+        source=parent.source, thread_id=parent.thread_id, principal=principal,
+        turn_no=getattr(parent, "turn_no", 0), stop=getattr(parent, "_stop", None),
+        emit=parent_observer, confirm=None if unattended else real,
+        memory=safety.current_memory(),
+    )
+    rendered, _ = run_child(name, task, context, snap, secrets.token_hex(4))
+    return rendered

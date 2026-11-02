@@ -292,6 +292,7 @@ def approved_ids() -> list[str]:
 
 
 APPROVED_PREFIX = "Owner approved proposal #"
+TASK_REPORT_PREFIX = "[task "   # a turn that reads sub-agent output carries no new owner words
 
 
 def approval_prompt(p: dict[str, Any]) -> str:
@@ -401,7 +402,7 @@ def decide_proposal(id: str, decision: str, _source: str = "", _context: Any = N
     if not _is_orchestrator(_context, "decide_proposal"):
         return "decide_proposal is only available to the Orchestrator."
     pid = id.strip().lstrip("#")
-    if str(getattr(_context, "turn_text", "")).startswith(APPROVED_PREFIX):
+    if str(getattr(_context, "turn_text", "")).startswith((APPROVED_PREFIX, TASK_REPORT_PREFIX)):
         # A turn the server started for an approved proposal carries no new
         # owner words: it must not approve a different proposal (or be steered
         # to by text read during the task).
@@ -456,7 +457,7 @@ def decide_proposal(id: str, decision: str, _source: str = "", _context: Any = N
     from .delegate import delegate as run_delegate
     try:
         report = run_delegate(p["agent"], p["task"], f"Owner approved proposal #{p['id']}.",
-                              _context=_context)
+                              wait=True, _context=_context)   # the proposal needs the real outcome
         ok = "outcome: done" in report.lower()
         finish(p["id"], ok, report)
         return report

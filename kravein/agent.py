@@ -170,6 +170,10 @@ class Agent:
     _stop: Any = None                   # the current turn's stop flag, for delegate to link
     end_turn_check: Any = None          # delegate: callable -> True ends the turn (owner declined, unattended refusal)
     _memory: "TurnMemory | None" = None  # shared denial memory (a sub-agent shares its parent's)
+    _stamp: float = 0.0                 # store stamp at our last load/save (see _refresh)
+    principal: str = ""                 # who owns this conversation (set by the web server)
+    delegate_wait: bool = False         # force blocking delegate (an approved proposal's turn needs the real outcome)
+    _turn_allowed: "frozenset[str] | None" = None  # this ask()'s own tool narrowing (report follow-up)
 
     def __init__(
         self,
@@ -236,7 +240,9 @@ class Agent:
         self._turn_categories: set[str] | None = None
         if thread_id:
             try:
+                self._stamp = _history.stamp(self._history_key, thread_id)
                 self.messages, self.summary = _history.load(self._history_key, thread_id)
+                self._note_seen()
             except Exception as exc:
                 # A broken history file must not stop the assistant starting.
                 audit.record("agent.history_load_failed", error=str(exc),
@@ -251,11 +257,57 @@ class Agent:
             return
         with self._lock:
             try:
-                _history.save(self._history_key, self.thread_id,
-                              self.messages, self.summary)
+                self._keep_foreign_notes()
+                self._stamp = _history.save(self._history_key, self.thread_id,
+                                            self.messages, self.summary)
             except Exception as exc:
                 audit.record("agent.history_save_failed", error=str(exc),
                              profile=self._history_key)
+
+    def _keep_foreign_notes(self) -> None:
+        """Before a save: keep notes another writer appended during this turn.
+
+        A turn that was already running when a task report (or a spoken turn)
+        was appended would otherwise replace the thread and erase it. Messages
+        carry an ``xid`` when written by ``history.append``; any we have never
+        seen is added to the end of ours. Ones we already saw (and perhaps
+        trimmed into the summary) are not resurrected.
+        """
+        if self.depth or _history.stamp(self._history_key, self.thread_id) == self._stamp:
+            return
+        stored, _ = _history.load(self._history_key, self.thread_id)
+        mine = {m.get("xid") for m in self.messages if m.get("xid")}
+        seen = self.__dict__.setdefault("_seen_xids", set())
+        extra = [m for m in stored if m.get("xid") and m["xid"] not in mine
+                 and m["xid"] not in seen]
+        if extra:
+            self.messages.extend(extra)
+            self._note_seen()
+            audit.record("agent.history_foreign_kept", count=len(extra),
+                         profile=self._history_key)
+
+    def _note_seen(self) -> None:
+        self.__dict__.setdefault("_seen_xids", set()).update(
+            m["xid"] for m in self.messages if m.get("xid"))
+
+    def _refresh(self) -> None:
+        """Pick up notes another writer appended to this thread (task reports).
+
+        They go to the store, not to this list, so without this the next
+        ``_persist`` would replace the thread and erase them. Only a changed
+        stamp reloads, so an agent built around a hand-set ``messages`` list
+        (tests) is left alone.
+        """
+        if not self.thread_id or self.depth:
+            return
+        try:
+            stamp = _history.stamp(self._history_key, self.thread_id)
+            if stamp != self._stamp:
+                self.messages, self.summary = _history.load(self._history_key, self.thread_id)
+                self._stamp = stamp
+                self._note_seen()
+        except Exception as exc:
+            audit.record("agent.history_load_failed", error=str(exc), profile=self._history_key)
 
     # -- helpers ---------------------------------------------------------
 
@@ -492,9 +544,23 @@ class Agent:
 
     # -- main loop -------------------------------------------------------
 
-    def ask(self, text: str, stop: threading.Event | None = None) -> Turn:
-        """Handle one user request (see ``_ask``) and persist the history."""
+    def ask(self, text: str, stop: threading.Event | None = None, *,
+            allowed: "frozenset[str] | None" = None) -> Turn:
+        """Handle one user request (see ``_ask``) and persist the history.
+
+        ``allowed`` narrows this one turn's tools below the profile's (schema
+        and dispatch both). The follow-up that announces a task report uses it:
+        a report is text a sub-agent produced, so the turn that reads it may
+        speak but must not act.
+        """
         name = self.profile.name if self.profile is not None else "orchestrator"
+        with self._lock:
+            self._refresh()
+        if allowed is not None:
+            allowed = frozenset(allowed)
+            if self._allowed is not None:
+                allowed &= self._allowed       # narrowing only, never widening
+        self._turn_allowed = allowed
         self._emit("agent_state", "", phase="turn_start", agent=name, task=text)
         turn: Turn | None = None
         try:
@@ -539,7 +605,7 @@ class Agent:
 
         max_iterations = self.max_rounds or int(config.get("llm.max_tool_iterations", 8))
         escalate_after = int(config.get("agents.escalate_after_rounds", 3))
-        escalate_ok = escalate_after > 0 and self._can_escalate()
+        escalate_ok = escalate_after > 0 and self._can_escalate() and self._turn_allowed is None
         escalated = False
         self._stop = stop
         self._round_allowed = None
@@ -569,6 +635,8 @@ class Agent:
             self._trim_history()
 
             tools = self._tools_for_turn(text)
+            if self._turn_allowed is not None:
+                tools = registry.tool_declarations(names=self._turn_allowed)
             system = self.system_prompt()
 
             # The confirmer must be installed for the whole loop, since skills
@@ -589,7 +657,7 @@ class Agent:
                             "agent.escalated", source=self.source,
                             after_rounds=iteration - 1,
                         )
-                    round_allowed = self._allowed
+                    round_allowed = self._allowed if self._turn_allowed is None else self._turn_allowed
                     note = ""
                     if escalated:
                         round_allowed = frozenset({"delegate"})
