@@ -504,6 +504,44 @@ def test_two_reports_claimed_by_racing_sessions_are_each_announced_once(env):
     assert tasks.manager.claim_reports(PRINCIPAL) == []
 
 
+def test_a_crash_between_claim_and_note_cannot_drop_a_report(env, monkeypatch):
+    env["host"].deliver_ok = True          # nobody notes it at task end
+    agent, models = orchestrator()
+    tid = task_id(start(agent))
+    assert done(tid) and _task_threads_done(tid)
+
+    def crash(*a, **k):
+        raise RuntimeError("process died between the claim and the note")
+
+    with monkeypatch.context() as m:
+        m.setattr(history, "append_in", crash)
+        with pytest.raises(RuntimeError):
+            tasks.manager.claim_reports(PRINCIPAL, only=tid, note=True)
+    # Rolled back together: still unannounced, nothing in the thread.
+    assert history.load("orchestrator", THREAD)[0] == []
+    # The next claim (the same call, after a restart) lands it exactly once.
+    rows = tasks.manager.claim_reports(PRINCIPAL, only=tid, note=True)
+    assert [r["id"] for r in rows] == [tid]
+    notes = [m["content"] for m in history.load("orchestrator", THREAD)[0]]
+    assert sum(n.startswith(f"[task {tid} report]") for n in notes) == 1
+    assert tasks.manager.claim_reports(PRINCIPAL, note=True) == []     # and never twice
+    assert len([m for m in history.load("orchestrator", THREAD)[0]]) == 1
+
+
+def test_a_failing_note_at_task_end_leaves_the_report_claimable(monkeypatch):
+    def crash(*a, **k):
+        raise RuntimeError("disk full")
+
+    with monkeypatch.context() as m:
+        m.setattr(history, "append_in", crash)
+        agent, models = orchestrator()
+        tid = task_id(start(agent))
+        assert done(tid) and _task_threads_done(tid)
+    # the disk is back
+    assert history.load("orchestrator", THREAD)[0] == []
+    assert [r["id"] for r in tasks.manager.claim_reports(PRINCIPAL, note=True)] == [tid]
+
+
 # -- safety ----------------------------------------------------------------------------------------------
 
 
