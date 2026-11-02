@@ -47,7 +47,17 @@ export type ServerFrame =
   | { t: "proposal"; proposal: unknown }
   | { t: "error"; id?: string; message: string }
   | { t: "reset_ok" }
-  | { t: "voice_state"; phase: string; text: string; audio?: "device" | "laptop" }
+  | {
+      t: "voice_state";
+      phase: string;
+      text: string;
+      audio?: "device" | "laptop";
+      // heard/heard_partial only: the spoken turn this line belongs to, and
+      // whether a final frame replaces the earlier text of that turn.
+      turn?: string | number;
+      final?: boolean;
+      replace?: boolean;
+    }
   // Device voice: the user talked over the model; drop queued playback. Model
   // audio itself arrives as binary frames (PCM16 mono 24 kHz), not JSON.
   | { t: "audio_clear" }
