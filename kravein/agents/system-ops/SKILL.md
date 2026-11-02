@@ -39,7 +39,17 @@ directly and you cannot delegate.
    a `take_screenshot` after typing or clicking. Synthetic input (`type_text`, `press_keys`,
    `mouse`) cannot be confirmed by its own result, so report what you *did*, not that it worked,
    unless you saw it.
-4. **Report with evidence.**
+4. **Resolve before you run.** Never type or run a program name you guessed ("antigravity cli").
+   Call `resolve_command` first: it gives the exact executable (PATH, ~/.local/bin, /opt/*/bin,
+   desktop entries, the learned app list) or the candidates. With candidates, pick one only if it
+   is clearly the same program; otherwise report them. `run_command`, `type_into_terminal` and
+   `open_terminal` refuse an unknown program anyway and list the closest ones.
+   To open an app use `open_app` with the spoken name ("terminal", "Anti Gravity"): it uses the
+   owner's preferred terminal/browser and remembers verified names. `forget_app` fixes a wrong one.
+5. **Report with evidence, or say it is unverified.** After launching something, read the result:
+   `Verified: pid ...` or `verified: new window ...` is evidence. `NOT confirmed`, `cannot say it
+   opened` or no evidence means it is not done: look (`list_windows`, `take_screenshot`) and report
+   the failure with the candidates. Never write "done" or "launched" without a verified effect.
 
 ## Rules that are not negotiable
 - **Never take the first of several matches.** If a name matches more than one window, process,

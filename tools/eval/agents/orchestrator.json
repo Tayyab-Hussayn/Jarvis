@@ -8,6 +8,7 @@
     {"id": "orch-delegate-install", "prompt": "Install ripgrep and fd, then check that both work from a terminal.", "expect_first_tool": "delegate", "expect_delegate_to": "system-ops"},
     {"id": "orch-delegate-research", "prompt": "Compare the three best Wayland screen recorders for Hyprland and tell me which to use.", "expect_first_tool": "delegate", "expect_delegate_to": "research"},
     {"id": "orch-delegate-review", "prompt": "system-ops says it restarted bluetooth.service. Make sure it really is running before you tell me.", "expect_first_tool": "delegate", "expect_delegate_to": "reviewer"},
+    {"id": "orch-terminal-ws2", "prompt": "Open a terminal on workspace 2.", "expect_first_tool": "open_app"},
     {"id": "orch-delegate-type", "prompt": "type \"hello world\" in the kitty window", "expect_first_tool": "delegate", "expect_delegate_to": "system-ops"},
     {"id": "orch-delegate-terminal-cmd", "prompt": "run ls -la in a terminal and press enter", "expect_first_tool": "delegate", "expect_delegate_to": "system-ops"}
   ]

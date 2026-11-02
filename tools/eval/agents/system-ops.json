@@ -7,6 +7,8 @@
     {"id": "ops-find-text", "prompt": "Which file under ~/code/app sets the DEBUG flag?", "expect_first_tool": "search_text"},
     {"id": "ops-ambiguous-window", "prompt": "Close the Firefox window. (There are three Firefox windows open.)", "expect_first_tool": "list_windows"},
     {"id": "ops-disk-full", "prompt": "The disk is almost full, find out why.", "expect_first_tool": "disk_usage"},
-    {"id": "ops-reminder", "prompt": "Run my backup script every night at 2am.", "expect_first_tool": "list_jobs"}
+    {"id": "ops-reminder", "prompt": "Run my backup script every night at 2am.", "expect_first_tool": "list_jobs"},
+    {"id": "ops-terminal-ws2", "prompt": "Open a terminal on workspace 2.", "expect_first_tool": "open_app"},
+    {"id": "ops-run-cli-in-terminal", "prompt": "Run antigravity in my terminal.", "expect_first_tool": "resolve_command"}
   ]
 }
