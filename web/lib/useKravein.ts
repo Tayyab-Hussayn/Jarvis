@@ -38,6 +38,7 @@ import {
   type AgentsModel,
 } from "./agents";
 import { settleConfirm } from "./confirm";
+import { routeHeard, turnKey, type HeardRoute } from "./heard";
 import {
   applyCancelled,
   applyFrame as applyTaskFrame,
@@ -152,7 +153,14 @@ export function useKravein() {
   // The spoken turn currently being built, if any. Ids are `s…` so they cannot
   // collide with typed turns (`t…`), panel runs (`p…`) or the server's own
   // voice turn ids (`v…`, used for confirmation routing).
-  const voiceTurn = useRef<{ id: string; tools: number } | null>(null);
+  const voiceTurn = useRef<{
+    id: string;
+    tools: number;
+    serverTurn: string | null;
+  } | null>(null);
+  // Server voice turn -> user-line message id. A transcript that finalises
+  // after the reply must rewrite its own line, not open a new turn.
+  const heardLines = useRef<Map<string, string>>(new Map());
   // Callbacks need the current phase without being rebuilt on every change.
   const phaseRef = useRef<VoicePhase>("off");
   phaseRef.current = voicePhase;
@@ -323,6 +331,7 @@ export function useKravein() {
           dispatchAgents({ t: "replay_start" });
           liveTurns.current.clear();
           voiceTurn.current = null;
+          heardLines.current.clear();
           for (const past of frame.frames) handleRef.current?.(past);
           seqRef.current = Math.max(seqRef.current, maxTurnSeq(frame.frames));
           setBusy(frame.busy);
@@ -523,6 +532,7 @@ export function useKravein() {
           // The spoken turn's messages went with them, so the ref must not
           // keep pointing at one.
           voiceTurn.current = null;
+          heardLines.current.clear();
           break;
 
         case "voice_state": {
@@ -542,7 +552,7 @@ export function useKravein() {
             if (existing) return existing.id;
             seqRef.current += 1;
             const id = `s${seqRef.current}`;
-            voiceTurn.current = { id, tools: 0 };
+            voiceTurn.current = { id, tools: 0, serverTurn: null };
             // A failure belonged to the turn that caused it. Left standing it
             // would sit in the status strip for the rest of the session,
             // describing something that already finished.
@@ -580,14 +590,44 @@ export function useKravein() {
           // input transcription lags the audio and only finalises at the turn
           // boundary, so appending it at the end would file the question
           // *after* the answer it prompted.
-          const setRequest = (text: string) => {
-            if (!text.trim()) return;
-            const id = openTurn();
-            setMessages((current) =>
-              current.map((message) =>
-                message.id === `${id}-user` ? { ...message, text } : message,
+          const setRequest = (text: string, turn?: unknown): HeardRoute["kind"] | "" => {
+            if (!text.trim()) return "";
+            const open = voiceTurn.current;
+            const route = routeHeard(
+              {
+                open: open?.id ?? null,
+                openServerTurn: open?.serverTurn ?? null,
+                lines: heardLines.current,
+              },
+              turn,
+            );
+            const key = turnKey(turn);
+            let lineId: string;
+            if (route.kind === "rewrite") {
+              lineId = route.id;
+            } else if (route.kind === "orphan") {
+              // Late frame for a turn this client never saw (reconnect): the
+              // line renders once, with no empty pending answer under it.
+              seqRef.current += 1;
+              lineId = `s${seqRef.current}-user`;
+              if (key) heardLines.current.set(key, lineId);
+              setMessages((list) => [...list, { id: lineId, role: "user", text }]);
+              return route.kind;
+            } else {
+              if (route.kind === "new-turn") closeTurn();
+              const id = openTurn();
+              lineId = `${id}-user`;
+              if (key && voiceTurn.current) {
+                voiceTurn.current.serverTurn = key;
+                heardLines.current.set(key, lineId);
+              }
+            }
+            setMessages((list) =>
+              list.map((message) =>
+                message.id === lineId ? { ...message, text } : message,
               ),
             );
+            return route.kind;
           };
 
           const setAnswer = (text: string) => {
@@ -666,12 +706,15 @@ export function useKravein() {
               closeTurn();
               break;
             case "heard_partial":
-              setRequest(frame.text);
+              setRequest(frame.text, frame.turn);
               break;
-            case "heard":
-              setVoicePhase("thinking");
-              setRequest(frame.text);
+            case "heard": {
+              const kind = setRequest(frame.text, frame.turn);
+              // A late replace of an earlier turn's line is not a new
+              // question; it must not flip the strip back to "thinking".
+              if (kind !== "rewrite" && kind !== "orphan") setVoicePhase("thinking");
               break;
+            }
             case "thinking":
               // Local emits this with the command text, which is the same
               // words `heard` already delivered. Phase only.
@@ -859,6 +902,7 @@ export function useKravein() {
       setVoicePhase("off");
       setVoiceStopping(false);
       voiceTurn.current = null;
+      heardLines.current.clear();
       // A result the dead socket swallowed would leave its card "running"
       // forever; a new socket is a new session and replays nothing.
       setMessages(settleOnClose);
