@@ -1,7 +1,7 @@
 ---
 type: module
 owner: qa
-updated: 2026-10-22
+updated: 2026-11-02
 ---
 
 # qa
@@ -13,6 +13,8 @@ updated: 2026-10-22
 
 - `install-linux.sh --check` — steps 1–2 only (compositor, Noctalia, native tools, pasteable `sudo pacman -S` line), writes nothing. The compositor is found from the env **or** from sockets in `$XDG_RUNTIME_DIR` (`niri.*.sock`, `noctalia-*.sock`), because ssh/systemd sessions have no `NIRI_SOCKET`. The package column of `CHECKS` must be one real package name (it is pasted into pacman).
 - **Second machine (Arch + niri + Noctalia).** `ssh kravein-new`, remote login shell is fish → `ssh kravein-new 'bash -lc "..."'`. Only `/home/kravein/Projects/desktop/kravein` is writable (owner rule); no sudo, no installs, no autostart, niri/Noctalia config read-only. Sync = `tools/sync-remote.sh` (git-tracked files minus `android/ .claude/ .github/ kb/`, `--delete`, remote `.venv`/`node_modules`/`web-dist` protected; refuses any other destination). Run suite there: `ssh kravein-new 'bash -lc "cd /home/kravein/Projects/desktop/kravein && .venv/bin/python -m pytest tests/engine tests/skills tests/web tests/test_web_transport.py -q"'`. Status 2026-11-02 (new IP, same `kravein-new`): synced at main 7111de2; venv install (`PIP_CACHE_DIR=$PWD/.pip-cache`, detached) OK; full `pytest tests -q` = **1193 passed**; web built there with `npm ci --cache ../.npm-cache && npm run build` (node 20.18, ~2 min, detached). `--check` hints missing: ydotool grim slurp wl-clipboard pacman-contrib wtype (owner installs).
+
+- **Live UI pass (#153, 2026-11-02).** `tools/live_ui.py` (headless system Chrome via the venv's Playwright; `shot`, `ask "text" PREFIX [approve|deny]`, `pane NAME OUT.png [WIDTH] [BUTTON]`; run with `PYTHONPATH=.`; token read from the runtime file, never printed) and `tools/live_serve.sh LABEL` (restart `kravein serve` with `XDG_STATE_HOME=<project>/.qa-state/LABEL`, so each check gets an empty agent history and the owner's state dir is untouched). `sync-remote.sh` protects `.qa-*`; before that fix its `--delete` wiped my scratch files. Report and screenshots: `kb/qa-shots/153/`. Gotcha: `get_by_role("button", name="Windows")` substring-matches the quick prompt "List open windows" — use `exact=True`.
 
 ## Verify
 ```bash
