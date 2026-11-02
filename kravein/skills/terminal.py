@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import shlex
 import time
+from pathlib import Path
 
 from ..platform import apps as apps_platform
 from ..platform import commands, desktop, inputs
@@ -157,7 +158,9 @@ def type_into_terminal(
     # The text is going to a shell, so it runs with the user's privileges the
     # moment Return is pressed. A human pressing that key does not make
     # `rm -rf` safer, so it is classified exactly as run_command classifies it.
-    verdict = classify_command(command)
+    # The target shell's own directory (from /proc), so a relative path is
+    # judged where it will actually run. None (unknown) keeps the old verdict.
+    verdict = classify_command(command, cwd=desktop.terminal_cwd(target))
     if verdict.danger < Danger.DESTRUCTIVE:
         verdict.danger = Danger.DESTRUCTIVE
     verdict.reasons.insert(
@@ -260,7 +263,9 @@ def open_terminal(
         command, problem = commands.check_command_line(command)
         if problem:
             return problem
-        verdict = classify_command(command)
+        # A new terminal starts in the home directory, which is where its
+        # relative paths resolve.
+        verdict = classify_command(command, cwd=Path.home())
         if verdict.danger < Danger.DESTRUCTIVE:
             verdict.danger = Danger.DESTRUCTIVE
         verdict.reasons.insert(0, f"opens a {emulator} terminal and runs `{command}`")

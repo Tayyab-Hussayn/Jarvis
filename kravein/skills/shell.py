@@ -60,15 +60,18 @@ def run_command(
     if problem:
         return problem
 
-    verdict = classify_command(command)
+    # The directory comes first: classification needs it to tell whether a
+    # relative target (`cp a b`) already exists, and a missing directory
+    # needs no confirmation because nothing will run.
+    cwd = config.resolve_user_path(working_directory) if working_directory else Path.home()
+    if not cwd.is_dir():
+        return f"Working directory does not exist: {cwd}"
+
+    verdict = classify_command(command, cwd=cwd)
     enforce(
         verdict, f"run `{command}`",
         skill="run_command", source=_source, pre_confirmed=_confirm,
     )
-
-    cwd = config.resolve_user_path(working_directory) if working_directory else Path.home()
-    if not cwd.is_dir():
-        return f"Working directory does not exist: {cwd}"
 
     timeout = max(1, min(int(timeout_seconds), 600))
     result = shell_platform.run(
