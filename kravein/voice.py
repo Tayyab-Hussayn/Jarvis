@@ -153,7 +153,14 @@ def self_test(observer: VoiceObserver | None = None) -> str:
 
     # 3. Real capture and transcription.
     say("info", "say a short sentence now…")
-    tts.speak("Say a short sentence now.", blocking=True)
+    problem = tts_problem(tts.speak("Say a short sentence now.", blocking=True))
+    if problem:
+        lines.append(f"\n--- speech output ---\nSpeech output problem: {problem}")
+        lines.append(
+            "Fix: upgrade edge-tts (pip install -U 'edge-tts>=7.3.1'; 7.2.x gets "
+            "HTTP 403 from Microsoft) or install an offline voice "
+            "(sudo pacman -S espeak-ng)."
+        )
 
     result = mic.listen(
         silence_threshold=float(config.get("voice.silence_threshold", 0.0) or 0.0),
@@ -191,9 +198,32 @@ def self_test(observer: VoiceObserver | None = None) -> str:
     # 4. Speech output.
     say("heard", heard)
     lines.append("\n--- speech output ---")
-    lines.append(tts.speak(f"I heard: {heard}", blocking=True))
+    spoken = tts.speak(f"I heard: {heard}", blocking=True)
+    lines.append(spoken)
+    if tts_problem(spoken):
+        lines.append(f"\nSpeech output problem: {tts_problem(spoken)}")
+        return "\n".join(lines)
     lines.append("\nAll four stages worked. Voice mode is good to go.")
     return "\n".join(lines)
+
+
+_TTS_FAILURES = ("Text-to-speech is unavailable", "No audio player", "Could not play")
+
+
+def tts_problem(result: str) -> str:
+    """Return a human-readable problem if a ``tts.speak`` result means no sound.
+
+    ``tts.speak`` reports failure as a plain string, and edge-tts 7.2.x gets a
+    403 from Microsoft's endpoint (seen 2026-10-25, fixed by edge-tts>=7.3.1),
+    so callers that ignored the result went mute without any sign of it. An
+    espeak fallback is audible but is still worth flagging: edge-tts is down.
+    """
+    result = result or ""
+    if result.startswith(_TTS_FAILURES):
+        return result
+    if "fallback" in result:
+        return f"edge-tts failed, used the offline voice ({result})"
+    return ""
 
 
 def _shorten_for_speech(text: str, limit: int) -> str:
@@ -252,7 +282,10 @@ class VoiceSession:
             return
         self._emit("speaking", text)
         if self.settings.speak_replies:
-            tts.speak(text, blocking=blocking)
+            problem = tts_problem(tts.speak(text, blocking=blocking))
+            if problem:
+                audit.record("voice.tts_problem", problem=problem)
+                self._emit("error", problem)
 
     # -- input -----------------------------------------------------------
 
