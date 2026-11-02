@@ -57,6 +57,7 @@ export function ConfirmCard({
 
   return (
     <div
+      data-confirm-card={pending ? "" : undefined}
       className="glass glass-strong rounded-[var(--radius-lg)] border-l-[3px] p-4"
       style={
         {

@@ -180,23 +180,13 @@ export function Console({
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto pr-1">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 sm:px-6">
+        <div className="mx-auto h-full w-full" style={{ maxWidth: "var(--stream-max)" }}>
         {turns.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center">
             <div className="w-full max-w-md text-center">
-              <span
-                aria-hidden
-                className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full border text-[length:var(--text-xl)] font-semibold"
-                style={{
-                  borderColor: "var(--accent-line)",
-                  background: "var(--accent-dim)",
-                  color: "var(--accent)",
-                  animation: "halo 3.2s ease-in-out infinite",
-                }}
-              >
-                K
-              </span>
-              <h2 className="text-gradient text-[length:var(--text-2xl)] font-semibold tracking-[-0.03em]">
+              <p className="eyebrow">Transmission channel open</p>
+              <h2 className="mt-2 text-[length:var(--text-xl)] font-semibold text-[var(--text-strong)]">
                 What should Kravein do?
               </h2>
               <p className="mx-auto mt-2 max-w-sm text-[length:var(--text-sm)] text-[var(--text-muted)]">
@@ -254,14 +244,14 @@ export function Console({
                   {voiceError || voiceNote || state.hint}
                 </p>
               ) : (
-                <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="mt-5 grid grid-cols-2 gap-2">
                   {SUGGESTIONS.map((item) => (
                     <button
                       key={item.label}
                       type="button"
                       disabled={offline}
                       onClick={() => onAsk(item.prompt)}
-                      className="glass rounded-[var(--radius)] px-3.5 py-3 text-left text-[length:var(--text-sm)] text-[var(--text)] hover:border-[var(--accent-line)] hover:bg-[var(--accent-dim)] hover:text-[var(--accent)] hover:shadow-[var(--glow-soft)] disabled:opacity-40"
+                      className="glass rounded-[var(--radius)] px-3 py-2.5 text-left text-[length:var(--text-sm)] text-[var(--text)] hover:border-[var(--accent-line)] hover:bg-[var(--accent-dim)] hover:text-[var(--accent)] hover:shadow-[var(--glow-soft)] disabled:opacity-40"
                       style={{ transition: "all var(--motion-fast) var(--ease)" }}
                     >
                       {item.label}
@@ -284,9 +274,10 @@ export function Console({
           </div>
         )}
         <div ref={endRef} />
+        </div>
       </div>
 
-      <div className="pt-3">
+      <div className="mx-auto w-full px-2 pb-2 pt-3 sm:px-6" style={{ maxWidth: "var(--stream-max)" }}>
         {/* The session control strip. Present for as long as the microphone is
             open, so Stop is never more than one click away — the hero that
             used to carry it is gone once the first turn lands. */}
@@ -353,7 +344,10 @@ export function Console({
           </div>
         )}
 
-        <div className="flex items-end gap-2">
+        <div
+          className="glass glass-strong field-glow flex items-end gap-1.5 rounded-[var(--radius-xl)] p-1.5"
+          style={{ boxShadow: "var(--shadow-dock)" }}
+        >
           {/* Start voice from the conversation itself. Without this the only
               way in is the hero, which is only on screen before the first
               turn. */}
@@ -368,7 +362,7 @@ export function Console({
                   : voiceUnavailableReason || "Voice is unavailable on this machine"
               }
               aria-label="Start a voice session"
-              className="glass flex h-[2.75rem] w-[2.75rem] shrink-0 items-center justify-center rounded-[var(--radius-lg)] text-[var(--text-muted)] hover:border-[var(--accent-line)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
+              className="flex h-[2.75rem] w-[2.75rem] shrink-0 items-center justify-center rounded-[var(--radius-lg)] text-[var(--text-muted)] hover:bg-[var(--accent-dim)] hover:text-[var(--accent)] disabled:opacity-40 disabled:hover:text-[var(--text-muted)]"
               style={{ transition: "all var(--motion-fast) var(--ease)" }}
             >
               <Icon name="mic" size={18} />
@@ -395,7 +389,9 @@ export function Console({
                 submit();
               }
             }}
-            className="glass field-glow max-h-40 min-h-[2.75rem] flex-1 resize-none rounded-[var(--radius-lg)] px-4 py-2.5 text-[length:var(--text-base)] outline-none placeholder:text-[var(--text-faint)] disabled:opacity-50"
+            data-composer
+            aria-label="Message Kravein"
+            className="max-h-40 min-h-[2.75rem] flex-1 resize-none bg-transparent px-3 py-2.5 text-[length:var(--text-base)] outline-none placeholder:text-[var(--text-faint)] disabled:opacity-50"
             style={{ transition: "border-color var(--motion-fast) var(--ease), box-shadow var(--motion-base) var(--ease)" }}
           />
           {/* One control, two jobs. While a turn is running the only useful
