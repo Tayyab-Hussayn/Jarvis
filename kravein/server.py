@@ -38,6 +38,7 @@ from typing import Any, Optional
 
 from . import audit, config, discovery, events, phone, registry, safety, webauth
 from .agent import Agent, make_agent
+from .agents import proposals
 from .agents.history import principal_thread_id
 from .platform import detect
 from .safety import confirmer_scope
@@ -94,9 +95,26 @@ def create_app(token: str | None = None) -> Any:
         threading.Thread(
             target=phone.run_expiry_sweeper, args=(stop,), name="phone-expiry", daemon=True
         ).start()
+        # Proposals: frames can go straight to this server's sessions; anything
+        # left "running" by a previous process is dead; the daily review job
+        # follows its setting; expired proposals are swept hourly.
+        proposals.in_server = True
+        for step in (proposals.fail_orphans, proposals.ensure_daily_review):
+            try:
+                step()
+            except Exception as exc:
+                audit.record("proposal.startup_failed", step=step.__name__, error=type(exc).__name__)
+
+        def sweep_proposals() -> None:
+            while not stop.wait(3600):
+                with contextlib.suppress(Exception):
+                    proposals.sweep_expired()
+
+        threading.Thread(target=sweep_proposals, name="proposal-expiry", daemon=True).start()
         try:
             yield
         finally:
+            proposals.in_server = False
             stop.set()
             # Nothing may keep a microphone or a blocked confirmation alive
             # past the server; sessions are not persisted across a restart.
@@ -215,6 +233,74 @@ def create_app(token: str | None = None) -> Any:
         audit.record("web.job_event", id=payload.get("id", ""), clients=reached)
         return {"delivered": reached}
 
+    # -- proposals (the Orchestrator suggests, the owner decides) -------------
+
+    @app.get("/api/proposals", dependencies=auth)
+    def api_proposals(status: str = "") -> dict[str, Any]:
+        return {"proposals": proposals.listing(status)}
+
+    @app.post("/api/proposals/{pid}/decide", dependencies=auth)
+    async def api_proposal_decide(pid: str, request: Request) -> Any:
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"detail": "Expected a JSON object"}, status_code=400)
+        supplied = webauth.token_from_request(
+            request.headers.get("authorization"), request.query_params.get("token")
+        )
+        device = webauth.ui_token_device(supplied)
+        principal = f"device:{device}" if device else "browser"
+        label = "phone" if device else "web"
+        try:
+            p, _changed = proposals.decide(
+                pid, str(body.get("decision") or ""), source=label, by=label
+            )
+        except proposals.NotAllowed as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=403)
+        except KeyError:
+            return JSONResponse({"detail": "Unknown proposal"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        if p.get("status") == "approved" and p.get("kind") == "delegate":
+            # Start it in a live, idle session of the same owner principal; the
+            # session's own confirmer asks for every destructive step. None
+            # (or a busy one) leaves it approved for the next session.
+            wanted = str(body.get("session_id") or "")
+            candidates = [
+                h for h in app.state.sessions.items()
+                if h.principal == principal and (not wanted or h.id == wanted)
+                and h.client is not None and not h.busy.is_set()
+            ]
+            if candidates:
+                _run_approved(candidates[-1], p)
+        return {"proposal": proposals.get(pid) or p}
+
+    # -- agents (the v2 UI's constellation) -----------------------------------
+
+    @app.get("/api/agents", dependencies=auth)
+    def api_agents() -> dict[str, Any]:
+        from .agents import state as agent_state
+
+        return agent_state.agent_list()
+
+    @app.get("/api/agents/state", dependencies=auth)
+    def api_agents_state(request: Request) -> dict[str, Any]:
+        # Only the caller's own principal: a phone never reads the browser's state.
+        supplied = webauth.token_from_request(
+            request.headers.get("authorization"), request.query_params.get("token")
+        )
+        device = webauth.ui_token_device(supplied)
+        principal = f"device:{device}" if device else "browser"
+        return {"states": app.state.sessions.tracker(principal).snapshot()}
+
+    # Posted by the jobs tick (its own process) after it created a proposal.
+    @app.post("/api/proposal-event", dependencies=auth)
+    async def api_proposal_event(request: Request) -> dict[str, Any]:
+        payload = await request.json()
+        found = proposals.get(str(payload.get("id", ""))) if isinstance(payload, dict) else None
+        if found is not None:
+            proposals.announce_local(found)
+        return {"delivered": found is not None}
+
     @app.get("/api/habits", dependencies=auth)
     def api_habits(history: int = 30) -> dict[str, Any]:
         return _habits_snapshot(history=max(0, min(int(history), 200)))
@@ -280,6 +366,10 @@ def create_app(token: str | None = None) -> Any:
         merged = _deep_merge(current, patch)
         config.save_settings(merged)
         audit.record("web.settings_updated", keys=sorted(patch.keys()))
+        if "agents" in patch:
+            # The daily review job follows agents.daily_review / _time.
+            with contextlib.suppress(Exception):
+                proposals.ensure_daily_review()
         return {"settings": _redacted_settings()}
 
     # -- confirmation policy (ask / decline / auto-approve) -----------------
@@ -507,7 +597,15 @@ def create_app(token: str | None = None) -> Any:
                 busy=busy.is_set(), voice=held.voice_info(),
             ))
             prelude.extend(session.pending_confirm_frames())
+        # Agents that have had a state, so a (re)connecting client is right at
+        # once; the rest are idle (GET /api/agents/state lists them all).
+        prelude.extend(
+            events.frame("agent_state", **s)
+            for s in store.tracker(principal).snapshot(seen_only=True)
+        )
         session.attach(prelude)
+        # A proposal approved while nobody was here starts now.
+        _pickup_approved(held)
 
         # The JSON pump and the audio sender both write to this socket.
         send_lock = asyncio.Lock()
@@ -554,6 +652,8 @@ def create_app(token: str | None = None) -> Any:
                 session.emit("turn_end", id=turn_id, iterations=0, error=str(exc))
             finally:
                 busy.clear()
+                # An approval that arrived while this turn ran starts now.
+                _pickup_approved(held)
 
         def _dispatch(skill: str, args: dict) -> str:
             """Run one skill on the worker thread, with confirmations wired.
@@ -1053,6 +1153,73 @@ class _Client:
         self.tasks.clear()
 
 
+def _run_approved(held: Any, p: dict) -> bool:
+    """Start an approved proposal as an Orchestrator turn in ``held``'s session.
+
+    Event-loop thread only (the same thread that starts ``ask`` turns, so the
+    busy check cannot race). The turn uses the session's own agent and
+    confirmer: approving a proposal starts a task, it never answers a
+    confirmation inside it. Busy or detached session -> it stays approved.
+    """
+    if held.busy.is_set() or held.client is None:
+        return False
+    if proposals.claim(p["id"]) is None:
+        return False
+    pid = p["id"]
+    text = proposals.approval_prompt(p)
+    turn_id = "ap-" + pid
+    session = held.session
+    held.busy.set()
+    try:
+        session.record_user_turn(turn_id, text)
+    except Exception as exc:
+        # Claimed but never started: do not leave it "running" or the session busy.
+        held.busy.clear()
+        proposals.finish(pid, False, f"Could not start: {type(exc).__name__}: {exc}")
+        return False
+
+    async def go() -> None:
+        session.turn_id = turn_id
+        held.stop_turn.clear()
+        session.emit("turn_start", id=turn_id)
+        try:
+            turn = await asyncio.to_thread(held.agent.ask, text, held.stop_turn)
+            proposals.finish(
+                pid, not turn.error and not turn.cancelled, turn.reply or turn.error or ""
+            )
+            session.emit(
+                "turn_end", id=turn_id, iterations=turn.iterations,
+                tool_calls=turn.tool_calls, error=turn.error, cancelled=turn.cancelled,
+            )
+        except Exception as exc:
+            audit.record("web.turn_failed", error=f"{type(exc).__name__}: {exc}")
+            proposals.finish(pid, False, f"{type(exc).__name__}: {exc}")
+            session.emit("turn_end", id=turn_id, iterations=0, error=str(exc))
+        except asyncio.CancelledError:
+            # The session ended mid-run; never leave the row "running".
+            proposals.finish(pid, False, "The session ended before it finished.")
+            raise
+        finally:
+            held.busy.clear()
+            _pickup_approved(held)
+
+    held.turn_task = asyncio.create_task(go())
+    return True
+
+
+def _pickup_approved(held: Any) -> None:
+    """Run the oldest approved, not-yet-started proposal in this session."""
+    try:
+        for pid in proposals.approved_ids():
+            p = proposals.get(pid)
+            if p is not None and _run_approved(held, p):
+                return
+            if held.busy.is_set() or held.client is None:
+                return
+    except Exception as exc:
+        audit.record("proposal.pickup_failed", error=type(exc).__name__)
+
+
 class _Held:
     """Everything a session is, apart from the socket it is currently on.
 
@@ -1070,9 +1237,13 @@ class _Held:
         self.loop = loop
         self.store = store
         self.session = events.Session(loop)
+        # One tracker per principal: this session's agents report to it, and it
+        # fans the frames out to this principal's sessions only.
+        tracker = store.tracker(principal)
+        self.session.on_wait = tracker.waiting
         self.agent = make_agent(
             source="web",
-            observer=events.observer_for(self.session),
+            observer=events.observer_for(self.session, tracker),
             confirmer=self.session.confirm,
             # Persistent history per principal (the browser, or one paired
             # phone), so it survives a server restart and a phone never reads

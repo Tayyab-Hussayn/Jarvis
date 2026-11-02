@@ -76,6 +76,26 @@ def _isolated_state_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE_DIR", state)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_config_dir(tmp_path, monkeypatch):
+    """No test may read the owner's real ~/.config/kravein (settings, api keys).
+
+    The owner's settings.json leaked into the suite three times: with
+    ``agents.orchestrator`` on, web-transport tests built an Orchestrator and
+    waited forever for a frame the stub never produced. ``settings_path()`` and
+    the api-key file derive from ``CONFIG_DIR``, and ``load_settings`` memoises,
+    so both are reset; monkeypatch restores them (and drops anything a test
+    cached) afterwards. Tests that need their own settings still write into
+    ``config.CONFIG_DIR`` or monkeypatch ``load_settings``.
+    """
+    from kravein import config
+
+    cfg = tmp_path / "_xdg_config" / config.APP_NAME
+    cfg.mkdir(parents=True)
+    monkeypatch.setattr(config, "CONFIG_DIR", cfg)
+    monkeypatch.setattr(config, "_settings_cache", None)
+
+
 @pytest.fixture
 def habits(tmp_path, monkeypatch):
     """Point the routine store at a temp dir, and never deliver for real."""
