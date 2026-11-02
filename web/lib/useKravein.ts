@@ -38,7 +38,7 @@ import {
   type AgentsModel,
 } from "./agents";
 import { settleConfirm } from "./confirm";
-import { routeHeard, turnKey, type HeardRoute } from "./heard";
+import { routeHeard, scopedTurn, type HeardRoute } from "./heard";
 import {
   applyCancelled,
   applyFrame as applyTaskFrame,
@@ -161,6 +161,9 @@ export function useKravein() {
   // Server voice turn -> user-line message id. A transcript that finalises
   // after the reply must rewrite its own line, not open a new turn.
   const heardLines = useRef<Map<string, string>>(new Map());
+  // Which voice session the heard frames belong to. The server restarts its
+  // turn ids (`lt1`…) with every session, so keys are scoped by this (#201).
+  const voiceSessionNo = useRef(0);
   // Callbacks need the current phase without being rebuilt on every change.
   const phaseRef = useRef<VoicePhase>("off");
   phaseRef.current = voicePhase;
@@ -332,6 +335,7 @@ export function useKravein() {
           liveTurns.current.clear();
           voiceTurn.current = null;
           heardLines.current.clear();
+          voiceSessionNo.current = 0;
           for (const past of frame.frames) handleRef.current?.(past);
           seqRef.current = Math.max(seqRef.current, maxTurnSeq(frame.frames));
           setBusy(frame.busy);
@@ -593,15 +597,15 @@ export function useKravein() {
           const setRequest = (text: string, turn?: unknown): HeardRoute["kind"] | "" => {
             if (!text.trim()) return "";
             const open = voiceTurn.current;
+            const key = scopedTurn(voiceSessionNo.current, turn);
             const route = routeHeard(
               {
                 open: open?.id ?? null,
                 openServerTurn: open?.serverTurn ?? null,
                 lines: heardLines.current,
               },
-              turn,
+              key,
             );
-            const key = turnKey(turn);
             let lineId: string;
             if (route.kind === "rewrite") {
               lineId = route.id;
@@ -682,6 +686,7 @@ export function useKravein() {
 
           switch (frame.phase) {
             case "started":
+              voiceSessionNo.current += 1;
               setVoicePhase("idle");
               setVoiceError("");
               // The mode comes from the server, not from what we asked for.
