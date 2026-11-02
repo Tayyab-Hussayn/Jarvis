@@ -75,6 +75,13 @@ class FakeNiri:
             if hit:  # an unknown index is clamped by niri: no change
                 for ws in self.workspaces:
                     ws["is_focused"] = ws is hit[0]
+        elif act in ("focus-workspace-down", "focus-workspace-up"):
+            rows = sorted(self.workspaces, key=lambda w: w["idx"])
+            cur = next(i for i, w in enumerate(rows) if w["is_focused"])
+            new = cur + (1 if act.endswith("down") else -1)
+            if 0 <= new < len(rows):  # at the edge niri answers Handled, no move
+                for ws in self.workspaces:
+                    ws["is_focused"] = ws is rows[new]
         elif act == "move-window-to-workspace":
             wid = int(opt("--window-id"))
             ref = rest[-1]
@@ -240,6 +247,79 @@ def test_launch_on_workspace_reports_landing_through_apps(niri, monkeypatch, tmp
     assert "on workspace 2" in apps.launch_on_workspace("kitty", "2")
 
 
+# -- ids differ from idx (the real laptop: ids 1/7/8, idx 1/2/3) -----------
+
+def _real_ids(fake):
+    fake.workspaces = [
+        {"id": i, "idx": x, "name": None, "output": "eDP-1", "is_urgent": False,
+         "is_active": x == 1, "is_focused": x == 1, "active_window_id": None}
+        for i, x in ((1, 1), (7, 2), (8, 3))]
+    for w in fake.windows:
+        w["workspace_id"] = 1
+
+
+def test_workspace_numbers_are_idx_never_ids(niri):
+    backend, fake = niri
+    _real_ids(fake)
+    assert backend.list_workspaces() == ["1", "2", "3"]
+    assert backend.workspace("2") is True
+    assert backend.current_workspace() == "2"
+    assert backend.workspace("7") is False        # 7 is an id, not a workspace
+    win = backend.list_windows()[0]
+    assert backend.move_to_workspace("3", window=win) is True
+    assert backend.list_windows()[0].workspace == "3"
+
+
+def test_next_previous_workspace_are_vertical_actions(niri):
+    backend, fake = niri
+    _real_ids(fake)
+    assert backend.step_workspace(1) is True and backend.current_workspace() == "2"
+    assert backend.step_workspace(-1) is True and backend.current_workspace() == "1"
+    assert backend.step_workspace(-1) is False    # top edge: nothing moved
+    acts = {c[3] for c in fake.calls if c[:3] == ["niri", "msg", "action"]}
+    assert acts <= {"focus-workspace-down", "focus-workspace-up"}  # never columns
+
+
+def test_switch_workspace_skill_reports_what_happened(niri, monkeypatch):
+    from kravein.skills import windows
+    backend, fake = niri
+    _real_ids(fake)
+    monkeypatch.setattr(desktop, "_backend", backend)
+    assert "you are on it now" in windows.switch_workspace("2")
+    assert "(was 2)" in windows.switch_workspace("next") or "workspace 3" in windows.switch_workspace("next")
+    out = windows.switch_workspace("9")
+    assert "Could not switch" in out and "you are on workspace" in out
+    fake.ignore = True
+    assert "Could not" in windows.switch_workspace("2")
+
+
+def test_open_app_on_workspace_takes_user_there_and_focuses(niri, monkeypatch, tmp_path):
+    backend, fake = niri
+    _real_ids(fake)
+    monkeypatch.setattr(desktop, "_backend", backend)
+    monkeypatch.setattr(apps.time, "sleep", lambda s: None)
+    fake.next_spawn = {"id": 20, "app_id": "kitty", "title": "k", "pid": 600,
+                       "workspace_id": 1, "is_focused": True}
+    entry = apps.DesktopEntry(name="Kitty", exec_cmd="kitty", path=tmp_path / "kitty.desktop")
+    monkeypatch.setattr(apps, "find", lambda q: [entry])
+    out = apps.launch_on_workspace("kitty", "2")
+    assert out == "Opened Kitty on workspace 2 and switched you there."
+    assert backend.current_workspace() == "2" and backend.focused().id == "20"
+
+
+def test_open_app_focus_false_stays_in_background(niri, monkeypatch, tmp_path):
+    backend, fake = niri
+    _real_ids(fake)
+    monkeypatch.setattr(desktop, "_backend", backend)
+    monkeypatch.setattr(apps.time, "sleep", lambda s: None)
+    fake.next_spawn = {"id": 21, "app_id": "kitty", "title": "k", "pid": 601,
+                       "workspace_id": 1, "is_focused": True}
+    entry = apps.DesktopEntry(name="Kitty", exec_cmd="kitty", path=tmp_path / "kitty.desktop")
+    monkeypatch.setattr(apps, "find", lambda q: [entry])
+    out = apps.launch_on_workspace("kitty", "2", focus=False)
+    assert "in the background" in out and backend.current_workspace() == "1"
+
+
 # -- detection ------------------------------------------------------------
 
 def test_socket_discovery_without_env(monkeypatch, tmp_path):
@@ -319,7 +399,7 @@ def test_exact_app_name_is_not_ambiguous_with_a_lookalike(niri, monkeypatch, tmp
         fake.windows = [w for w in fake.windows if w["id"] != 13]
         fake.next_spawn = {"id": 13, "app_id": "kitty", "title": "k", "pid": 502,
                            "workspace_id": 1, "is_focused": True}
-        assert "Started kitty on workspace 2" in apps.launch_on_workspace(query, "2")
+        assert "Opened kitty on workspace 2" in apps.launch_on_workspace(query, "2")
 
 
 def test_same_name_twice_is_still_ambiguous(niri, monkeypatch, tmp_path):

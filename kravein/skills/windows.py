@@ -226,14 +226,30 @@ def focus_window(query: str = "", workspace: str = "", id: str = "") -> str:
 
 @skill(category="windows", danger=Danger.MODERATE)
 def switch_workspace(workspace: str) -> str:
-    """Switch to a workspace.
+    """Switch to a workspace and confirm the user is really there.
 
     Args:
-        workspace: Workspace name or number, e.g. '3'.
+        workspace: Workspace number as shown on the bar (e.g. '3') or a
+            workspace name. On niri, 'next'/'down' and 'previous'/'up' move
+            one workspace down or up (niri workspaces are stacked vertically).
     """
-    if desktop.backend().workspace(str(workspace)):
-        return f"Switched to workspace {workspace}."
-    return f"Could not switch to workspace {workspace}."
+    backend = desktop.backend()
+    want = str(workspace).strip()
+    word = want.lower()
+    if word in ("next", "down", "previous", "prev", "up"):
+        if not backend.can_step_workspace:
+            return (f"Relative workspace moves are not supported on {backend.name}; "
+                    "give a workspace number.")
+        before = backend.current_workspace()
+        if backend.step_workspace(1 if word in ("next", "down") else -1):
+            return f"Switched to workspace {backend.current_workspace()} (was {before})."
+        return (f"Still on workspace {backend.current_workspace()}: there is no "
+                f"{'next' if word in ('next', 'down') else 'previous'} workspace.")
+    if backend.workspace(want):
+        return f"Switched to workspace {want}; you are on it now."
+    return (f"Could not switch to workspace {want}: you are on workspace "
+            f"{backend.current_workspace() or '?'}. "
+            f"Workspaces: {', '.join(backend.list_workspaces()) or 'unknown'}.")
 
 
 @skill(category="windows", danger=Danger.MODERATE)
@@ -241,7 +257,8 @@ def move_window_to_workspace(workspace: str) -> str:
     """Move the focused window to another workspace.
 
     Args:
-        workspace: Destination workspace name or number.
+        workspace: Destination workspace number as shown on the bar, or name.
+            On niri the view follows the focused window to its new workspace.
     """
     backend = desktop.backend()
     win = backend.focused()
