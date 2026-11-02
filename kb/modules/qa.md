@@ -21,7 +21,12 @@ updated: 2026-11-02
 .venv/bin/python -m pytest tests/engine tests/skills tests/test_web_transport.py -q   # 428 (add tests/web once it has a file)
 bash -n install-linux.sh
 .venv/bin/python -m pytest tools/test_systemd_units.py -q   # 12 (units + installer + niri --check)
+.venv/bin/python -m pytest tools/test_eval_models.py -q   # 7 (scenario parsing/scoring, stub provider)
 ```
+
+Agent evals (live, one call per scenario, nothing executed — first tool choice only):
+`.venv/bin/python tools/eval_models.py --scenarios tools/eval/agents gemini:gemini-3.5-flash-lite`.
+Calls that error after retries are listed as NOT RUN and left out of the denominator.
 
 ## Gotchas
 - Expected failures: `test_screen_processor.py`, `test_gesture_utils.py` (no cv2/mediapipe on 3.14), `test_kravein_connect*.py` (Windows tree).
