@@ -507,6 +507,13 @@ class TaskManager:
                                (task_id, principal)).fetchone()
         return row["report"] if row else ""
 
+    def state_sig(self, principal: str, task_id: str = "") -> tuple:
+        """What can change between two checks (no elapsed time, which always does)."""
+        with self._lock:
+            return tuple(sorted(
+                (t.id, t.status, t.step, t.tool) for t in self._tasks.values()
+                if t.principal == principal and (not task_id or t.id == task_id)))
+
     def status_text(self, principal: str, task_id: str = "") -> str:
         """Compact progress for the model. No LLM, no sub-agent output."""
         with self._lock:
@@ -598,7 +605,23 @@ def task_status(task_id: str = "", _context: Any = None) -> str:
     principal = str(getattr(_context, "principal", "") or "")
     if not principal:
         return "No background tasks."
-    return manager.status_text(principal, (task_id or "").strip())
+    text = manager.status_text(principal, (task_id or "").strip())
+    # A model that polls re-asks every round (5+ calls in one turn hit Gemini's
+    # 15 rpm limit, #172). The tool is cheap but each repeat costs a model round,
+    # so an unchanged answer within the same turn is replaced by a stop sign.
+    # Every call is still a tool round, so it counts toward escalation.
+    if _context is not None:
+        key = (getattr(_context, "turn_no", 0), task_id)
+        sig = manager.state_sig(principal, (task_id or "").strip())
+        seen = getattr(_context, "_task_status_seen", None)
+        if seen is not None and seen[0] == key and seen[1] == sig:
+            return ("No change since your last check; the report will arrive on its "
+                    "own. Do not call task_status again - answer the owner now.")
+        try:
+            _context._task_status_seen = (key, sig)
+        except AttributeError:
+            pass
+    return text
 
 
 @skill(name="cancel_task", category="agents", danger=Danger.SAFE)

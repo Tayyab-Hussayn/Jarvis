@@ -942,3 +942,22 @@ def test_several_ready_reports_share_one_follow_up_turn(env):
     finally:
         loop.close()
     assert len(asked) == 1 and f"[task {a} report]" in asked[0] and f"[task {b} report]" in asked[0]
+
+
+def test_repeated_task_status_in_one_turn_returns_a_stop_sign_until_state_changes():
+    agent, models = orchestrator()
+    models.scripts["system-ops"] = [call("zz_quick"), report("ok")]
+    gate = models.gate("system-ops")
+    tid = task_id(start(agent))
+    assert wait_for(models.started["system-ops"].is_set)
+    agent.turn_no = 7
+    first = tasks.task_status(_context=agent)
+    assert tid in first
+    again = tasks.task_status(_context=agent)
+    assert again.startswith("No change since your last check")
+    assert tasks.task_status(_context=agent).startswith("No change")   # still stops
+    agent.turn_no = 8                                                  # a new turn is fresh
+    assert tid in tasks.task_status(_context=agent)
+    gate.set()
+    assert done(tid)
+    assert tid in tasks.task_status(_context=agent)                    # state changed
