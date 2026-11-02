@@ -38,11 +38,20 @@ import {
   type AgentsModel,
 } from "./agents";
 import { settleConfirm } from "./confirm";
+import {
+  applyCancelled,
+  applyFrame as applyTaskFrame,
+  dismissNotice,
+  hydrate as hydrateTasks,
+  initialTasks,
+  markSeen,
+  type TasksModel,
+} from "./tasks";
 import { applyFrame as applyProposalFrame, mergeList, type Proposal } from "./proposals";
 import { planRetry, settleOnClose } from "./connection";
 import { SESSION_LOST_NOTE, loadSessionId, maxTurnSeq, saveSessionId } from "./resume";
 import { isVoiceLive } from "./protocol";
-import { captureToken, getToken, wsUrl } from "./session";
+import { api, captureToken, getToken, wsUrl } from "./session";
 import {
   AUDIO_CHOICE_KEY,
   defaultAudioChoice,
@@ -134,6 +143,12 @@ export function useKravein() {
   // What the Orchestrator suggests; updated live by `proposal` frames and
   // seeded from /api/proposals (see `mergeProposals`).
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  // Background sub-agent tasks (engine #159): live `task` frames plus the
+  // /api/tasks listing read on every hello.
+  const [tasks, setTasks] = useState<TasksModel>(initialTasks);
+  // Task ids whose cancel request is in flight. Cleared in `finally`, so a
+  // dropped answer cannot leave a Cancel button disabled for good.
+  const [cancellingTasks, setCancellingTasks] = useState<string[]>([]);
   // The spoken turn currently being built, if any. Ids are `s…` so they cannot
   // collide with typed turns (`t…`), panel runs (`p…`) or the server's own
   // voice turn ids (`v…`, used for confirmation routing).
@@ -474,7 +489,13 @@ export function useKravein() {
           setProposals((current) => applyProposalFrame(current, frame));
           break;
 
+        case "task":
+          setTasks((current) => applyTaskFrame(current, frame, Date.now()));
+          break;
+
         case "cancelled":
+          // Stop left some earlier tasks running: offer them.
+          setTasks((current) => applyCancelled(current, frame));
           // The server always answers, even with nothing running, so the
           // optimistic "Stopping…" flag can never wedge. `turn_end` follows
           // when the loop actually unwinds.
@@ -971,6 +992,30 @@ export function useKravein() {
     setProposals((current) => mergeList(current, rows));
   }, []);
 
+  const loadTasks = useCallback(() => {
+    api<{ tasks: unknown }>("/api/tasks")
+      .then((r) => setTasks((current) => hydrateTasks(current, r?.tasks, Date.now())))
+      .catch(() => undefined); // an older server has no tasks
+  }, []);
+
+  const cancelTask = useCallback(async (id: string) => {
+    setCancellingTasks((current) => (current.includes(id) ? current : [...current, id]));
+    try {
+      const r = await api<{ task?: unknown }>(`/api/tasks/${encodeURIComponent(id)}/cancel`, {
+        method: "POST",
+      });
+      if (r?.task) setTasks((current) => hydrateTasks(current, [r.task], Date.now()));
+    } catch {
+      // 404 (already gone) or a network error: re-read the truth instead.
+      loadTasks();
+    } finally {
+      setCancellingTasks((current) => current.filter((x) => x !== id));
+    }
+  }, [loadTasks]);
+
+  const dismissTaskNotice = useCallback(() => setTasks((current) => dismissNotice(current)), []);
+  const markTaskSeen = useCallback((id: string) => setTasks((current) => markSeen(current, id)), []);
+
   const respondToConfirm = useCallback(
     (confirmId: string, approve: boolean) => {
       send({ t: "confirm_reply", confirm_id: confirmId, approve });
@@ -1157,6 +1202,12 @@ export function useKravein() {
     routineEvents,
     proposals,
     mergeProposals,
+    tasks,
+    loadTasks,
+    cancelTask,
+    cancellingTasks,
+    dismissTaskNotice,
+    markTaskSeen,
     respondToConfirm,
     dismissPanelConfirm,
     reset,

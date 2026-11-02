@@ -56,10 +56,13 @@ export function AgentPane({
   name,
   model,
   onReview,
+  taskList,
 }: {
   name: string;
   model: AgentsModel;
   onReview: () => void;
+  /** This agent's background tasks (the Orchestrator's pane lists everyone's). */
+  taskList?: React.ReactNode;
 }) {
   const view: AgentView | undefined = model.agents[name];
   if (!view) {
@@ -139,6 +142,8 @@ export function AgentPane({
           </div>
         )}
       </Section>
+
+      {taskList && <Section title="Background tasks">{taskList}</Section>}
 
       <Section title="Live steps">
         {steps.length === 0 ? (
