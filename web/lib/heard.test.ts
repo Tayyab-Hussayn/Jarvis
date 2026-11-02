@@ -1,7 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { routeHeard, turnKey, type HeardState } from "./heard.ts";
+import { routeHeard, scopedTurn, turnKey, type HeardState } from "./heard.ts";
+
+test("a restarted voice session reusing lt1 does not rewrite the old session's line", () => {
+  // Session 1 spoke lt1 -> s1-user. Session 2's first turn is also lt1:
+  // unscoped, that was a "rewrite" of session 1's line (the new line vanished).
+  const lines = new Map([[scopedTurn(1, "lt1")!, "s1-user"]]);
+  const idleState: HeardState = { open: null, openServerTurn: null, lines };
+  assert.deepEqual(routeHeard(idleState, scopedTurn(2, "lt1")), { kind: "orphan" });
+  const open: HeardState = { open: "s2", openServerTurn: null, lines };
+  assert.deepEqual(routeHeard(open, scopedTurn(2, "lt1")), { kind: "bind-open" });
+  // a late replace from session 1 still lands on session 1's line
+  assert.deepEqual(routeHeard(idleState, scopedTurn(1, "lt1")), { kind: "rewrite", id: "s1-user" });
+  assert.equal(scopedTurn(2, undefined), null);
+});
 
 const idle = (lines: [string, string][] = []): HeardState => ({
   open: null,
