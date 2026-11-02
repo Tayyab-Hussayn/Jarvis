@@ -67,3 +67,54 @@ def test_llm_failure_shows_nothing_foreign(backend, monkeypatch):
     monkeypatch.setattr(llm, "client", boom)
     events = _run(backend, monkeypatch, SCRIPTS["telugu"])
     assert not [x for k, x in events if k == "heard"]
+
+
+# -- #188: heard frames carry the turn id; the deferred English line replaces it --
+
+def _run3(backend, monkeypatch, script, listens):
+    from kravein.platform import stt
+
+    events: list[tuple[str, str, dict]] = []
+    monkeypatch.setattr(audit, "record", lambda *a, **k: None)
+    monkeypatch.setattr(stt, "translate_available", lambda: True)
+    monkeypatch.setattr(stt, "translate_ready", lambda: True)
+    monkeypatch.setattr(stt, "preload_translate", lambda: None)
+    monkeypatch.setattr(stt, "translate_to_english", lambda pcm: "Hey, are you listening to me?")
+    backend.script = script
+    net = NetworkAudio()
+    net.push_input(b"\x01\x00" * 16000)
+    s = LiveSession(source=net, sink=net, observer=lambda k, t, d: events.append((k, t, d)))
+    t, _ = _run_in_thread(s)
+    assert _wait(lambda: len([e for e in events if e[0] == "listening"]) > listens, 5)
+    s.stop()
+    t.join(3)
+    return events
+
+
+def test_deferred_heard_keeps_the_partials_turn_id(backend, monkeypatch):
+    events = _run3(backend, monkeypatch, _speak_script(["Here are you", " listening"]), 1)
+    partials = [d for k, _, d in events if k == "heard_partial"]
+    heard = [d for k, _, d in events if k == "heard"]
+    assert partials and heard
+    assert {d["turn"] for d in partials} == {heard[0]["turn"]}
+    assert heard[0]["final"] is True and heard[0]["replace"] is True
+    # it still arrives before `listening`, which closes the bubble
+    kinds = [k for k, _, _ in events]
+    assert kinds.index("heard") < kinds.index("listening", kinds.index("heard"))
+
+
+def test_two_quick_turns_do_not_cross_ids(backend, monkeypatch):
+    import asyncio
+    from test_live_turns import _resp, _sc, _text
+
+    async def script(_s):
+        for word in ("first turn", "second turn"):
+            yield _resp(server_content=_sc(input_transcription=_text(word)))
+            await asyncio.sleep(0.3)
+            yield _resp(server_content=_sc(turn_complete=True))
+
+    events = _run3(backend, monkeypatch, script, 2)
+    heard = [d for k, _, d in events if k == "heard"]
+    assert len(heard) == 2 and heard[0]["turn"] != heard[1]["turn"]
+    partial_turns = [d["turn"] for k, _, d in events if k == "heard_partial"]
+    assert partial_turns == [heard[0]["turn"], heard[1]["turn"]]

@@ -23,12 +23,12 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from . import audit, config
-from .agent import Agent, make_agent
+from .agent import Agent, _normalize_observer, make_agent
 from .platform import mic, stt, tts
 from .safety import Confirmer
 
 # (kind, text) — kind is: listening, heard, thinking, speaking, error, info
-VoiceObserver = Callable[[str, str], None]
+VoiceObserver = Callable[..., None]   # (kind, text) or (kind, text, data)
 
 # Things the user can say to end the session.
 STOP_PHRASES = (
@@ -286,7 +286,8 @@ class VoiceSession:
         confirmer: Confirmer | None = None,
     ):
         self.settings = settings or VoiceConfig.from_settings()
-        self.observer = observer
+        self.observer = _normalize_observer(observer)
+        self._turn_seq = 0
         self._stop = threading.Event()
         self._external_confirmer = confirmer
 
@@ -302,10 +303,10 @@ class VoiceSession:
 
     # -- output ----------------------------------------------------------
 
-    def _emit(self, kind: str, text: str) -> None:
+    def _emit(self, kind: str, text: str, data: dict | None = None) -> None:
         if self.observer:
             try:
-                self.observer(kind, text)
+                self.observer(kind, text, data or {})
             except Exception:
                 pass
 
@@ -357,7 +358,9 @@ class VoiceSession:
 
         text = (text or "").strip()
         if text:
-            self._emit("heard", text)
+            # Same contract as Live: heard frames name their turn.
+            self._turn_seq += 1
+            self._emit("heard", text, {"turn": f"vt{self._turn_seq}", "final": True})
         return text
 
     # -- confirmation ----------------------------------------------------
