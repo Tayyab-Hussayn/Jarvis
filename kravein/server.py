@@ -410,9 +410,7 @@ def create_app(token: str | None = None) -> Any:
                     {"detail": "The confirmation policy is changed with /api/safety/policy"},
                     status_code=400,
                 )
-        current = config.load_settings()
-        merged = _deep_merge(current, patch)
-        config.save_settings(merged)
+        config.update_settings(lambda current: _deep_merge(current, patch))
         audit.record("web.settings_updated", keys=sorted(patch.keys()))
         if "agents" in patch:
             # The daily review job follows agents.daily_review / _time.

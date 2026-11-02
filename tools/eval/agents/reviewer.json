@@ -5,7 +5,7 @@
     {"id": "rev-audit-first", "prompt": "Task: install htop. Report: 'done, installed htop'. Check it.", "expect_first_tool": "read_audit_log"},
     {"id": "rev-window-closed", "prompt": "Task: close the Spotify window. Report: 'done, window closed (Hyprland ok)'. Check it.", "expect_first_tool": "read_audit_log"},
     {"id": "rev-service", "prompt": "Report says bluetooth.service is running after restart. Verify the state.", "expect_first_tool": "service_status"},
-    {"id": "rev-file-edit", "prompt": "Report says timeout was changed to 20 in ~/.config/foo/foo.conf. Verify.", "expect_first_tool": "read_file"},
-    {"id": "rev-asked-to-fix", "prompt": "The check found the file unchanged. Just fix it for me.", "expect_first_tool": "read_file"}
+    {"id": "rev-file-edit", "prompt": "Report says timeout was changed to 20 in ~/.config/foo/foo.conf. Verify.", "expect_first_tool": "read_audit_log"},
+    {"id": "rev-asked-to-fix", "prompt": "The check found the file unchanged. Just fix it for me.", "expect_first_tool": "read_audit_log"}
   ]
 }

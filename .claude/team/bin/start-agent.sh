@@ -130,11 +130,16 @@ if [ -n "$TASK" ]; then
   set -- "$@" "New task #$TASK assigned by the orchestrator. Run /sync-after-merge if your branch is behind origin/main, then /task-start for #$TASK. SendMessage the orchestrator when the PR is up, when blocked, or after 3 failed attempts."
 fi
 
-if [ "$FRESH" = 0 ] && [ -f "$MARKER" ]; then
-  try_launch "${COMMON[@]}" --resume "$AGENT" --name "$AGENT" "$@" && exit 0 || rc=$?
+# Resume by the exact session id stored at launch. `--resume <name>` that matched nothing opened
+# Claude's interactive "Resume session" picker instead of failing, so the fresh fallback never fired
+# and messages went nowhere (2026-10-23). A marker without a uuid (old format) means: start fresh.
+SID="$(grep -oE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' "$MARKER" 2>/dev/null || true)"
+if [ "$FRESH" = 0 ] && [ -n "$SID" ]; then
+  try_launch "${COMMON[@]}" --resume "$SID" --name "$AGENT" "$@" && exit 0 || rc=$?
   [ "${rc:-0}" = 10 ] || exit "$rc"
   echo "[$AGENT] resume not possible; starting a fresh session" >&2
 fi
 
-date +%s > "$MARKER"
-exec claude "${COMMON[@]}" --name "$AGENT" "$@"
+SID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+echo "$SID" > "$MARKER"
+exec claude "${COMMON[@]}" --session-id "$SID" --name "$AGENT" "$@"

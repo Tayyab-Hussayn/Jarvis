@@ -27,7 +27,8 @@ google-genai>=1.0
 # --- Voice --------------------------------------------------------------
 # edge-tts is the original's own TTS engine (voice en-US-GuyNeural). Only the
 # playback changed: mpv instead of the Windows winmm MCI calls.
-edge-tts>=6.1
+# >=7.3.1: 7.2.x gets HTTP 403 from Microsoft's endpoint (seen 2026-10-25).
+edge-tts>=7.3.1
 
 # Speech recognition. The Windows build had no local recogniser — voice input
 # went to the Gemini Live websocket, which needs a paid key. faster-whisper

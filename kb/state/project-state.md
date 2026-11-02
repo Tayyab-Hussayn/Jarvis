@@ -60,6 +60,5 @@ Owner-blocked (hold): owner voice test after #157; ydotool on niri needs owner r
 ## Small known bugs (fix when convenient)
 - edge-tts returns 403 on this machine (seen by android 2026-10-25) — may break local `kravein voice` TTS; check `kravein voice test`.
 - `config._deep_merge` shares nested dicts with `DEFAULT_SETTINGS` (writing a section mutates defaults in-process); `/api/settings` load-merge-save can race `set_confirmation_mode` (from #42 notes).
-- `team up <agent>` (resume) can hang on Claude's "Resume session" picker when `--resume <name>` matches nothing, so the fallback to a fresh session never fires and messages go nowhere (engine, 2026-10-23). Workaround: `team up --fresh`. Fix in `start-agent.sh` (resume by stored session id) via lead/batch.
 
 Baseline (2026-10-24, after #69): `.venv/bin/python -m pytest tests/engine tests/skills tests/web tests/test_web_transport.py -q` → 734 pass; android 150 JVM tests. Expected failures: `test_screen_processor.py`, `test_gesture_utils.py`, `test_kravein_connect*.py`.
