@@ -26,7 +26,7 @@ import traceback
 from typing import Any, Callable, Protocol
 
 from . import audit, config, registry
-from .agent import SYSTEM_PROMPT
+from .agent import SYSTEM_PROMPT, _normalize_observer
 from .agent import DECLINED_REPLY
 from .agents import history as _history
 from .platform import detect
@@ -108,7 +108,9 @@ TOOL_TIMEOUT = 90.0
 # cannot hold the `listening` marker (and so the client's turn) open forever.
 TRANSLATE_TIMEOUT = 45.0
 
-Observer = Callable[[str, str], None]
+# (kind, text) or (kind, text, data). `data` carries {'turn': id, ...} on the
+# heard / heard_partial frames (see LiveSession._turn).
+Observer = Callable[..., None]
 
 # Short targets the `[voice actions: …]` history line may name. Anything else
 # (commands, text, paths, queries) stays out: the line tells a later text turn
@@ -385,9 +387,15 @@ class LiveSession:
         # passes a NetworkAudio for both (see its docstring).
         self._source = source or SoundDeviceSource()
         self._sink = sink or SoundDeviceSink()
-        self.observer = observer
+        self.observer = _normalize_observer(observer)
         self.confirmer = confirmer
         self.model = model or LIVE_MODEL
+        # Id of the user's turn in progress, shared by every heard_partial and
+        # heard frame of that turn -- including the English line that arrives
+        # deferred, after `listening`, which the client must apply to THIS turn
+        # rather than open a new one. None until the turn's first frame.
+        self._turn_id: str | None = None
+        self._turn_seq = 0
         self.turns = 0
         self._stop = threading.Event()
         self._session = None
@@ -434,12 +442,19 @@ class LiveSession:
 
     # -- helpers ---------------------------------------------------------
 
-    def _emit(self, kind: str, text: str) -> None:
+    def _emit(self, kind: str, text: str, data: dict | None = None) -> None:
         if self.observer:
             try:
-                self.observer(kind, text)
+                self.observer(kind, text, data or {})
             except Exception:
                 pass
+
+    def _turn(self) -> str:
+        """The current user turn's id, allocated on first use."""
+        if self._turn_id is None:
+            self._turn_seq += 1
+            self._turn_id = f"lt{self._turn_seq}"
+        return self._turn_id
 
     def stop(self) -> None:
         """Ask the session to end. Safe to call from any thread."""
@@ -592,7 +607,7 @@ class LiveSession:
         self._heard.clear()
         self._mic.clear()
         if text:
-            self._emit("heard", text)
+            self._emit("heard", text, {"turn": self._turn(), "final": True})
 
     def _english_heard(self, pcm: bytes) -> str:
         """The user's turn as English text, from Whisper's translate task.
@@ -665,6 +680,7 @@ class LiveSession:
     async def _finish_heard(
         self, pcm: bytes, fallback: str, empty: bool = False,
         said: str = "", actions: list[str] | None = None, raw: str = "",
+        turn: str = "",
     ) -> None:
         """Emit the English transcript once Whisper has it, then end the turn.
 
@@ -695,12 +711,11 @@ class LiveSession:
         text = text or fallback
         if self._agent is not None:
             self._record_turn(text, said, actions or [])
-        if self._heard:
-            # The user has already started the next turn; its partials own the
-            # bubble now and a late rewrite would overwrite them.
-            audit.record("voice.live_heard_dropped", chars=len(text))
-        elif text:
-            self._emit("heard", text)
+        if text:
+            # Even if the user has already started the next turn: the id keeps
+            # this line off the new bubble, so it is no longer dropped. Carries the turn it belongs to and replaces that turn's text: the
+            # client must not treat a late line as a new user turn.
+            self._emit("heard", text, {"turn": turn, "final": True, "replace": True})
         if empty:
             # After the user's words, so the retry prompt reads as the reply.
             self._emit("answer", EMPTY_REPLY_TEXT)
@@ -734,6 +749,7 @@ class LiveSession:
         self._escalated = False
         self._report_turn = False
         self._report_notes = []
+        self._turn_id = None
 
     def _end_turn(self) -> bool:
         """Flush the transcripts, and say so when the model gave nothing back.
@@ -769,10 +785,11 @@ class LiveSession:
             self._close_state(
                 "failed" if empty else "done", said_text or EMPTY_REPLY_TEXT if empty else said_text)
         if defer:
+            turn = self._turn()          # before _reset_turn forgets it
             self._heard.clear()
             self._mic.clear()
             task = asyncio.get_running_loop().create_task(
-                self._finish_heard(pcm, heard, empty, said_text, actions, raw_heard))
+                self._finish_heard(pcm, heard, empty, said_text, actions, raw_heard, turn))
             self._finals.add(task)
             task.add_done_callback(self._finals.discard)
         else:
@@ -1101,7 +1118,7 @@ class LiveSession:
                         # never display (Devanagari) shows a placeholder until
                         # the English transcript replaces it.
                         partial = clean_transcript("".join(self._heard)) or HEARING_TEXT
-                        self._emit("heard_partial", partial)
+                        self._emit("heard_partial", partial, {"turn": self._turn()})
 
                     out = getattr(server, "output_transcription", None)
                     if out is not None and getattr(out, "text", ""):
