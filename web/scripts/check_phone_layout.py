@@ -27,10 +27,10 @@ from kravein.platform import browser
 
 ROUTES = (
     "", "windows", "apps", "files", "screen", "system", "control", "habits",
-    "schedule", "phones", "brain", "activity", "settings", "agent/system-ops",
+    "schedule", "phones", "proposals", "brain", "activity", "settings", "agent/system-ops",
     "agent/orchestrator",
 )
-MODULES_BUILT = 12  # dock buttons that open something (Proposals is a slot)
+MODULES_BUILT = 13  # every dock button opens something
 MIN_TARGET = 40
 
 PROBE = """

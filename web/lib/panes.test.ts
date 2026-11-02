@@ -44,7 +44,7 @@ test("the old rail hashes and friendly names still deep-link", () => {
 });
 
 test("empty, console, unknown and not-yet-built hashes are home, never blank", () => {
-  for (const hash of ["", "#", "#/", "#console", "#nope", "#proposals", "#agent/"]) {
+  for (const hash of ["", "#", "#/", "#console", "#nope", "#agent/"]) {
     assert.deepEqual(parseHash(hash), { kind: "home" }, hash);
   }
 });
@@ -63,9 +63,16 @@ test("home has no hash and routes compare by hash", () => {
   assert.ok(!sameRoute(parseHash("#files"), parseHash("#apps")));
 });
 
-test("the Proposals slot exists in the dock but opens nothing yet", () => {
-  assert.ok(MODULES.some((m) => m.id === "proposals" && m.soon));
+test("Proposals is a real dock module with its own hash and alias", () => {
+  assert.ok(MODULES.some((m) => m.id === "proposals" && !m.soon));
   assert.equal(moduleLabel("proposals"), "Proposals");
+  assert.deepEqual(parseHash("#proposals"), { kind: "module", id: "proposals" });
+  assert.deepEqual(parseHash("#suggestions"), { kind: "module", id: "proposals" });
+});
+
+test("a module marked soon opens nothing and falls back to home", () => {
+  // No module is `soon` today; the rule still has to hold for the next slot.
+  assert.deepEqual(parseHash("#not-built-yet"), { kind: "home" });
 });
 
 test("roving focus wraps and honours Home/End", () => {

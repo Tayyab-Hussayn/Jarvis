@@ -376,6 +376,13 @@ h3 {
   }
 }
 
+/* The composer sits in a capsule that already lights up on focus-within; a
+   second rectangle around the textarea inside it is noise. */
+textarea[data-composer]:focus,
+textarea[data-composer]:focus-visible {
+  outline: none;
+}
+
 /* -- panes ------------------------------------------------------------ */
 
 /* The sheet takes focus when it opens so the keyboard is inside it; a ring

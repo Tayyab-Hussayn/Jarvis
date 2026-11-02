@@ -30,6 +30,7 @@ import { HabitsView } from "@/components/HabitsView";
 import { JobsView } from "@/components/JobsView";
 import { Palette, type PaletteCommand } from "@/components/Palette";
 import { PhonesView } from "@/components/PhonesView";
+import { ProposalsView } from "@/components/ProposalsView";
 import { ScreenView } from "@/components/ScreenView";
 import { SettingsView } from "@/components/SettingsView";
 import {
@@ -43,6 +44,7 @@ import { SystemView } from "@/components/SystemView";
 import { WindowsView } from "@/components/WindowsView";
 import { ORCHESTRATOR, type ProfileInfo, type AgentStateFrame } from "@/lib/agents";
 import { overlayConfirms } from "@/lib/confirm";
+import { pendingCount } from "@/lib/proposals";
 import {
   MODULES,
   moduleLabel,
@@ -89,6 +91,8 @@ export default function Page() {
     panelConfirms,
     agents,
     dispatchAgents,
+    proposals,
+    mergeProposals,
     ask,
     run,
     cancel,
@@ -158,6 +162,18 @@ export default function Page() {
     };
   }, [hello, dispatchAgents]);
 
+  // Proposals: the list is read on every hello (a reconnect starts from the
+  // server's truth) and by the pane's Refresh; live `proposal` frames and
+  // decide answers merge in without ever rolling a card back.
+  const loadProposals = useCallback(() => {
+    api<{ proposals: unknown }>("/api/proposals")
+      .then((r) => mergeProposals(r?.proposals))
+      .catch(() => undefined); // an older server has no proposals
+  }, [mergeProposals]);
+  useEffect(() => {
+    if (hello) loadProposals();
+  }, [hello, loadProposals]);
+
   // There are two independent voice pipelines and either one is enough. The
   // on-device path needs both halves (hearing and answering) while Live needs
   // only a Gemini key. Gating everything on the local halves disabled voice on
@@ -207,6 +223,7 @@ export default function Page() {
   }, [voicePhase, stopVoice, selectVoice]);
 
   // Everything the palette can open, above the 100+ skills it can run.
+  const waiting = pendingCount(proposals);
   const commands = useMemo<PaletteCommand[]>(() => {
     const list: PaletteCommand[] = [
       { id: "home", label: "Conversation", hint: "Back to the stream", run: closePane },
@@ -224,7 +241,10 @@ export default function Page() {
       list.push({
         id: m.id,
         label: m.label,
-        hint: `Open ${m.label}${m.aliases.length ? ` · ${m.aliases.join(", ")}` : ""}`,
+        hint:
+          m.id === "proposals" && waiting > 0
+            ? `${waiting} waiting for you`
+            : `Open ${m.label}${m.aliases.length ? ` · ${m.aliases.join(", ")}` : ""}`,
         run: () => openModule(m.id),
       });
     }
@@ -237,7 +257,7 @@ export default function Page() {
       });
     }
     return list;
-  }, [agents.order, agents.agents, busy, reset, closePane, openModule, openAgent]);
+  }, [agents.order, agents.agents, busy, reset, waiting, closePane, openModule, openAgent]);
 
   const voiceLive = isVoiceLive(voicePhase);
   const paneOpen = route.kind !== "home";
@@ -265,7 +285,9 @@ export default function Page() {
       brain: <BrainView run={run} />,
       activity: <ActivityView />,
       settings: <SettingsView policy={policy} />,
-      proposals: null,
+      proposals: (
+        <ProposalsView proposals={proposals} onMerge={mergeProposals} onRefresh={loadProposals} />
+      ),
     };
     return { title: moduleLabel(route.id), eyebrow: "Module", body: bodies[route.id] };
   })();
@@ -357,7 +379,7 @@ export default function Page() {
         </div>
       </main>
 
-      <Dock route={route} onOpen={openModule} />
+      <Dock route={route} onOpen={openModule} badges={{ proposals: pendingCount(proposals) }} />
 
       {pane && (
         <Pane title={pane.title} eyebrow={pane.eyebrow} onClose={closePane}>

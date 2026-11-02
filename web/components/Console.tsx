@@ -180,7 +180,16 @@ export function Console({
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 sm:px-6">
+      {/* Air under the HUD, and a fade so a card scrolling up dissolves into it
+          instead of being sliced by its edge. */}
+      <div
+        ref={scrollerRef}
+        className="min-h-0 flex-1 overflow-y-auto px-3 pt-7 sm:px-6"
+        style={{
+          maskImage: "linear-gradient(to bottom, transparent 0, black 1.75rem)",
+          WebkitMaskImage: "linear-gradient(to bottom, transparent 0, black 1.75rem)",
+        }}
+      >
         <div className="mx-auto h-full w-full" style={{ maxWidth: "var(--stream-max)" }}>
         {turns.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center">
