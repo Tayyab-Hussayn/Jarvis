@@ -15,11 +15,14 @@ like shell commands and filesystem paths.
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import re
 import shlex
+import stat as stat_mod
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -66,6 +69,9 @@ class Verdict:
     reasons: list[str] = field(default_factory=list)
     blocked: bool = False
     block_reason: str = ""
+    # "Always allow" signature (#199). Set only by classify_command, only for a
+    # command in an owner-approved family; "" means Always is never offered.
+    signature: str = ""
 
     @property
     def needs_confirmation(self) -> bool:
@@ -340,6 +346,11 @@ _REWRITER = re.compile(
 
 
 def _mentions_settings_file(command: str) -> bool:
+    """See :func:`_mentions_file`; the target is Kravein's settings file."""
+    return _mentions_file(command, config.settings_path())
+
+
+def _mentions_file(command: str, target_path: "str | os.PathLike") -> bool:
     """Does a shell command name Kravein's own settings file?
 
     check_path() already refuses write_file/copy/move onto it, but the same
@@ -353,7 +364,7 @@ def _mentions_settings_file(command: str) -> bool:
     `settings.json` is treated as ours because the working directory is not
     known here and the safe error is to refuse.
     """
-    target = resolve_target(config.settings_path())
+    target = resolve_target(target_path)
     candidates: list[str] = []
     try:
         candidates += shlex.split(command, comments=True)
@@ -368,6 +379,8 @@ def _mentions_settings_file(command: str) -> bool:
         expanded = os.path.expandvars(token)
         if expanded.startswith("~"):
             expanded = os.path.expanduser(expanded)
+        # Brace expansion (`safety_r{ules,x}.json`) is a glob for our purposes.
+        expanded = re.sub(r"\{[^{}]*\}", "*", expanded)
         if any(c in expanded for c in "*?["):
             # `~/.config/kravein/*.json` names the file without spelling it.
             # Only a glob with a directory part can be placed without knowing
@@ -400,12 +413,18 @@ def _classify_level(text: str) -> Danger:
     return level
 
 
-def classify_command(command: str) -> Verdict:
-    """Classify a free-form shell command string."""
+def classify_command(command: str, cwd: "str | os.PathLike | None" = None) -> Verdict:
+    """Classify a free-form shell command string.
+
+    ``cwd`` is the directory the command will run in. Without it a relative
+    path cannot be resolved, so relative targets are never treated as "new"
+    (the old classification stands) and never get an "Always" signature.
+    """
     text = (command or "").strip()
     verdict = Verdict(danger=Danger.SAFE)
     if not text:
         return verdict
+    where = Path(cwd) if cwd is not None else None
 
     for pattern, why in _FORBIDDEN:
         if re.search(pattern, text, re.IGNORECASE):
@@ -427,6 +446,24 @@ def classify_command(command: str) -> Verdict:
         )
         return verdict
 
+    # The Always-rule store is the owner's, like the settings file: only a card
+    # click may add to it. Reading it stays allowed.
+    if (RULES_FILENAME in text or _mentions_file(text, _rules_path())) and (
+        _classify_level(text) >= Danger.MODERATE or _REWRITER.search(text)
+    ):
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = (
+            f"{RULES_FILENAME} holds the owner's \"Always approve\" rules; the "
+            "assistant may not change them"
+        )
+        return verdict
+
+    # Provably read-only (or creating only new files): no card. Runs after the
+    # hard refusals above, and never lowers a CRITICAL pattern hit.
+    if _classify_level(text) < Danger.CRITICAL and _argv_safe(text, where):
+        return verdict
+
     matched: list[tuple[Danger, str]] = []
     for level, patterns in (
         (Danger.CRITICAL, _CRITICAL_PATTERNS),
@@ -436,6 +473,8 @@ def classify_command(command: str) -> Verdict:
         for pattern, why in patterns:
             if re.search(pattern, text, re.IGNORECASE):
                 matched.append((level, why))
+    if _overwrites_existing(text, where):
+        matched.append((Danger.DESTRUCTIVE, "overwrites an existing file"))
 
     if matched:
         verdict.danger = max(level for level, _ in matched)
@@ -454,6 +493,8 @@ def classify_command(command: str) -> Verdict:
             verdict.danger = Danger.CRITICAL
             return verdict
 
+    if verdict.danger == Danger.DESTRUCTIVE:
+        verdict.signature = command_signature(text, where)
     return verdict
 
 
@@ -464,6 +505,358 @@ def _candidate_paths(command: str) -> list[str]:
     except ValueError:
         tokens = command.split()
     return [t for t in tokens if t.startswith("/") and len(t) > 1]
+
+
+# ---------------------------------------------------------------------------
+# argv-parsed shell analysis (#199): the safe set and "Always" signatures
+# ---------------------------------------------------------------------------
+#
+# The regex classifier above over-asks (`ls 2>/dev/null` was DESTRUCTIVE, and
+# `ls 2> /dev/null` was refused outright) and cannot say "this really is just a
+# read". This parser answers the second question from the argv. It only ever
+# *lowers* a verdict, so every rule is default-deny: anything it does not fully
+# understand (substitution, variables, heredocs, newlines, an unknown program,
+# a relative path whose directory it cannot know) is "not safe" and the old
+# classification stands unchanged.
+
+_SAFE_PROGRAMS = frozenset({
+    "ls", "cd", "pwd", "cat", "head", "tail", "less", "wc", "find", "grep", "rg",
+    "which", "whereis", "type", "file", "stat", "du", "df", "ps", "pgrep", "echo",
+    "printf", "date", "uname", "whoami", "id", "env", "tree", "realpath",
+    "basename", "dirname", "sort", "uniq", "diff", "git",
+})
+_GIT_SAFE_SUBCOMMANDS = frozenset({"status", "log", "diff", "show"})
+# Per-program flags that turn a read into an execution or a write.
+_FIND_UNSAFE = frozenset({
+    "-delete", "-exec", "-execdir", "-ok", "-okdir",
+    "-fprint", "-fprint0", "-fprintf", "-fls",
+})
+_OPERATORS = frozenset({";", "&&", "||", "|"})
+_REDIRECTS = frozenset({">", ">>", "&>", "&>>", ">&", "<"})
+_GLOB_CHARS = set("*?[]{}")
+
+
+def _shell_tokens(command: str) -> list[str] | None:
+    """Split into words and operators, or None if it is not plainly parseable."""
+    # `$` and backtick: substitution/variables hide the real argv. Newline would
+    # be whitespace to shlex but a command separator to the shell.
+    if any(c in command for c in "\n\r\x00$`"):
+        return None
+    lex = shlex.shlex(command, posix=True, punctuation_chars=True)
+    # No comments: shlex would cut `echo a#b; rm x` at the `#`, hiding the
+    # `rm` the shell goes on to run.
+    lex.commenters = ""
+    lex.whitespace_split = True
+    try:
+        return list(lex)
+    except ValueError:
+        return None
+
+
+def _segments(command: str) -> list[tuple[list[str], list[tuple[str, str]]]] | None:
+    """`[(argv, [(redirect_op, target), ...]), ...]`, one per simple command."""
+    tokens = _shell_tokens(command)
+    if not tokens:
+        return None
+    segments: list[tuple[list[str], list[tuple[str, str]]]] = []
+    argv: list[str] = []
+    redirects: list[tuple[str, str]] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in _OPERATORS:
+            if not argv:
+                return None
+            segments.append((argv, redirects))
+            argv, redirects = [], []
+        elif tok in _REDIRECTS:
+            if i + 1 >= len(tokens) or tokens[i + 1] in _OPERATORS | _REDIRECTS:
+                return None
+            redirects.append((tok, tokens[i + 1]))
+            i += 1
+        elif tok and all(c in "();<>|&" for c in tok):
+            return None            # subshell, heredoc, background, `>|`, ...
+        else:
+            argv.append(tok)
+        i += 1
+    if argv:
+        segments.append((argv, redirects))
+    elif redirects or tokens[-1] != ";":
+        return None                 # a bare redirect, or a dangling `|` / `&&` / `||`
+    return segments or None
+
+
+def _literal_path(raw: str, cwd: Path | None) -> Path | None:
+    """The absolute path a literal argument names, or None if it cannot be
+    known here (glob, or relative with an unknown working directory)."""
+    if not raw or any(c in _GLOB_CHARS for c in raw):
+        return None
+    expanded = os.path.expanduser(raw) if raw.startswith("~") else raw
+    if expanded.startswith("~"):
+        return None
+    path = Path(expanded)
+    if not path.is_absolute():
+        if cwd is None:
+            return None
+        path = cwd / path
+    return Path(os.path.normpath(path))
+
+
+def _writable_ok(path: Path) -> bool:
+    """check_path says an ordinary write there needs no confirmation."""
+    v = check_path(path, write=True)
+    return not v.blocked and v.danger < Danger.DESTRUCTIVE
+
+
+def _risky_flag(args: list[str], short: str, long_names: tuple[str, ...]) -> bool:
+    """Does any argument carry one of these flags, however it is spelled?
+
+    GNU tools accept bundled short flags (`tree -ao FILE`) and any unambiguous
+    prefix of a long option (`sort --out=FILE`), so an exact-string veto misses
+    both. Conservative on purpose: a short cluster that merely contains the
+    letter, or a long option that is a prefix of the dangerous one, counts.
+    """
+    for a in args:
+        if a.startswith("--"):
+            name = a.split("=", 1)[0]
+            if len(name) >= 3 and any(n.startswith(name) for n in long_names):
+                return True
+        elif a.startswith("-") and len(a) > 1 and any(ch in a[1:] for ch in short):
+            return True
+    return False
+
+
+# Programs whose flags can execute or write: an unquoted glob that starts a
+# word could expand into one (a file literally named `-delete` or `--pre=sh`).
+_FLAG_SENSITIVE = frozenset({"find", "rg", "sort", "tree", "less", "git", "file", "date"})
+
+
+def _flags_ok(prog: str, args: list[str]) -> bool:
+    """Per-program veto of flags that execute or write."""
+    # Brace expansion builds flags out of thin air: `find . {-delete,x}`.
+    if any("{" in a and ("," in a or ".." in a) for a in args):
+        return False
+    if prog in _FLAG_SENSITIVE and any(a[:1] in ("*", "?", "[") for a in args):
+        return False
+    if prog == "find":
+        return not any(a in _FIND_UNSAFE for a in args)
+    if prog == "sort":
+        return not _risky_flag(args, "o", ("--output", "--compress-program", "--files0-from"))
+    if prog == "rg":
+        return not any(a.startswith(("--pre", "--hostname-bin")) for a in args)
+    if prog == "less":
+        return not any(a.startswith("+") for a in args) and not _risky_flag(
+            args, "oO", ("--log-file", "--LOG-FILE")
+        )
+    if prog == "tree":
+        return not _risky_flag(args, "o", ("--output",))
+    if prog == "date":
+        return not _risky_flag(args, "s", ("--set",))
+    if prog == "file":
+        return not _risky_flag(args, "C", ("--compile",))
+    if prog == "env":
+        return not args                       # `env CMD` runs CMD
+    if prog == "uniq":
+        return len([a for a in args if not a.startswith("-")]) <= 1  # 2nd = output file
+    if prog == "git":
+        i = 0
+        while i < len(args) and args[i].startswith("-"):
+            if args[i] != "-C" or i + 1 >= len(args):
+                return False                  # -c, --exec-path, ... change what runs
+            i += 2
+        if i >= len(args) or args[i] not in _GIT_SAFE_SUBCOMMANDS:
+            return False
+        return not _risky_flag(args[i + 1:], "", ("--output", "--ext-diff", "--open-files-in-pager"))
+    return True
+
+
+_CP_FLAGS = frozenset({"-v", "-n", "-r", "-R", "-a", "-p", "--verbose",
+                       "--no-clobber", "--recursive", "--archive"})
+_MV_FLAGS = frozenset({"-v", "-n", "--verbose", "--no-clobber"})
+
+
+def _copy_move_state(prog: str, args: list[str], cwd: Path | None) -> str:
+    """"new" (nothing is overwritten), "exists" (an existing target would be
+    overwritten) or "unknown" (cannot tell: stays under the old classification)."""
+    allowed = _CP_FLAGS if prog == "cp" else _MV_FLAGS
+    if any(a.startswith("-") and a not in allowed for a in args):
+        return "unknown"
+    pos = [a for a in args if not a.startswith("-")]
+    if len(pos) < 2:
+        return "unknown"
+    paths = [_literal_path(p, cwd) for p in pos]
+    if any(p is None for p in paths):
+        return "unknown"
+    *srcs, dest = paths                                    # type: ignore[misc]
+    if not _writable_ok(dest) or not all(
+        (_writable_ok(s) if prog == "mv" else not check_path(s, write=False).blocked)
+        for s in srcs
+    ):
+        return "unknown"
+    if "-n" in args or "--no-clobber" in args:
+        return "new"
+    if os.path.lexists(dest):
+        if dest.is_dir() and not dest.is_symlink():
+            effective = [dest / s.name for s in srcs]
+        else:
+            effective = [dest]
+        return "exists" if any(os.path.lexists(e) for e in effective) else "new"
+    return "new" if len(srcs) == 1 else "unknown"
+
+
+def _redirects_ok(redirects: list[tuple[str, str]], cwd: Path | None) -> bool:
+    for op, target in redirects:
+        if op == "<":
+            continue
+        if op == ">&" and (target.isdigit() or target == "-"):
+            continue                                       # 2>&1: no file involved
+        if target == "/dev/null":
+            continue
+        path = _literal_path(target, cwd)
+        # Only a file that does not exist yet: an existing one is overwritten
+        # (or appended to), which is exactly what must still ask.
+        if path is None or os.path.lexists(path) or not _writable_ok(path):
+            return False
+    return True
+
+
+def _argv_safe(command: str, cwd: Path | None) -> bool:
+    """True only if every part of the command is provably read-only or creates
+    only files that do not exist yet."""
+    segments = _segments(command)
+    if segments is None:
+        return False
+    for argv, redirects in segments:
+        prog = argv[0]
+        if "/" in prog or "=" in prog:
+            return False
+        if prog in ("cp", "mv"):
+            if _copy_move_state(prog, argv[1:], cwd) != "new":
+                return False
+        elif prog in _SAFE_PROGRAMS:
+            if not _flags_ok(prog, argv[1:]):
+                return False
+        else:
+            return False
+        if not _redirects_ok(redirects, cwd):
+            return False
+        if prog == "cd":
+            cwd = None          # later relative paths are relative to somewhere else
+    return True
+
+
+def _overwrites_existing(command: str, cwd: Path | None) -> bool:
+    """`cp` onto an existing target: the regex classifier calls cp MODERATE."""
+    segments = _segments(command)
+    if segments is None:
+        return False
+    for argv, _ in segments:
+        if argv[0] == "cp" and _copy_move_state("cp", argv[1:], cwd) == "exists":
+            return True
+        if argv[0] == "cd":
+            cwd = None
+    return False
+
+
+# -- "Always" signatures -------------------------------------------------------
+#
+# A signature names a *family* of commands the owner may pre-approve. It is an
+# allow-list, not a deny-list: only the three families the owner chose
+# (2026-11-02) can produce one, and only for commands that really are a single
+# simple command. Everything else - the rm family, sudo, sed -i, recursive
+# chmod/chown, dd, git reset --hard, compound commands, redirects - yields "".
+
+_PKILL_FLAGS = frozenset({"-1", "-2", "-9", "-15", "-HUP", "-INT", "-KILL", "-TERM", "-x"})
+# Names a pkill must never be pre-approved for: the session, the display
+# stack and Kravein itself.
+_PKILL_PROTECTED = frozenset({
+    "init", "systemd", "dbus-daemon", "dbus-broker", "sshd", "login", "pipewire",
+    "wireplumber", "hyprland", "niri", "sway", "river", "xorg", "x", "xwayland",
+    "gdm", "sddm", "lightdm", "bash", "zsh", "fish", "sh", "dash", "tmux", "screen",
+    "ydotoold", "ydotool",
+})
+# No `.`/`+`/`*`: pkill takes a regex, and matches it anywhere in a name.
+_PKILL_SELF = frozenset({"kravein", "python", "python3", "uvicorn", "systemd-logind"})
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,59}$")
+_MODE_RE = re.compile(
+    r"^(0?[0-7]{3}|[ugoa]*[-+=][rwxX]+(,[ugoa]*[-+=][rwxX]+)*)$"
+)
+
+
+def _owner_file(path: Path | None) -> bool:
+    """An existing, non-symlink file or directory the owner owns under $HOME,
+    outside Kravein's own dirs and every login/startup location."""
+    if path is None:
+        return False
+    home = Path.home().resolve()
+    try:
+        st = path.lstat()
+        resolved = path.resolve()
+    except OSError:
+        return False
+    if stat_mod.S_ISLNK(st.st_mode) or st.st_uid != os.getuid():
+        return False
+    if not resolved.is_relative_to(home) or resolved == home:
+        return False
+    return _writable_ok(resolved)
+
+
+def command_signature(command: str, cwd: Path | None = None) -> str:
+    """The "Always allow" signature of a command, or "" if it is not eligible.
+
+    Call it only for a command that asks at DESTRUCTIVE. Eligible families:
+    ``pkill|killall [-sig] NAME`` (the name stays in the signature),
+    ``mv * DEST`` over an existing target inside $HOME, and non-recursive
+    ``chmod MODE *`` on the owner's own files.
+    """
+    segments = _segments(command)
+    if segments is None or len(segments) != 1:
+        return ""
+    argv, redirects = segments[0]
+    if redirects:
+        return ""
+    prog, args = argv[0], argv[1:]
+
+    if prog in ("pkill", "killall"):
+        flags = [a for a in args if a.startswith("-")]
+        names = [a for a in args if not a.startswith("-")]
+        if len(names) != 1 or any(f not in _PKILL_FLAGS for f in flags):
+            return ""
+        name = names[0]
+        if not _NAME_RE.match(name):
+            return ""
+        low = name.lower()
+        # pkill matches a *substring*: `pkill nir` hits niri, `pkill pyth` hits
+        # Kravein itself. Refuse any pattern that could match a protected name.
+        if any(low in p for p in _PKILL_PROTECTED | _PKILL_SELF) or any(
+            low.startswith(p) for p in _PKILL_SELF
+        ):  # ... and `kravein-web`, `python3.14`: longer names that are us
+            return ""
+        return " ".join([prog, *sorted(flags), name])
+
+    if prog == "mv":
+        if any(a.startswith("-") and a not in ("-f", "-v") for a in args):
+            return ""
+        pos = [a for a in args if not a.startswith("-")]
+        if len(pos) != 2:
+            return ""
+        src, dest = (_literal_path(p, cwd) for p in pos)
+        if src is None or dest is None:
+            return ""
+        if not (_owner_file(src) and (_owner_file(dest) or _owner_file(dest.parent))):
+            return ""
+        return f"mv * {dest}"
+
+    if prog == "chmod":
+        pos = [a for a in args if not a.startswith("-")]
+        # Any flag at all: -R/-r/--recursive, --reference, -c ... not eligible.
+        if len(pos) < 2 or len(pos) != len(args) or not _MODE_RE.match(pos[0]):
+            return ""
+        if not all(_owner_file(_literal_path(p, cwd)) for p in pos[1:]):
+            return ""
+        return f"chmod {pos[0]} *"
+
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -667,22 +1060,36 @@ class confirmer_scope:
     said in and never leaks into the next one.
     """
 
-    def __init__(self, fn: Confirmer | None, memory: TurnMemory | None = None):
+    def __init__(
+        self,
+        fn: Confirmer | None,
+        memory: TurnMemory | None = None,
+        principal: str | None = None,
+    ):
         self._fn = fn
         self._memory = memory if memory is not None else TurnMemory()
+        # Whose "Always approve" rules apply in this scope (#199). None keeps the
+        # enclosing scope's (a delegated sub-agent acts for the same owner);
+        # "" means nobody's: no rule applies and none is offered.
+        self._principal = principal
         self._previous: Confirmer | None = None
         self._previous_memory: TurnMemory | None = None
+        self._previous_principal: str = ""
 
     def __enter__(self) -> "confirmer_scope":
         self._previous = getattr(_local, "confirmer", None)
         self._previous_memory = getattr(_local, "memory", None)
+        self._previous_principal = getattr(_local, "principal", "")
         _local.confirmer = self._fn
         _local.memory = self._memory
+        if self._principal is not None:
+            _local.principal = self._principal
         return self
 
     def __exit__(self, *exc_info) -> None:
         _local.confirmer = self._previous
         _local.memory = self._previous_memory
+        _local.principal = self._previous_principal
 
 
 def describe_targets(*parts: str) -> list[str]:
@@ -828,6 +1235,126 @@ def disable_auto_approve(*, by: str = "") -> dict:
     return confirmation_policy()
 
 
+# ---------------------------------------------------------------------------
+# "Always approve" rules (#199)
+# ---------------------------------------------------------------------------
+#
+# A rule pre-approves one command signature (see command_signature) for one
+# principal. Guardrails, all in code:
+#   - written only by enforce(), when the owner's card answer is "always", and
+#     only for a signature the classifier itself produced for that command, so
+#     neither the model nor a forged client frame can create one;
+#   - lives in STATE_DIR (check_path refuses the file tools there and
+#     classify_command refuses shell writes naming the file);
+#   - applies only where auto-approve does (live owner sources, attended),
+#     never to CRITICAL/blocked, after the hard refusals, the "decline" policy
+#     and the per-turn denial memory - a declined target still wins;
+#   - every use is audited; the owner can list and revoke them.
+# A rule only ever matches a signature recomputed from the actual command, so
+# even a hand-edited store cannot approve anything outside the three families.
+
+RULES_FILENAME = "safety_rules.json"
+_rules_lock = threading.Lock()
+
+
+def _rules_path() -> Path:
+    return config.STATE_DIR / RULES_FILENAME
+
+
+def _load_rules() -> list[dict]:
+    try:
+        data = json.loads(_rules_path().read_text())
+    except (OSError, ValueError):
+        return []
+    rules = data.get("rules") if isinstance(data, dict) else None
+    return [
+        r for r in (rules if isinstance(rules, list) else [])
+        if isinstance(r, dict)
+        and isinstance(r.get("id"), str)
+        and isinstance(r.get("signature"), str)
+        and isinstance(r.get("principal"), str)
+    ]
+
+
+def _save_rules(rules: list[dict]) -> None:
+    path = _rules_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"rules": rules}, indent=2))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def list_rules(principal: str) -> list[dict]:
+    """The principal's own rules, for the settings view."""
+    with _rules_lock:
+        return [dict(r) for r in _load_rules() if r["principal"] == principal]
+
+
+def add_always_rule(signature: str, principal: str, *, by: str = "") -> dict | None:
+    """Store a rule. Owner-facing callers only (enforce, after a card answer)."""
+    if not signature or not principal:
+        return None
+    with _rules_lock:
+        rules = _load_rules()
+        for r in rules:
+            if r["signature"] == signature and r["principal"] == principal:
+                return dict(r)
+        rule = {
+            "id": uuid.uuid4().hex[:12], "signature": signature,
+            "principal": principal, "created_at": time.time(),
+            "uses": 0, "last_used": None,
+        }
+        rules.append(rule)
+        _save_rules(rules)
+    audit.record("safety.rule_created", signature=signature, principal=principal, by=by)
+    return dict(rule)
+
+
+def revoke_rule(rule_id: str, principal: str, *, by: str = "") -> bool:
+    """Delete one of the principal's rules. False if it is not theirs/unknown."""
+    with _rules_lock:
+        rules = _load_rules()
+        kept = [r for r in rules if not (r["id"] == rule_id and r["principal"] == principal)]
+        if len(kept) == len(rules):
+            return False
+        _save_rules(kept)
+    audit.record("safety.rule_revoked", rule_id=rule_id, principal=principal, by=by)
+    return True
+
+
+def _match_rule(signature: str, principal: str) -> dict | None:
+    """The principal's rule for this signature, with its use count bumped."""
+    if not signature or not principal:
+        return None
+    with _rules_lock:
+        rules = _load_rules()
+        for r in rules:
+            if r["signature"] == signature and r["principal"] == principal:
+                r["uses"] = int(r.get("uses") or 0) + 1
+                r["last_used"] = time.time()
+                try:
+                    _save_rules(rules)
+                except OSError:
+                    pass
+                return dict(r)
+    return None
+
+
+ALWAYS = "always"        # a Confirmer may return this instead of True
+
+
+def always_offer() -> dict:
+    """What the card being raised right now may offer, for a Confirmer to read:
+    ``{"allowed": bool, "signature": str}``. Thread-local, set by enforce()."""
+    sig = getattr(_local, "always_signature", "")
+    return {"allowed": bool(sig), "signature": sig}
+
+
+def _current_principal() -> str:
+    return getattr(_local, "principal", "")
+
+
 def enforce(
     verdict: Verdict,
     action_desc: str,
@@ -908,6 +1435,28 @@ def enforce(
     confirmer = get_confirmer()
     detail = verdict.summary()
 
+    # "Always approve" (#199): same preconditions as auto-approve, minus the
+    # timer. Only an eligible, DESTRUCTIVE (never CRITICAL) signature.
+    principal = _current_principal()
+    rule_ok = bool(
+        verdict.signature
+        and verdict.danger == Danger.DESTRUCTIVE
+        and principal
+        and source in AUTO_SOURCES
+        and confirmer is not _deny
+        and _attended(confirmer)
+    )
+    if rule_ok:
+        rule = _match_rule(verdict.signature, principal)
+        if rule is not None:
+            audit.record(
+                "safety.rule_approved",
+                skill=skill, source=source, action=action_desc,
+                signature=verdict.signature, rule_id=rule["id"],
+                principal=principal, uses=rule["uses"],
+            )
+            return
+
     # Auto-approve: after the hard refusals and the denial memory, never for
     # CRITICAL, only for a live owner source, and only where a human could
     # have been asked — a session with no confirmer is unattended whatever
@@ -953,17 +1502,34 @@ def enforce(
         )
 
     approved = False
+    always = False
+    offered = verdict.signature if rule_ok else ""
+    _local.always_signature = offered
     try:
-        approved = bool(confirmer(action_desc, detail, verdict.danger))
+        answer = confirmer(action_desc, detail, verdict.danger)
+        # A str answer counts only if it is exactly "always"; any other string
+        # is not an approval.
+        always = answer == ALWAYS
+        approved = always or (not isinstance(answer, str) and bool(answer))
     except Exception as exc:
         audit.record("safety.confirm_error", action=action_desc, error=str(exc))
-        approved = False
+        approved = always = False
+    finally:
+        _local.always_signature = ""
 
     audit.record(
         "safety.confirm_result",
         skill=skill, source=source, action=action_desc,
         danger=DANGER_LABELS[verdict.danger], approved=approved,
+        always=bool(always and offered),
     )
+    if always and offered:
+        try:
+            add_always_rule(offered, principal, by=source)
+        except OSError as exc:
+            # The owner approved this command; failing to remember it must not
+            # turn that into a refusal. They will simply be asked again.
+            audit.record("safety.rule_store_error", error=str(exc))
 
     if not approved:
         # Remember the refusal so a differently-spelled retry at the same

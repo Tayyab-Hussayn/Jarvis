@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import audit, config, phone
+from . import audit, config, phone, safety
 from .safety import Danger
 
 # How long a confirmation card may sit unanswered before it is denied. A
@@ -80,6 +80,9 @@ class _Pending:
     event: threading.Event = field(default_factory=threading.Event)
     approved: bool = False
     by: str = ""
+    # "approve" | "always" | "deny"; "always" only if the card offered it.
+    decision: str = "deny"
+    always_allowed: bool = False
     # What the card shows, kept so a client that resumes the session can be
     # shown the same question again.
     frame: dict[str, Any] = field(default_factory=dict)
@@ -258,12 +261,16 @@ class Session:
             "action": action, "detail": detail, "danger": danger.name,
             "expires_at": time.time() + self.confirm_timeout,
         }
+        # What the third button may say (#199). Read here, on the worker that
+        # raised the card, because enforce() sets it thread-locally.
+        always = safety.always_offer()
         pending = _Pending(
             frame=frame(
                 "confirm_request", id=turn_id, confirm_id=confirm_id,
-                action=action, detail=detail, danger=danger.name,
+                action=action, detail=detail, danger=danger.name, always=always,
             ),
             expires_at=info["expires_at"],
+            always_allowed=bool(always["allowed"]),
         )
         with self._pending_lock:
             self._pending[confirm_id] = pending
@@ -286,6 +293,7 @@ class Session:
             detail=detail,
             danger=danger.name,
             timeout=self.confirm_timeout,
+            always=always,
         )
 
         # A phone that raises must not leave the browser card unanswerable.
@@ -301,6 +309,7 @@ class Session:
         finally:
             self._waiting(False)
         approved = bool(answered and pending.approved)
+        decision = pending.decision if approved else "deny"
 
         with self._pending_lock:
             self._pending.pop(confirm_id, None)
@@ -322,6 +331,7 @@ class Session:
             action=action,
             danger=danger.name,
             approved=approved,
+            decision=decision if answered else "expired",
             answered_by=pending.by,
             timed_out=not answered,
             waited_seconds=round(time.monotonic() - started, 2),
@@ -335,13 +345,16 @@ class Session:
         self.emit(
             "confirm_resolved", id=turn_id, confirm_id=confirm_id,
             outcome=outcome, by=pending.by,
+            decision=decision if answered else "expired",
         )
         if not answered:
             # Kept for clients that predate confirm_resolved.
             self.emit(
                 "confirm_expired", id=turn_id, confirm_id=confirm_id,
             )
-        return approved
+        # "always" (a truthy str) tells safety.enforce to store the rule; it is
+        # honoured there only if the card offered it.
+        return safety.ALWAYS if decision == "always" else approved
 
     def _waiting(self, on: bool) -> None:
         """Tell the agent-state tracker (if any) a card opened or closed."""
@@ -352,7 +365,7 @@ class Session:
             except Exception:
                 pass
 
-    def resolve_confirm(self, confirm_id: str, approve: bool, by: str = "web") -> bool:
+    def resolve_confirm(self, confirm_id: str, approve: "bool | str", by: str = "web") -> bool:
         """Answer a pending confirmation. Returns False if it was unknown or
         already answered (first answer wins).
 
@@ -368,7 +381,18 @@ class Session:
                 return False
             # Set the verdict before waking the worker, or it can observe the
             # default False and deny an action the user actually approved.
-            pending.approved = bool(approve)
+            # `approve` is a bool (old clients, the phone) or a decision string.
+            # Anything that is not exactly "approve"/"always" is a denial, and
+            # "always" on a card that did not offer it is a plain approval.
+            if isinstance(approve, str):
+                decision = approve if approve in ("approve", "always") else "deny"
+            else:
+                decision = "approve" if approve else "deny"
+            if decision == "always" and not pending.always_allowed:
+                audit.record("web.always_not_offered", confirm_id=confirm_id, by=by)
+                decision = "approve"
+            pending.decision = decision
+            pending.approved = decision != "deny"
             pending.by = by
         pending.event.set()
         return True
