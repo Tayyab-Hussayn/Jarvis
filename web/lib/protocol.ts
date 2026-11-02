@@ -27,9 +27,9 @@ export type ServerFrame =
   // Authoritative live state of one agent (engine #146). Replaces the state the
   // page derives from the frames above.
   | { t: "agent_state"; agent: string; state: string; task?: string; tool?: string; delegation?: string; since?: number; report?: { outcome: string; summary: string } }
-  | { t: "confirm_request"; id: string; confirm_id: string; action: string; detail: string; danger: Danger; timeout: number }
+  | { t: "confirm_request"; id: string; confirm_id: string; action: string; detail: string; danger: Danger; timeout: number; always?: AlwaysOffer }
   | { t: "confirm_expired"; id: string; confirm_id: string }
-  | { t: "confirm_resolved"; id: string; confirm_id: string; outcome: "approved" | "denied" | "expired"; by: string }
+  | { t: "confirm_resolved"; id: string; confirm_id: string; outcome: "approved" | "denied" | "expired"; by: string; decision?: string }
   | { t: "answer"; id: string; text: string }
   | { t: "turn_end"; id: string; iterations: number; tool_calls?: string[]; error?: string; cancelled?: boolean }
   | { t: "cancelled"; id?: string; pending_confirms?: number; tasks_cancelled?: number; other_tasks?: string[] }
@@ -70,7 +70,9 @@ export type ClientFrame =
   // Panels invoke a skill directly — no model, no tokens. Confirmations still
   // route through the same bridge as a model-issued call.
   | { t: "run"; id: string; skill: string; args: Record<string, unknown> }
-  | { t: "confirm_reply"; confirm_id: string; approve: boolean }
+  // `decision` is the answer; `approve` is kept so a server from before the
+  // 3-button card still understands it (always -> plain approve).
+  | { t: "confirm_reply"; confirm_id: string; decision: Decision; approve: boolean }
   // Stop a running turn. The agent loop checks a flag between tool rounds;
   // work already in flight still has to finish, so this is "start nothing
   // more", not "abort instantly".
@@ -169,6 +171,15 @@ export interface ToolCallView {
   argsText?: string;
 }
 
+/** How a confirmation card is answered. `always` also stores a rule (engine #199). */
+export type Decision = "approve" | "always" | "deny";
+
+/** Whether the server offers "Always allow" on a card, and for what exact signature. */
+export interface AlwaysOffer {
+  allowed: boolean;
+  signature: string;
+}
+
 export interface ConfirmView {
   confirmId: string;
   action: string;
@@ -179,6 +190,10 @@ export interface ConfirmView {
   status: "pending" | "approved" | "denied" | "expired";
   /** Who answered, when the server said ("phone", "web"); empty otherwise. */
   by?: string;
+  /** Present only when the server offered "Always allow" for this action. */
+  always?: AlwaysOffer;
+  /** What was chosen, when it was "always" (shown on the closed card). */
+  decision?: Decision;
 }
 
 /** Phases in which a voice session is genuinely live.
