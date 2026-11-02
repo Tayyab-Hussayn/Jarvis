@@ -15,6 +15,7 @@ The model is loaded once and cached; the first run downloads weights.
 from __future__ import annotations
 
 import threading
+import wave
 from pathlib import Path
 
 from .. import audit, config
@@ -174,6 +175,36 @@ def preload_translate() -> None:
     _load_translate_model()
 
 
+def _audio_input(path: Path):
+    """The WAV as a 16 kHz mono float32 array, or the path when it is not a PCM WAV.
+
+    faster-whisper decodes a *path* with PyAV and calls
+    ``av.open(..., metadata_errors="ignore")``. PyAV 19 rejects that keyword,
+    so on a machine with av 19 every call failed with "open() got an
+    unexpected keyword argument 'metadata_errors'" (niri laptop, #185). Handing
+    it an array skips PyAV entirely, so av 18 and av 19 behave the same.
+    """
+    try:
+        import numpy as np
+
+        with wave.open(str(path), "rb") as w:
+            width, channels, rate = w.getsampwidth(), w.getnchannels(), w.getframerate()
+            frames = w.readframes(w.getnframes())
+        if width != 2:
+            return str(path)
+        data = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+        if channels > 1:
+            data = data[: len(data) // channels * channels].reshape(-1, channels).mean(axis=1)
+        if rate != 16000 and len(data):
+            n = int(len(data) * 16000 / rate)
+            data = np.interp(
+                np.linspace(0, len(data) - 1, n), np.arange(len(data)), data
+            ).astype(np.float32)
+        return data
+    except Exception:
+        return str(path)
+
+
 def translate_to_english(path: str | Path) -> str:
     """Turn a WAV file of speech in any language into English text.
 
@@ -188,7 +219,7 @@ def translate_to_english(path: str | Path) -> str:
     model = _load_translate_model()
     try:
         segments, info = model.transcribe(
-            str(audio), task="translate", language=None, beam_size=1,
+            _audio_input(audio), task="translate", language=None, beam_size=1,
             vad_filter=True, condition_on_previous_text=False,
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
@@ -227,7 +258,7 @@ def _transcribe_faster_whisper(audio: Path, language: str) -> str:
     model = _load_faster_whisper()
     try:
         segments, info = model.transcribe(
-            str(audio),
+            _audio_input(audio),
             language=language or None,
             beam_size=1,              # greedy: much faster, fine for commands
             vad_filter=True,          # drop leading/trailing silence
