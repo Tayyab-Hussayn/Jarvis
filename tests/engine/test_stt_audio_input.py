@@ -70,17 +70,23 @@ def test_translate_and_transcribe_never_hand_whisper_a_path(tmp_path, monkeypatc
     assert isinstance(model.seen, np.ndarray)
 
 
-def test_live_session_warms_the_translate_model_at_start(backend, monkeypatch):
+def test_live_session_never_warms_the_translate_model(backend, monkeypatch):
+    """#192: Whisper stays out of Live entirely (no warm-up thread, no model load)."""
+    import time
+
     from kravein.live import LiveSession, NetworkAudio
 
     called = []
     monkeypatch.setattr(audit, "record", lambda *a, **k: None)
-    monkeypatch.setattr(stt, "translate_available", lambda: True)
-    monkeypatch.setattr(stt, "preload_translate", lambda: called.append(1))
+    monkeypatch.setattr(stt, "translate_available", lambda: called.append("avail") or True)
+    monkeypatch.setattr(stt, "preload_translate", lambda: called.append("preload"))
     backend.script = lambda _s: iter(())
     net = NetworkAudio()
-    s = LiveSession(source=net, sink=net, observer=lambda k, t: None)
+    events = []
+    s = LiveSession(source=net, sink=net, observer=lambda k, t: events.append(k))
     t, _ = _run_in_thread(s)
-    assert _wait(lambda: called, 5)
+    assert _wait(lambda: "info" in events, 5)
+    time.sleep(0.3)
     s.stop()
     t.join(3)
+    assert called == []
