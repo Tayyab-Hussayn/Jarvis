@@ -628,6 +628,8 @@ def create_app(token: str | None = None) -> Any:
                 session.emit("turn_end", id=turn_id, iterations=0, error=str(exc))
             finally:
                 busy.clear()
+                # An approval that arrived while this turn ran starts now.
+                _pickup_approved(held)
 
         def _dispatch(skill: str, args: dict) -> str:
             """Run one skill on the worker thread, with confirmations wired.
@@ -1144,7 +1146,13 @@ def _run_approved(held: Any, p: dict) -> bool:
     turn_id = "ap-" + pid
     session = held.session
     held.busy.set()
-    session.record_user_turn(turn_id, text)
+    try:
+        session.record_user_turn(turn_id, text)
+    except Exception as exc:
+        # Claimed but never started: do not leave it "running" or the session busy.
+        held.busy.clear()
+        proposals.finish(pid, False, f"Could not start: {type(exc).__name__}: {exc}")
+        return False
 
     async def go() -> None:
         session.turn_id = turn_id

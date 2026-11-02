@@ -598,3 +598,30 @@ def test_rest_skips_a_busy_session_and_picks_an_idle_one(web, monkeypatch):
                          json={"decision": "approve"})
             assert r.json()["proposal"]["status"] in ("running", "done")
             sessions[-1].busy.clear()
+
+
+def test_a_turn_started_for_an_approval_cannot_decide_another_proposal(wipes):
+    other = make("Wipe y", task="wipe y")
+    agent, stub = _agent_with([say("x")], profile="orchestrator", source="web")
+    _script(stub, [call("decide_proposal", id=other["id"], decision="approve"), say("ok")])
+    agent.ask(f"{pr.APPROVED_PREFIX}zzz: wipe x")
+    assert pr.get(other["id"])["status"] == "pending"
+    assert any(r["event"] == "proposal.decide_in_approved_turn_refused" for r in audit_events())
+
+
+def test_an_approval_made_while_the_session_is_busy_starts_when_it_goes_idle(web, monkeypatch):
+    p = make()
+    _router(monkeypatch, {"orch": [say("hi")], "child": [say("OUTCOME: done\nSUMMARY: ok")]})
+    with web.websocket_connect(f"/ws?token={TOKEN}", headers=WS_HEADERS) as ws:
+        assert json.loads(ws.receive_text())["t"] == "hello"
+        held = list(web.app.state.sessions.items())[0]
+        held.busy.set()
+        r = web.post(f"/api/proposals/{p['id']}/decide", headers=AUTH,
+                     json={"decision": "approve"})
+        assert r.json()["proposal"]["status"] == "approved"
+        held.busy.clear()
+        ws.send_text(json.dumps({"t": "ask", "id": "t1", "text": "hello"}))
+        deadline = time.time() + 8
+        while pr.get(p["id"])["status"] != "done" and time.time() < deadline:
+            time.sleep(0.05)
+    assert pr.get(p["id"])["status"] == "done"

@@ -291,10 +291,13 @@ def approved_ids() -> list[str]:
         )]
 
 
+APPROVED_PREFIX = "Owner approved proposal #"
+
+
 def approval_prompt(p: dict[str, Any]) -> str:
     """The Orchestrator turn that starts an approved task."""
     return (
-        f"Owner approved proposal #{p['id']}: {p.get('task', '')}\n"
+        f"{APPROVED_PREFIX}{p['id']}:{p.get('task', '')}\n"
         f"Hand it to the `{p.get('agent', '')}` agent with delegate and report the result. "
         "Anything destructive still needs the owner's confirmation."
     )
@@ -398,6 +401,12 @@ def decide_proposal(id: str, decision: str, _source: str = "", _context: Any = N
     if not _is_orchestrator(_context, "decide_proposal"):
         return "decide_proposal is only available to the Orchestrator."
     pid = id.strip().lstrip("#")
+    if str(getattr(_context, "turn_text", "")).startswith(APPROVED_PREFIX):
+        # A turn the server started for an approved proposal carries no new
+        # owner words: it must not approve a different proposal (or be steered
+        # to by text read during the task).
+        audit.record("proposal.decide_in_approved_turn_refused", id=pid, source=_source)
+        return "This turn only carries out an approved proposal; it cannot decide others."
     if (getattr(_context, "_proposed", {}) or {}).get(pid) == getattr(_context, "turn_no", -1):
         # Code, not prompt: the owner's yes must come in a later message than
         # the one in which the model made the proposal.
