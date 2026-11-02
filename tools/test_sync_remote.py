@@ -7,8 +7,15 @@ against a local directory (host "-") and check what --delete spares.
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "tools" / "sync-remote.sh"
+
+# The script lists tracked files with git; the niri laptop gets files over rsync
+# and has no .git, so there these tests would fail for a reason that is not a bug.
+pytestmark = pytest.mark.skipif(not (ROOT / ".git").exists(),
+                                reason="needs a git checkout (the laptop has none)")
 
 PROTECTED = [
     ".venv/x", "web/node_modules/x", "web/.next/x", "kravein/web-dist/x",
