@@ -762,11 +762,21 @@ def create_app(token: str | None = None) -> Any:
         #
         # (This is exactly the assumption that breaks for remote access, which
         # is why phone support stays a separate piece of work.)
-        def voice_observer(kind: str, text: str) -> None:
+        def voice_observer(kind: str, text: str, data: dict | None = None) -> None:
             # Voice turns deliberately never enter `messages` — the text
             # console keeps its own history and must not be rewritten by a
             # parallel spoken conversation.
-            session.emit("voice_state", phase=kind, text=text)
+            #
+            # `turn`/`final`/`replace` tell the client which spoken line a
+            # transcript belongs to. Dropped here, a late English replace
+            # arrived untagged and the page filed it as a new turn under the
+            # reply (the line showed twice). Whitelisted, not `**data`: the
+            # engine's data dict is not a wire contract.
+            extra = {
+                k: data[k] for k in ("turn", "final", "replace")
+                if data and k in data
+            }
+            session.emit("voice_state", phase=kind, text=text, **extra)
 
         def voice_confirmer(action: str, detail: str, danger: Any) -> bool:
             """Confirm a destructive voice action in the browser, not out loud.
