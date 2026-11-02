@@ -325,6 +325,13 @@ _DESTRUCTIVE_PATTERNS = [
     (r"\bchown\b|\bchmod\b", "changes ownership or permissions"),
     (r">\s*[^>|&\s]", "overwrites a file via redirect"),
     (r"\bdrop\s+(table|database)\b", "drops database objects"),
+    # Owner rule: no autostart. These create a unit, a timer or a cron entry that
+    # runs later without the owner there; restart/status/start/stop stay as they are.
+    (r"\bsystemctl\b(?=[^|;\n]*--user)[^|;\n]*\b(enable|reenable|link|preset|"
+     r"add-wants|add-requires|revert|edit|set-default)\b", "creates or enables a user unit"),
+    (r"\bsystemd-run\b", "starts a transient unit or timer"),
+    (r"\bcrontab\b(?!\s+-l\b)", "changes scheduled jobs"),
+    (r"\bloginctl\s+enable-linger\b", "keeps user services running after logout"),
 ]
 
 _MODERATE_PATTERNS = [
@@ -475,6 +482,14 @@ def classify_command(command: str, cwd: "str | os.PathLike | None" = None) -> Ve
                 matched.append((level, why))
     if _overwrites_existing(text, where):
         matched.append((Danger.DESTRUCTIVE, "overwrites an existing file"))
+    blocked_reason, startup_reason = _write_findings(text, where)
+    if blocked_reason:
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = blocked_reason
+        return verdict
+    if startup_reason:
+        matched.append((Danger.DESTRUCTIVE, startup_reason))
 
     if matched:
         verdict.danger = max(level for level, _ in matched)
@@ -493,7 +508,8 @@ def classify_command(command: str, cwd: "str | os.PathLike | None" = None) -> Ve
             verdict.danger = Danger.CRITICAL
             return verdict
 
-    if verdict.danger == Danger.DESTRUCTIVE:
+    # Never "Always" for anything that touches a startup surface or creates a unit.
+    if verdict.danger == Danger.DESTRUCTIVE and not startup_reason:
         verdict.signature = command_signature(text, where)
     return verdict
 
@@ -757,6 +773,145 @@ def _overwrites_existing(command: str, cwd: Path | None) -> bool:
             cwd = None
     return False
 
+
+
+# -- write targets (#199 review): every shell write goes through check_path ----
+#
+# The regex classifier only looked at verbs, so `cp x ~/.config/systemd/user/e.service`
+# (MODERATE) landed a persistent user unit with no card - the class #136 put into
+# sensitive_kind(). Every path a command writes to now goes through check_path,
+# whatever the verb and whether or not the target exists: a login/startup
+# surface means at least DESTRUCTIVE (a card, never "Always"); Kravein's own
+# dirs and protected system paths are refused.
+
+_WRAPPERS = frozenset({"env", "nice", "nohup", "time", "command", "exec", "busybox",
+                       "ionice", "setsid", "stdbuf", "timeout"})
+_DEST_LAST = frozenset({"cp", "install", "ln", "rsync", "scp"})
+_ALL_WRITTEN = frozenset({"tee", "touch", "mkdir", "mkfifo", "mknod", "truncate", "mv"})
+_DEV_OK = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"})
+
+
+def _surface_fragments() -> tuple[list[str], list[str]]:
+    """(login/startup fragments, Kravein-private fragments), home-relative, for
+    commands whose paths cannot be resolved (globs, braces, relative, `$VAR`)."""
+    home = Path.home()
+    login = [str(p.relative_to(home)) for p in _login_surface_paths()]
+    private: list[str] = []
+    for root in _kravein_private_roots():
+        try:
+            private.append(str(Path(root).relative_to(home)))
+        except ValueError:
+            private.append(str(root))
+    return login, private
+
+
+def _surface_mention(text: str) -> tuple[str, str]:
+    """(blocked reason, confirm reason) for a string that names a sensitive place."""
+    login, private = _surface_fragments()
+    for frag in private:
+        if frag and frag in text:
+            return (f"{frag} is inside Kravein's own config/state/data; the "
+                    "assistant may not write there"), ""
+    for frag in login:
+        if frag in text or (frag.endswith("systemd/user") and "systemd/user" in text) or (
+                frag.endswith("autostart") and "autostart" in text):
+            return "", f"writes to a login/startup location ({frag})"
+    return "", ""
+
+
+def _glob_surface_hit(raw: str) -> tuple[str, str]:
+    """`~/.config/sys*/user/x`: could this glob'd directory part be a sensitive place?
+
+    Matched segment by segment against every login surface and Kravein dir; a
+    glob that is shallower than the surface (`~/*/`) counts too. Over-asking on
+    a glob destination is the safe error.
+    """
+    expanded = os.path.expanduser(raw) if raw.startswith("~") else raw
+    if not any(c in expanded for c in "*?[") or "/" not in expanded:
+        return "", ""
+    parts = expanded.rsplit("/", 1)[0].split("/")
+    if not parts or parts[0] != "":
+        return "", ""                    # relative glob: the textual fragments decide
+    def hits(root: Path) -> bool:
+        rparts = str(resolve_target(root)).split("/")
+        return all(fnmatch.fnmatchcase(rp, p) for rp, p in zip(rparts, parts))
+    if any(hits(r) for r in _kravein_private_roots()):
+        return "that glob can reach Kravein's own config/state/data", ""
+    if any(hits(r) for r in _login_surface_paths()):
+        return "", "writes to a login/startup location (glob)"
+    return "", ""
+
+
+def _segment_write_targets(argv: list[str], redirects: list[tuple[str, str]]) -> list[str]:
+    out = [
+        t for op, t in redirects
+        if op != "<" and not (op == ">&" and (t.isdigit() or t == "-")) and t not in _DEV_OK
+    ]
+    args = list(argv)
+    while args and os.path.basename(args[0]) in _WRAPPERS:
+        args = args[1:]
+        while args and ("=" in args[0] or args[0].startswith("-")):
+            args = args[1:]
+    if not args:
+        return out
+    prog, rest = os.path.basename(args[0]), args[1:]
+    pos = [a for a in rest if not a.startswith("-")]
+    for i, a in enumerate(rest):
+        if a in ("-t", "--target-directory") and i + 1 < len(rest):
+            out.append(rest[i + 1])
+        elif a.startswith("--target-directory="):
+            out.append(a.split("=", 1)[1])
+    if prog in _DEST_LAST:
+        out += pos[-1:]
+    elif prog in _ALL_WRITTEN:
+        out += pos
+    elif prog == "dd":
+        out += [a[3:] for a in rest if a.startswith("of=")]
+    elif prog in ("curl", "wget"):
+        for i, a in enumerate(rest):
+            if a in ("-o", "-O", "--output", "--output-document", "-P", "--directory-prefix"):
+                if i + 1 < len(rest):
+                    out.append(rest[i + 1])
+            elif a.startswith(("--output=", "--output-document=", "--directory-prefix=")):
+                out.append(a.split("=", 1)[1])
+    return [t for t in out if t not in _DEV_OK]
+
+
+def _write_findings(text: str, cwd: Path | None) -> tuple[str, str]:
+    """(blocked reason, confirm reason); ("", "") when every write target is ordinary."""
+    segments = _segments(text)
+    if segments is None:
+        # Cannot see the argv ($VAR, substitution, heredoc, newline...). Only a
+        # command that looks like it writes is held to the textual check.
+        writes = _classify_level(text) >= Danger.MODERATE or bool(_REWRITER.search(text)) or ">" in text
+        return _surface_mention(text) if writes else ("", "")
+    tainted = False
+    for argv, redirects in segments:
+        if os.path.basename(argv[0]) == "cd":
+            where = argv[1] if len(argv) > 1 else "~"
+            resolved = _literal_path(where, cwd)
+            if resolved is None:
+                tainted = tainted or any(_surface_mention(where))
+                cwd = None
+            else:
+                cwd = resolved
+        for raw in _segment_write_targets(argv, redirects):
+            path = _literal_path(raw, cwd)
+            if path is None:
+                blocked, confirm = _surface_mention(raw)
+                if not (blocked or confirm):
+                    blocked, confirm = _glob_surface_hit(raw)
+                if blocked:
+                    return blocked, ""
+                if confirm or (tainted and not raw.startswith(("/", "~"))):
+                    return "", confirm or "writes under a login/startup location"
+                continue
+            verdict = check_path(path, write=True)
+            if verdict.blocked:
+                return verdict.block_reason, ""
+            if verdict.danger >= Danger.DESTRUCTIVE:
+                return "", "; ".join(verdict.reasons) or "writes to a login/startup location"
+    return "", ""
 
 # -- "Always" signatures -------------------------------------------------------
 #
