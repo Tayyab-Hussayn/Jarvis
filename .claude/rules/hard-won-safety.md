@@ -51,3 +51,10 @@ turned out not to be enforcement.
 **An unattended refusal has to be remembered too.** `enforce()` raised `ConfirmationRequired` at
 the `confirmer is _deny` branch *before* recording anything in the per-turn denial memory, so the
 mechanism built exactly to catch a retry under a different verb never saw the first refusal.
+
+**Shell commands are classified by parsed argv, and every write target goes through `check_path` (#204, #208, #209).**
+- A substring match made `ls 2>/dev/null` ask, while `cp` into `~/.config/systemd/user/` ran with no card: a silent autostart foothold.
+- Write verbs (cp, mv, install, ln, tee, redirects, touch, mkdir, rsync, `dd of=`) now resolve their target in the command's `cwd` and run it through `sensitive_kind()`.
+- `systemctl --user enable` asks.
+- Inline interpreter code (`python -c`, `node -e`, heredocs, `eval`) is DESTRUCTIVE: `python3 -c 'shutil.rmtree(...)'` was SAFE before #209. `sh -c` is judged by its inner string.
+- "Always approve" rules are written only by the server after an owner click, apply only to live owner sources, and are never offered for anything DESTRUCTIVE or worse.
