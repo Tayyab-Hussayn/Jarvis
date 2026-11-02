@@ -10,6 +10,8 @@ resolved to the first one.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from .. import gentle
 from ..platform import browser, desktop, inputs
 from ..registry import skill
@@ -19,14 +21,23 @@ from .windows import AmbiguousTarget, _describe, _resolve_one
 _BROWSER_WORDS = {"browser", "chrome", "page", "web", "tab", "this page", "the page"}
 
 
-@skill(category="interact", danger=Danger.MODERATE)
+@skill(
+    category="interact", danger=Danger.MODERATE,
+    aliases={
+        "stop_gentle_scroll": {"action": "stop"},
+        "gentle_scroll_speed": {"action": "speed"},
+        "gentle_scroll_status": {"action": "status"},
+    },
+)
 def gentle_scroll(
     target: str = "",
     speed: str = "",
     direction: str = "down",
     seconds: int = 0,
+    action: Literal["start", "stop", "speed", "status"] = "start",
 ) -> str:
-    """Start scrolling something slowly and continuously, hands-free.
+    """Slow, continuous, hands-free scrolling: start it, stop it, change its speed, or check it.
+
 
     Works on a page open in Kravein's browser, or on a native window such as
     the Spotify app or a document viewer. It keeps going until you say stop,
@@ -44,7 +55,19 @@ def gentle_scroll(
             slow, gentle, medium or fast.
         direction: down or up.
         seconds: Stop automatically after this long. 0 uses the default limit.
+        action: start (default; uses target, direction, seconds); stop; speed (needs speed); status.
     """
+    if action == "stop":
+        return stop_gentle_scroll()
+    if action == "status":
+        return gentle_scroll_status()
+    if action == "speed":
+        if not speed:
+            return "speed needs a speed (1-10 or slow/medium/fast)."
+        return gentle_scroll_speed(speed)
+    if action != "start":
+        return f"Unknown action '{action}'. Use start, stop, speed or status."
+
     rate, problem = gentle.parse_rate(speed, gentle.default_rate())
     if problem:
         return problem
@@ -116,14 +139,12 @@ def _browser_is_focused() -> bool:
     return window is not None and "chrom" in (window.app or "").lower()
 
 
-@skill(category="interact", danger=Danger.SAFE)
 def stop_gentle_scroll() -> str:
     """Stop the gentle scroll that is running."""
     message = gentle.stop("you asked it to stop")
     return message or "Nothing is being scrolled right now."
 
 
-@skill(category="interact", danger=Danger.SAFE)
 def gentle_scroll_speed(speed: str) -> str:
     """Change the speed of the gentle scroll while it is running.
 
@@ -139,7 +160,6 @@ def gentle_scroll_speed(speed: str) -> str:
     return gentle.set_rate(rate)
 
 
-@skill(category="interact", danger=Danger.SAFE)
 def gentle_scroll_status() -> str:
     """Whether anything is being scrolled, and how fast."""
     return (

@@ -20,9 +20,13 @@ export type ServerFrame =
   // locally when it sends).
   | { t: "user_turn"; id: string; text: string }
   | { t: "turn_start"; id: string; skill?: string }
-  | { t: "thinking"; id: string; text: string }
-  | { t: "tool_call"; id: string; call_id: string; name: string; args: Record<string, unknown>; display: string }
-  | { t: "tool_result"; id: string; call_id: string; name: string; result: string }
+  // `agent`/`delegation` appear on a sub-agent's activity (engine #139/#146).
+  | { t: "thinking"; id: string; text: string; agent?: string; delegation?: string }
+  | { t: "tool_call"; id: string; call_id: string; name: string; args: Record<string, unknown>; display: string; agent?: string; delegation?: string }
+  | { t: "tool_result"; id: string; call_id: string; name: string; result: string; agent?: string; delegation?: string }
+  // Authoritative live state of one agent (engine #146). Replaces the state the
+  // page derives from the frames above.
+  | { t: "agent_state"; agent: string; state: string; task?: string; tool?: string; delegation?: string; since?: number; report?: { outcome: string; summary: string } }
   | { t: "confirm_request"; id: string; confirm_id: string; action: string; detail: string; danger: Danger; timeout: number }
   | { t: "confirm_expired"; id: string; confirm_id: string }
   | { t: "confirm_resolved"; id: string; confirm_id: string; outcome: "approved" | "denied" | "expired"; by: string }
@@ -35,6 +39,9 @@ export type ServerFrame =
   // Pushed by the routine pass inside the same tick. A reminder that was
   // just sent, so an open Habits panel updates without waiting for a poll.
   | { t: "routine_event"; routine: string; step: string; label: string; text: string; nag: number }
+  // A proposal was created or changed state (engine #144). Parsed defensively
+  // by `lib/proposals.ts`; the row shape is the server's.
+  | { t: "proposal"; proposal: unknown }
   | { t: "error"; id?: string; message: string }
   | { t: "reset_ok" }
   | { t: "voice_state"; phase: string; text: string; audio?: "device" | "laptop" }
@@ -137,6 +144,9 @@ export interface ToolCallView {
   display: string;
   result?: string;
   done: boolean;
+  /** Set when a delegated sub-agent made this call (not the Orchestrator). */
+  agent?: string;
+  delegation?: string;
   /** The socket died while this ran; the result is unknown, not failed. */
   lost?: boolean;
   /** Arguments as text, for calls that arrive already rendered rather than

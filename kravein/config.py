@@ -1,15 +1,14 @@
 """Configuration and filesystem layout.
 
-The Windows build kept everything next to the script and leaned on
-%LOCALAPPDATA%. Here we follow the XDG Base Directory spec instead, while
-still reading the original `config/*.json` files so existing setups keep
-working.
+Everything follows the XDG Base Directory spec; nothing is read from the
+repository checkout.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -17,7 +16,6 @@ from typing import Any
 APP_NAME = "kravein"
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-LEGACY_CONFIG_DIR = BASE_DIR / "config"
 
 
 def _xdg(var: str, default: Path) -> Path:
@@ -32,30 +30,10 @@ XDG_STATE_HOME = _xdg("XDG_STATE_HOME", HOME / ".local" / "state")
 XDG_CACHE_HOME = _xdg("XDG_CACHE_HOME", HOME / ".cache")
 XDG_RUNTIME_DIR = _xdg("XDG_RUNTIME_DIR", Path(f"/run/user/{os.getuid()}"))
 
-# The assistant was called Brahma-Echo until 2026-08-24 and its XDG
-# directories were named after it. The rename moved them, but a directory that
-# was missed — or one restored from an old backup, or written by a stale
-# checkout — would otherwise mean silently starting from scratch: no API keys,
-# no audit history, a browser profile with no logins. So the old location is
-# adopted when the new one does not exist yet.
-#
-# This is transitional. See the rename note in CLAUDE.md: legacy paths are to
-# be removed once nothing is falling back to them.
-LEGACY_APP_NAME = "brahma-echo"
-
-
-def _app_dir(base: Path) -> Path:
-    current = base / APP_NAME
-    legacy = base / LEGACY_APP_NAME
-    if not current.exists() and legacy.exists():
-        return legacy
-    return current
-
-
-CONFIG_DIR = _app_dir(XDG_CONFIG_HOME)
-DATA_DIR = _app_dir(XDG_DATA_HOME)
-STATE_DIR = _app_dir(XDG_STATE_HOME)
-CACHE_DIR = _app_dir(XDG_CACHE_HOME)
+CONFIG_DIR = XDG_CONFIG_HOME / APP_NAME
+DATA_DIR = XDG_DATA_HOME / APP_NAME
+STATE_DIR = XDG_STATE_HOME / APP_NAME
+CACHE_DIR = XDG_CACHE_HOME / APP_NAME
 RUNTIME_DIR = XDG_RUNTIME_DIR / APP_NAME
 
 AUDIT_LOG = STATE_DIR / "audit.jsonl"
@@ -135,6 +113,23 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "confirm_by_voice": True,
         "max_reply_chars": 700,
     },
+    # Orchestrator + sub-agents (kb/plans/orchestrator-subagents.md). Off: every
+    # transport behaves exactly as before.
+    "agents": {
+        "orchestrator": False,
+        # Tool rounds the Orchestrator may spend on one request before its next
+        # round can only `delegate`.
+        "escalate_after_rounds": 3,
+        "delegate_max_rounds": 6,
+        "delegate_timeout_seconds": 300,
+        "report_max_chars": 1500,
+        # Proposals queue (phase 4). Pending/approved ones expire after this.
+        "proposal_ttl_days": 7,
+        "proposal_max_pending": 20,
+        # The Orchestrator reviews state once a day and proposes next steps.
+        "daily_review": False,
+        "daily_review_time": "09:00",
+    },
     "llm": {
         # cline | gemini | openrouter.
         #
@@ -147,7 +142,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         #
         # Gemini is still used for voice (Live native-audio) and vision, where
         # it is the only option — see voice.live_model below.
-        "provider": "cline",
+        "provider": "zen",
         # Cline leads; NovaRouter is the backup. A single-entry chain meant one
         # provider outage took the whole assistant down with nowhere to fail
         # over, which matters much more now that the UI is reachable from a
@@ -155,7 +150,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         #
         # NovaRouter stays inert until a key exists — `available()` is false
         # without one, so the breaker skips it and nothing changes.
-        "provider_order": ["cline", "novarouter"],
+        "provider_order": ["zen", "cline", "novarouter"],
+        # Owner 2026-11-01: text mode leads with DeepSeek V4.1 Flash on OpenCode
+        # Zen (the "provider" above). Without a key `available()` is false and
+        # the chain is exactly cline -> novarouter as before.
+        # Endpoint and model id verified against the Zen docs and /models.
+        "zen_base_url": "https://opencode.ai/inference/openai/v1",
+        "zen_model": "deepseek-v4.1-flash",
+        "zen_timeout_seconds": 45,
+        # 402 (no credit) / 429 (usage limit) skip Zen this long, at once.
+        "zen_blocked_cooldown_seconds": 1800,
         # Kept configured for vision; not in the agent's text chain.
         "gemini_model": "gemini-3.6-flash",
         # A stalled Gemini is as unusable as a down one, so cap the wait and
@@ -286,17 +290,34 @@ def load_settings(reload: bool = False) -> dict[str, Any]:
             except (OSError, json.JSONDecodeError) as exc:
                 print(f"[config] ignoring malformed {path}: {exc}")
 
-        # Fall back to the original Windows-era settings file if present.
-        if not user:
-            legacy = LEGACY_CONFIG_DIR / "app_settings.json"
-            if legacy.exists():
-                try:
-                    user = json.loads(legacy.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    pass
-
+        user = _migrate_user_settings(user)
         _settings_cache = _deep_merge(DEFAULT_SETTINGS, user)
         return _settings_cache
+
+
+def _migrate_user_settings(user: dict[str, Any]) -> dict[str, Any]:
+    """Let a settings.json that merely snapshots the old defaults pick up new ones.
+
+    Saving settings (e.g. `set_llm_provider`) writes the whole merged tree, so a
+    machine ends up with the *defaults of the day* pinned as if chosen. When Zen
+    became the text primary (2026-11-01) such a file kept `cline` first and the
+    new default never applied. Only the exact previous defaults are treated as
+    "never chosen"; any other provider/order is an explicit choice and is kept.
+    In memory only: the file on disk is not rewritten.
+    """
+    llm_section = user.get("llm")
+    if not isinstance(llm_section, dict):
+        return user
+    if (
+        llm_section.get("provider") == "cline"
+        and llm_section.get("provider_order") == ["cline", "novarouter"]
+    ):
+        llm_section = {
+            k: v for k, v in llm_section.items()
+            if k not in ("provider", "provider_order")
+        }
+        user = {**user, "llm": llm_section}
+    return user
 
 
 def save_settings(data: dict[str, Any]) -> None:
@@ -331,19 +352,55 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+_warned_keys_files: set[tuple[str, str]] = set()
+
+
+def _read_api_keys_file(path: Path) -> dict[str, Any]:
+    """Read api_keys.json, saying so when it is unreadable.
+
+    A missing comma made the whole file invalid JSON and every key silently
+    vanished: `doctor` reported each provider as "NOT SET" with no hint that the
+    keys were there. The warning carries only the parser's position, never file
+    content (it holds secrets), and is printed once per distinct error.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        problem = f"cannot be read ({exc.strerror or type(exc).__name__})"
+    else:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            problem = f"is not valid JSON ({exc.msg}, line {exc.lineno} column {exc.colno})"
+        else:
+            if isinstance(data, dict):
+                return data
+            problem = "must be a JSON object"
+    if (str(path), problem) not in _warned_keys_files:
+        _warned_keys_files.add((str(path), problem))
+        print(
+            f"[config] {path} {problem}; no API keys were loaded from it. "
+            "Fix the file (keys set in the environment still work).",
+            file=sys.stderr,
+        )
+    return {}
+
+
 def api_keys() -> dict[str, str]:
-    """Resolve API keys from env, then XDG config, then the legacy file.
+    """Resolve API keys from env, then XDG config.
 
     Environment wins so secrets can be injected by systemd without landing
     on disk.
     """
-    keys = _read_json(LEGACY_CONFIG_DIR / "api_keys.json")
-    keys = _deep_merge(keys, _read_json(CONFIG_DIR / "api_keys.json"))
+    keys = _read_api_keys_file(CONFIG_DIR / "api_keys.json")
 
     env_map = {
         "gemini_api_key": ("KRAVEIN_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
         "openrouter_api_key": ("KRAVEIN_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
         "novarouter_api_key": ("KRAVEIN_NOVAROUTER_API_KEY", "NOVAROUTER_API_KEY"),
+        "opencode_zen_api_key": ("KRAVEIN_OPENCODE_ZEN_API_KEY", "OPENCODE_ZEN_API_KEY"),
     }
     for key, env_names in env_map.items():
         for name in env_names:
@@ -365,6 +422,10 @@ def openrouter_api_key() -> str:
 
 def novarouter_api_key() -> str:
     return api_keys().get("novarouter_api_key", "")
+
+
+def zen_api_key() -> str:
+    return api_keys().get("opencode_zen_api_key", "")
 
 
 # --------------------------------------------------------------------------

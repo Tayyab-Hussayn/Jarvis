@@ -6,8 +6,18 @@
 #
 # Safe to re-run; it only reports what is missing rather than installing
 # system packages behind your back.
+#
+#   ./install-linux.sh --check    steps 1-2 only: report the compositor and
+#                                 missing native tools, write nothing, exit.
 
 set -euo pipefail
+
+CHECK_ONLY=0
+case "${1:-}" in
+  "") ;;
+  --check) CHECK_ONLY=1 ;;
+  *) echo "usage: $0 [--check]" >&2; exit 2 ;;
+esac
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$REPO_DIR/.venv"
@@ -33,12 +43,33 @@ fi
 PYVER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 ok "python $PYVER"
 
+# Which compositor and shell are running. Over ssh (or from a systemd unit)
+# XDG_CURRENT_DESKTOP and NIRI_SOCKET are unset, so the runtime directory is
+# the fallback: a missing env var must not read as "no niri".
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+COMPOSITOR="unknown"
+desktop="${XDG_CURRENT_DESKTOP:-}"
+desktop="${desktop,,}"
+if [[ "$desktop" == *niri* || -n "${NIRI_SOCKET:-}" ]] \
+   || compgen -G "$RUNTIME_DIR/niri.*.sock" >/dev/null; then
+  COMPOSITOR="niri"
+elif [[ "$desktop" == *hyprland* || -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+  COMPOSITOR="hyprland"
+elif [[ "$desktop" == *sway* || -n "${SWAYSOCK:-}" ]]; then
+  COMPOSITOR="sway"
+fi
+ok "compositor: $COMPOSITOR"
+if compgen -G "$RUNTIME_DIR/noctalia-*.sock" >/dev/null || pgrep -x noctalia >/dev/null 2>&1; then
+  ok "shell: Noctalia (owns the notification service)"
+fi
+
 # ---------------------------------------------------------------------------
 bold "2. Native tools the assistant drives"
 
-# capability|binaries (first found wins)|arch package
+# capability|binaries (first found wins)|arch package. The package column is
+# pasted into `pacman -S`, so it is one real package name, never prose.
 CHECKS=(
-  "window control|hyprctl swaymsg wmctrl|hyprland or wmctrl"
+  "window control|hyprctl swaymsg niri wmctrl|wmctrl"
   "input synthesis|ydotool wtype xdotool|ydotool"
   "screen capture|grim grimblast maim scrot|grim"
   "region select|slurp|slurp"
@@ -46,6 +77,7 @@ CHECKS=(
   "volume|wpctl pactl amixer|wireplumber"
   "brightness|brightnessctl light|brightnessctl"
   "media keys|playerctl|playerctl"
+  "terminal|kitty foot alacritty wezterm gnome-terminal konsole|kitty"
   "notifications|notify-send dunstify|libnotify"
   "notification watching|dbus-monitor|dbus"
   "network|nmcli|networkmanager"
@@ -53,6 +85,12 @@ CHECKS=(
   "update checking|checkupdates|pacman-contrib"
   "file opening|xdg-open gio|xdg-utils"
 )
+
+# niri's own IPC is the window backend. Typing needs both ydotool (keys,
+# clicks) and wtype (unicode text), so wtype is checked on its own there.
+if [[ "$COMPOSITOR" == "niri" ]]; then
+  CHECKS+=("text typing (wayland)|wtype|wtype")
+fi
 
 MISSING_PKGS=()
 for entry in "${CHECKS[@]}"; do
@@ -73,6 +111,14 @@ if (( ${#MISSING_PKGS[@]} )); then
   echo
   warn "Install the missing pieces with:"
   echo "    sudo pacman -S --needed ${MISSING_PKGS[*]}"
+else
+  ok "every native tool is present"
+fi
+
+if (( CHECK_ONLY )); then
+  echo
+  ok "--check: nothing was written."
+  exit 0
 fi
 
 # ---------------------------------------------------------------------------

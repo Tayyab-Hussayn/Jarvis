@@ -66,10 +66,6 @@ kravein/web-dist/
 .claude/agent-memory-local/
 
 # Android app: local SDK path and build output
-/brahma-connect-android/local.properties
-/brahma-connect-android/.gradle/
-/brahma-connect-android/.kotlin/
-/brahma-connect-android/**/build/
 /android/local.properties
 /android/.gradle/
 /android/.kotlin/

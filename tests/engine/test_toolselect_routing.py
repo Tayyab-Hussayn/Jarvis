@@ -26,12 +26,14 @@ def _names(decls):
 
 
 def test_routing_off_reproduces_the_full_tool_list():
-    """The default must be byte-identical to what was sent before routing."""
+    """The default must be byte-identical to what was sent before routing.
+
+    `delegate` (category "agents") is Orchestrator-only and never in this list."""
     full = registry.tool_declarations()
     assert "more_tools" not in _names(full)
     assert _names(full) == {
         n for n, s in registry.all_skills().items()
-        if n != "more_tools" and s.available()[0]
+        if n != "more_tools" and s.category != "agents" and s.available()[0]
     }
 
 

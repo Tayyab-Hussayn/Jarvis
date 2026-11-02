@@ -48,6 +48,12 @@ for name in [".claude", "kb", "CLAUDE.md", ".gitignore"]:
         shutil.copytree(s, R / name, ignore=skip)
     else:
         shutil.copy(s, R / name)
+# The real roster freezes nothing since the Windows tree was deleted (#124); pin a fixture list so
+# the frozen-path guard itself stays tested.
+_ro = R / ".claude/team/roster.json"
+_r = json.loads(_ro.read_text())
+_r["frozen"] = {"paths": ["main.py", "actions/", "extra/"]}
+_ro.write_text(json.dumps(_r, indent=2))
 for f, c in {"kravein/agent.py": "x", "kravein/skills/a.py": "y", "docs/spec.md": "z", "src/main.kt": "m",
              "kb/state/project-state.md": "# v1\n", "kb/modules/engine.md": "e", "kb/modules/skills.md": "s",
              "main.py": "win", "actions/a.py": "win", "extra/A.java": "j"}.items():
@@ -102,6 +108,8 @@ expect("edit: orchestrator blocked from owner-only state", c, 2, o)
 print("== bash guard: must block ==")
 for name, cmd, cwd in [
     ("push other agent branch", "git push origin agent/skills", WT),
+    ("push other agent task branch", "git push origin agent/skills-133", WT),
+    ("push own-prefix lookalike", "git push origin agent/engineering", WT),
     ("push main", f"git push origin {M}", WT),
     ("push refs/heads/main", f"git push origin HEAD:refs/heads/{M}", WT),
     ("force", "git push --force", WT),
@@ -134,6 +142,7 @@ print("== bash guard: must allow ==")
 heredoc = f"gh pr create --body-file - <<'EOF'\nSteps: git switch {M}\ngit push origin {M}\nEOF"
 for name, cmd, cwd in [
     ("push own branch", "git push -u origin agent/engine", WT),
+    ("push own task branch", "git push -u origin agent/engine-132", WT),
     ("push own branch 2>&1 (issue #10)", "git push -u origin agent/engine 2>&1", WT),
     ("push own branch piped (issue #10)", "git push -u origin agent/engine 2>&1 | tail -5", WT),
     ("push own branch >/dev/null (issue #10)", "git push -u origin agent/engine >/dev/null 2>&1", WT),
@@ -326,6 +335,13 @@ expect("start-agent.sh can start an agent already assigned (--task, numeric only
 expect("android worktree gets the shared SDK (local.properties + ANDROID_HOME)", 'ANDROID_HOME="$HOME/Android/Sdk"' in sa and "local.properties" in sa, True)
 expect("web node_modules is installed, not symlinked (Turbopack)", "npm ci --prefer-offline" in sa and 'ln -s "$ROOT/web/node_modules"' not in sa, True)
 expect("no SSW leftovers in bin", any("SSW_" in f.read_text() for f in BIN.iterdir() if f.is_file()), False)
+
+print("== identity from a task branch ==")
+for branch, want in [("agent/engine-132", "engine"), ("agent/skills", "skills"), ("agent/nobody-1", "orchestrator")]:
+    code = (f"import sys; sys.path.insert(0, {str(BIN)!r}); import team_lib; "
+            f"team_lib.current_branch = lambda cwd: {branch!r}; print(team_lib.resolve_identity('.'))")
+    p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=clean_env())
+    expect(f"identity {branch}", p.stdout.strip(), want, p.stderr)
 
 shutil.rmtree(T, ignore_errors=True)
 print(f"\n{sum(res)}/{len(res)} passed")

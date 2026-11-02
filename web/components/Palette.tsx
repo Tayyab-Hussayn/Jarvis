@@ -34,14 +34,28 @@ function fuzzyScore(needle: string, haystack: string): number {
   return index === needle.length ? score / haystack.length : 0;
 }
 
+/** A navigation or UI action offered above the skills: open a module, an agent. */
+export interface PaletteCommand {
+  id: string;
+  label: string;
+  hint: string;
+  run: () => void;
+}
+
+type Entry =
+  | { kind: "command"; command: PaletteCommand }
+  | { kind: "skill"; skill: SkillInfo };
+
 export function Palette({
   open,
   skills,
+  commands = [],
   onClose,
   onRun,
 }: {
   open: boolean;
   skills: SkillInfo[];
+  commands?: PaletteCommand[];
   onClose: () => void;
   onRun: (skill: string, args: Record<string, unknown>) => void;
 }) {
@@ -54,9 +68,19 @@ export function Palette({
   const inputRef = useRef<HTMLInputElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  const matches = useMemo(() => {
+  const matches = useMemo<Entry[]>(() => {
     const needle = query.trim().toLowerCase();
-    return skills
+    const cmds: Entry[] = commands
+      .map((command) => ({
+        command,
+        score:
+          fuzzyScore(needle, command.label.toLowerCase()) * 2 +
+          fuzzyScore(needle, command.hint.toLowerCase()),
+      }))
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((row) => ({ kind: "command" as const, command: row.command }));
+    const found: Entry[] = skills
       .map((skill) => ({
         skill,
         score:
@@ -65,9 +89,26 @@ export function Palette({
       }))
       .filter((row) => row.score > 0)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 40)
-      .map((row) => row.skill);
-  }, [skills, query]);
+      .map((row) => ({ kind: "skill" as const, skill: row.skill }));
+    // Commands first: opening a module is the common case and the list is short.
+    return [...cmds, ...found].slice(0, 40);
+  }, [skills, commands, query]);
+
+  /** Run an entry: commands act at once, skills open their argument form. */
+  const pick = (entry: Entry) => {
+    if (entry.kind === "command") {
+      entry.command.run();
+      close();
+      return;
+    }
+    const props = (entry.skill.parameters?.properties ?? {}) as Record<string, unknown>;
+    if (Object.keys(props).length === 0) {
+      onRun(entry.skill.name, {});
+      close();
+    } else {
+      setChosen(entry.skill);
+    }
+  };
 
   const reset = useCallback(() => {
     setQuery("");
@@ -176,21 +217,14 @@ export function Palette({
     } else if (event.key === "Enter") {
       event.preventDefault();
       const picked = matches[cursor];
-      if (!picked) return;
-      const props = (picked.parameters?.properties ?? {}) as Record<string, unknown>;
-      if (Object.keys(props).length === 0) {
-        onRun(picked.name, {});
-        close();
-      } else {
-        setChosen(picked);
-      }
+      if (picked) pick(picked);
     }
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh]"
-      style={{ background: "var(--scrim)" }}
+      className="fixed inset-0 flex items-start justify-center px-4 pt-[12vh]"
+      style={{ background: "var(--scrim)", zIndex: "var(--z-palette)" as unknown as number }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) close();
       }}
@@ -199,7 +233,7 @@ export function Palette({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Run a skill"
+        aria-label="Command palette"
         onKeyDown={onKeyDown}
         className="glass glass-strong w-full max-w-xl overflow-hidden rounded-[var(--radius-lg)]"
         style={{ boxShadow: "var(--shadow-panel), var(--glow-soft)", animation: "node-in var(--motion-base) var(--ease-out)" }}
@@ -210,55 +244,62 @@ export function Palette({
               ref={inputRef}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Run a skill…"
+              placeholder="Open a module, an agent, or run a skill…"
               className="w-full border-b border-[var(--border)] bg-transparent px-4 py-3.5 text-[length:var(--text-base)] outline-none placeholder:text-[var(--text-faint)]"
             />
             <div className="max-h-80 overflow-y-auto py-1">
               {matches.length === 0 ? (
-                <Empty>No skill matches “{query}”.</Empty>
+                <Empty>Nothing matches “{query}”.</Empty>
               ) : (
-                matches.map((skill, index) => (
-                  <button
-                    key={skill.name}
-                    type="button"
-                    onMouseEnter={() => setCursor(index)}
-                    onClick={() => {
-                      const props = (skill.parameters?.properties ?? {}) as Record<
-                        string,
-                        unknown
-                      >;
-                      if (Object.keys(props).length === 0) {
-                        onRun(skill.name, {});
-                        close();
-                      } else {
-                        setChosen(skill);
-                      }
-                    }}
-                    className="flex w-full items-baseline gap-2 px-4 py-2 text-left"
-                    style={{
-                      background: index === cursor ? "var(--accent-dim)" : "transparent",
-                    }}
-                  >
-                    <span
-                      className="shrink-0 font-[family-name:var(--font-mono)] text-[length:var(--text-sm)]"
+                matches.map((entry, index) => {
+                  const isCommand = entry.kind === "command";
+                  const name = isCommand ? entry.command.label : entry.skill.name;
+                  return (
+                    <button
+                      key={isCommand ? `cmd-${entry.command.id}` : entry.skill.name}
+                      type="button"
+                      onMouseEnter={() => setCursor(index)}
+                      onClick={() => pick(entry)}
+                      className="flex w-full items-baseline gap-2 px-4 py-2 text-left"
                       style={{
-                        color: skill.available ? "var(--text)" : "var(--text-faint)",
+                        background: index === cursor ? "var(--accent-dim)" : "transparent",
                       }}
                     >
-                      {skill.name}
-                    </span>
-                    {skill.danger !== "SAFE" && <DangerBadge danger={skill.danger} />}
-                    <span className="min-w-0 flex-1 truncate text-[length:var(--text-xs)] text-[var(--text-muted)]">
-                      {skill.available
-                        ? skill.description
-                        : skill.unavailable_reason || "unavailable"}
-                    </span>
-                  </button>
-                ))
+                      <span
+                        className={
+                          isCommand
+                            ? "shrink-0 text-[length:var(--text-sm)] font-semibold"
+                            : "shrink-0 font-[family-name:var(--font-mono)] text-[length:var(--text-sm)]"
+                        }
+                        style={{
+                          color:
+                            !isCommand && !entry.skill.available
+                              ? "var(--text-faint)"
+                              : "var(--text)",
+                        }}
+                      >
+                        {name}
+                      </span>
+                      {isCommand && (
+                        <span className="eyebrow shrink-0">Go</span>
+                      )}
+                      {!isCommand && entry.skill.danger !== "SAFE" && (
+                        <DangerBadge danger={entry.skill.danger} />
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-[length:var(--text-xs)] text-[var(--text-muted)]">
+                        {isCommand
+                          ? entry.command.hint
+                          : entry.skill.available
+                            ? entry.skill.description
+                            : entry.skill.unavailable_reason || "unavailable"}
+                      </span>
+                    </button>
+                  );
+                })
               )}
             </div>
             <div className="border-t border-[var(--border)] px-4 py-2 text-[length:var(--text-xs)] text-[var(--text-faint)]">
-              ↑↓ to move · Enter to run · Esc to close
+              ↑↓ to move · Enter to open or run · Esc to close
             </div>
           </>
         ) : (

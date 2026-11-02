@@ -1,6 +1,5 @@
 ---
 paths:
-  - "brahma-connect-android/**"
   - "android/**"
 ---
 

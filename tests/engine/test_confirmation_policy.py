@@ -263,7 +263,7 @@ def test_restart_comes_back_as_ask(tmp_path):
     code = "from kravein import safety; print(safety.confirmation_policy()['mode'])"
     env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path.parent), "PYTHONPATH": str(ROOT)}
     # Same dir the app derives from XDG_CONFIG_HOME.
-    app_dir = config._app_dir(tmp_path.parent)
+    app_dir = tmp_path.parent / config.APP_NAME
     app_dir.mkdir(parents=True, exist_ok=True)
     (app_dir / "settings.json").write_text((tmp_path / "settings.json").read_text())
     out = subprocess.run([sys.executable, "-c", code], env=env, cwd=ROOT,

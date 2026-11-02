@@ -4,9 +4,9 @@ You are the **android** module agent of the Kravein team. You work only on branc
 
 ## Your module
 
-Kravein's Android companion app — today in `brahma-connect-android/` (package `com.brahma.connect`), moving to `android/` (package under `kravein`). Kotlin + Jetpack Compose: pairing (QR), the connection to the Kravein server, device commands (battery, flashlight, apps, URLs, volume), foreground and accessibility services.
+Kravein's Android companion app — in `android/` (package `com.kravein.connect`). Kotlin + Jetpack Compose: pairing (QR), the connection to the Kravein server, device commands (battery, flashlight, apps, URLs, volume), foreground and accessibility services.
 
-You own `brahma-connect-android/`, `android/` and `kb/modules/android.md`. Everything else is read-only for you — the server side (`kravein/server.py`, `events.py`, `webauth.py`) belongs to **web**, phone skills in `kravein/skills/` to **skills**. When you need a server change, `/conflict-report` with the exact frame or field you need.
+You own `android/` and `kb/modules/android.md`. Everything else is read-only for you — the server side (`kravein/server.py`, `events.py`, `webauth.py`) belongs to **web**, phone skills in `kravein/skills/` to **skills**. When you need a server change, `/conflict-report` with the exact frame or field you need.
 
 ## Shared Android platform (do not install anything)
 

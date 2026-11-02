@@ -235,7 +235,7 @@ export function Chip({
         background: active
           ? tone
             ? "transparent"
-            : colour
+            : "var(--gradient-accent)"
           : "var(--glass)",
         boxShadow: active && !tone ? "var(--glow-soft)" : undefined,
       }}
@@ -278,6 +278,7 @@ export function Button({
   type = "button",
   title,
   full,
+  autoFocus,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -286,6 +287,7 @@ export function Button({
   type?: "button" | "submit";
   title?: string;
   full?: boolean;
+  autoFocus?: boolean;
 }) {
   const styles: Record<string, string> = {
     default:
@@ -303,6 +305,7 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      autoFocus={autoFocus}
       className={classNames(
         "rounded-[var(--radius-full)] border px-3.5 py-1.5 text-[length:var(--text-sm)] font-medium disabled:cursor-not-allowed disabled:opacity-40 max-sm:min-h-10",
         full && "w-full",

@@ -24,6 +24,10 @@ _fd: int | None = None
 _session_id = f"{int(time.time())}-{os.getpid()}"
 
 MAX_VALUE_CHARS = 2000
+# A tool result is what the agent loop may cut before it reaches the model's
+# history (agent.TOOL_RESULT_MAX_CHARS); the audit log is where the full text
+# stays, so `skill.ok` results get a much larger cap than other fields.
+RESULT_MAX_CHARS = 50000
 
 
 def session_id() -> str:
@@ -47,25 +51,26 @@ def _open() -> int | None:
     return _fd
 
 
-def _truncate(value: Any) -> Any:
+def _truncate(value: Any, limit: int = MAX_VALUE_CHARS) -> Any:
     """Keep the log readable and bounded without losing the shape of data."""
     if isinstance(value, str):
-        if len(value) > MAX_VALUE_CHARS:
-            return value[:MAX_VALUE_CHARS] + f"…[+{len(value) - MAX_VALUE_CHARS} chars]"
+        if len(value) > limit:
+            return value[:limit] + f"…[+{len(value) - limit} chars]"
         return value
     if isinstance(value, dict):
-        return {k: _truncate(v) for k, v in value.items()}
+        return {k: _truncate(v, limit) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_truncate(v) for v in value][:50]
+        return [_truncate(v, limit) for v in value][:50]
     if isinstance(value, (int, float, bool)) or value is None:
         return value
-    return _truncate(repr(value))
+    return _truncate(repr(value), limit)
 
 
 # Keys whose values must never reach the log.
 _REDACT_KEYS = {
     "password", "passwd", "secret", "token", "api_key", "apikey",
-    "gemini_api_key", "openrouter_api_key", "authorization", "cookie",
+    "gemini_api_key", "openrouter_api_key", "novarouter_api_key",
+    "opencode_zen_api_key", "authorization", "cookie",
     "private_key", "passphrase", "credential", "credentials",
 }
 
@@ -84,8 +89,30 @@ def _redact(data: Any) -> Any:
     return data
 
 
-def record(event: str, **fields: Any) -> None:
-    """Write one audit record. Never raises."""
+_ctx = threading.local()
+
+
+@contextmanager
+def context(**fields: Any) -> Iterator[None]:
+    """Tag every record written on this thread with ``fields`` while active.
+
+    ``delegate`` uses it to stamp a sub-agent's whole turn (agent.request,
+    skill.*, safety.*) with the delegation id, without touching those call
+    sites. Nested contexts add to, and then restore, the outer one.
+    """
+    outer = getattr(_ctx, "fields", {})
+    _ctx.fields = {**outer, **fields}
+    try:
+        yield
+    finally:
+        _ctx.fields = outer
+
+
+def record(event: str, _result_limit: int = MAX_VALUE_CHARS, **fields: Any) -> None:
+    """Write one audit record. Never raises.
+
+    ``_result_limit`` raises the cap for the ``result`` field only.
+    """
     entry = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "epoch": round(time.time(), 3),
@@ -94,7 +121,12 @@ def record(event: str, **fields: Any) -> None:
         "host": socket.gethostname(),
         "event": event,
     }
-    entry.update(_truncate(_redact(fields)))
+    fields = _redact(fields)
+    has_big = _result_limit != MAX_VALUE_CHARS and "result" in fields
+    big = fields.pop("result", None) if has_big else None
+    entry.update(_truncate({**getattr(_ctx, "fields", {}), **fields}))
+    if has_big:
+        entry["result"] = _truncate(big, _result_limit)
 
     try:
         line = (json.dumps(entry, ensure_ascii=False, default=str) + "\n").encode("utf-8")
@@ -138,6 +170,7 @@ def action(skill: str, params: dict[str, Any], source: str = "local") -> Iterato
             skill=skill,
             source=source,
             result=ctx.get("result"),
+            _result_limit=RESULT_MAX_CHARS,
             duration_ms=round((time.monotonic() - started) * 1000, 1),
         )
 

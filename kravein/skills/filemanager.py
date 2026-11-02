@@ -19,11 +19,14 @@ thing, and it is why it broke whenever a window was slow.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pathlib import Path
 
 from .. import config
 from ..platform import shell
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, check_path, enforce
 
 # Managers we know how to drive, in preference order. The second element is the
@@ -102,7 +105,6 @@ def _resolve(path: str) -> Path:
     return config.resolve_user_path(path or "~")
 
 
-@skill(category="files", danger=Danger.MODERATE)
 def open_file_manager(path: str = "~", new_window: bool = False) -> str:
     """Open the file manager at a directory.
 
@@ -142,7 +144,6 @@ def open_file_manager(path: str = "~", new_window: bool = False) -> str:
     return f"Opened {target} in {manager}."
 
 
-@skill(category="files", danger=Danger.MODERATE)
 def show_in_file_manager(path: str) -> str:
     """Reveal a file in the file manager, highlighted in its folder.
 
@@ -215,7 +216,6 @@ def rename_path(path: str, new_name: str, _source: str = "local", _confirm: bool
     return f"Renamed {target.name} to {clean} in {target.parent}."
 
 
-@skill(category="files", danger=Danger.SAFE)
 def file_manager_status() -> str:
     """Which file manager Kravein will drive, and how to change it."""
     manager, select = _manager()
@@ -229,3 +229,39 @@ def file_manager_status() -> str:
         f"Using {manager} ({highlight}).\n"
         "Set filemanager.command in settings to choose a different one."
     )
+
+
+@skill(
+    category="files", danger=Danger.MODERATE,
+    aliases={
+        "open_file_manager": {"action": "open"},
+        "show_in_file_manager": {"action": "show"},
+        "file_manager_status": {"action": "status"},
+        "open_path": {"action": "open_path"},
+    },
+)
+def file_manager(
+    action: Literal["open", "show", "status", "open_path"] = "open",
+    path: str | None = None,
+    new_window: bool | None = None,
+) -> str:
+    """Drive the file manager, or open something in its default application.
+
+
+    Args:
+        action: open a directory (default home; also how to navigate); show a file highlighted in its folder; status (which manager is used); open_path (file, folder or URL in its default app).
+        path: The directory (open, default home), file (show) or file/folder/URL (open_path).
+        new_window: For open: use a new window instead of an existing one.
+    """
+    if action == "open":
+        return _merge.run(open_file_manager, path=path, new_window=new_window)
+    if action in ("show", "open_path") and not path:
+        return f"{action} needs path."
+    if action == "show":
+        return show_in_file_manager(path)
+    if action == "status":
+        return file_manager_status()
+    if action == "open_path":
+        from .files import open_path
+        return open_path(path)
+    return _merge.unknown(action, ["open", "show", "status", "open_path"])

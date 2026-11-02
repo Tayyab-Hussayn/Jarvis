@@ -118,6 +118,57 @@ def resolve_target(raw: str | os.PathLike) -> Path:
         return p.absolute()
 
 
+def _kravein_private_roots() -> list[Path]:
+    """Kravein's own config, state and data dirs: keys, pairings, tokens, policy.
+
+    The workspace under the data dir is the one place the assistant is meant
+    to write, so it is carved out.
+    """
+    return [config.CONFIG_DIR, config.STATE_DIR, config.DATA_DIR]
+
+
+def _login_surface_paths() -> list[Path]:
+    """Files and dirs where a silent edit grants access or runs code later.
+
+    ssh/gpg keys, shell startup files, user systemd units and autostart
+    entries all execute or authenticate without the owner being present, so a
+    one-line unconfirmed edit there is a persistent foothold.
+    """
+    home = Path.home()
+    names = [".ssh", ".gnupg", ".bashrc", ".bash_profile", ".bash_login",
+             ".bash_logout", ".zshrc", ".zshenv", ".zprofile", ".zlogin",
+             ".profile", ".config/fish", ".config/systemd/user",
+             ".config/autostart"]
+    return [home / n for n in names]
+
+
+def _inside(target: Path, root: Path) -> bool:
+    try:
+        return target == root or target.is_relative_to(root)
+    except (OSError, ValueError):
+        return False
+
+
+def sensitive_kind(raw: str | os.PathLike) -> str:
+    """Classify a path for secrecy/persistence: ``"blocked"``, ``"confirm"`` or ``""``.
+
+    ``blocked``: Kravein's own config/state/data (API keys, phone pairings, web
+    tokens, the safety policy). ``confirm``: login/startup surfaces. Shared by
+    ``check_path`` (writes) and by skills that must not read secrets into the
+    model context (``search_text``).
+    """
+    target = resolve_target(raw)
+    workspace = resolve_target(config.WORKSPACE_DIR)
+    if not _inside(target, workspace):
+        for root in _kravein_private_roots():
+            if _inside(target, resolve_target(root)):
+                return "blocked"
+    for root in _login_surface_paths():
+        if _inside(target, resolve_target(root)):
+            return "confirm"
+    return ""
+
+
 def check_path(raw: str | os.PathLike, write: bool = True) -> Verdict:
     """Classify a filesystem path the assistant is about to touch."""
     target = resolve_target(raw)
@@ -165,6 +216,22 @@ def check_path(raw: str | os.PathLike, write: bool = True) -> Verdict:
             "change its own safety settings"
         )
         return verdict
+
+    kind = sensitive_kind(target)
+    if kind == "blocked":
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = (
+            f"{target} is inside Kravein's own config/state/data, which holds "
+            "keys, pairings and its safety policy; the assistant may not write there"
+        )
+        return verdict
+    if kind == "confirm":
+        verdict.danger = max(verdict.danger, Danger.DESTRUCTIVE)
+        verdict.reasons.append(
+            f"{target} is a login/startup location (ssh, gpg, shell startup, "
+            "systemd user, autostart)"
+        )
 
     return verdict
 
@@ -521,6 +588,16 @@ def _memory() -> TurnMemory:
         memory = TurnMemory()
         _local.memory = memory
     return memory
+
+
+def current_memory() -> TurnMemory:
+    """This thread's denial memory, for a nested agent to share (``delegate``).
+
+    A sub-agent runs inside the caller's request, so a "no" the owner gave in
+    either must hold in both; a fresh memory per agent would let a declined
+    target be asked about again under another name.
+    """
+    return _memory()
 
 
 def _denied_targets() -> set[str]:

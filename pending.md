@@ -79,7 +79,7 @@ Worth reaching for only if the API key is ruled out.
 **Status:** scaffolding. Nothing in the Linux port starts it.
 
 `kravein_connect/` is a FastAPI + WebSocket gateway on port 8765 that pairs
-with `brahma-connect-android/`, a Kotlin app. The phone is a *device the
+with `android/`, a Kotlin app. The phone is a *device the
 assistant controls*, not a remote control: the desktop sends `execute`, the
 phone runs it on itself (battery, flashlight, launch app, open URL, volume) and
 returns a `result`. `chat_message` also lets the phone talk to the assistant.
@@ -102,11 +102,11 @@ project's posture:
 
 ### Still outstanding on the Android side
 
-The rename left `brahma-connect-android/` alone by decision, since a Java
+The rename left `android/` alone by decision, since a Java
 package move cannot be build-tested on this machine. What remains:
 
-- Package `com.brahma.connect` and the `Brahma*` class and file names.
-- `.BrahmaConnectApplication` and `@style/Theme.BrahmaConnect` in the manifest —
+- Package `com.kravein.connect` (old package) and the old-name class and file names.
+- `the old Application class` and `the old theme` in the manifest —
   identifier pairs, so both ends must move together.
 - The app has never been built here at all: needs Android Studio, JDK 17,
   SDK 35.

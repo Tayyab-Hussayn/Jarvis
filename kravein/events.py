@@ -117,6 +117,8 @@ class Session:
         self._pending_lock = threading.Lock()
         self._closed = threading.Event()
         self.turn_id: str = ""
+        # Set by the owner of this session to a StateTracker.waiting.
+        self.on_wait: "Any" = None
         # No client attached: frames are recorded for replay but not queued,
         # so a dropped client cannot fill the queue and lose live frames.
         self.attached = True
@@ -283,7 +285,11 @@ class Session:
             pass
 
         started = time.monotonic()
-        answered = pending.event.wait(timeout=self.confirm_timeout)
+        self._waiting(True)
+        try:
+            answered = pending.event.wait(timeout=self.confirm_timeout)
+        finally:
+            self._waiting(False)
         approved = bool(answered and pending.approved)
 
         with self._pending_lock:
@@ -326,6 +332,15 @@ class Session:
                 "confirm_expired", id=self.turn_id, confirm_id=confirm_id,
             )
         return approved
+
+    def _waiting(self, on: bool) -> None:
+        """Tell the agent-state tracker (if any) a card opened or closed."""
+        hook = self.on_wait
+        if hook is not None:
+            try:
+                hook(on)
+            except Exception:
+                pass
 
     def resolve_confirm(self, confirm_id: str, approve: bool, by: str = "web") -> bool:
         """Answer a pending confirmation. Returns False if it was unknown or
@@ -425,11 +440,25 @@ def broadcast(t: str, **fields: Any) -> int:
 # Agent observer -> frames
 # ---------------------------------------------------------------------------
 
-def observer_for(session: Session) -> Any:
-    """Adapt :data:`agent.Observer` callbacks onto the wire protocol."""
+def _who(data: dict[str, Any]) -> dict[str, Any]:
+    """Which sub-agent produced an event (set by ``delegate``); nothing else."""
+    return {k: data[k] for k in ("agent", "delegation") if data.get(k)}
+
+
+def observer_for(session: Session, tracker: Any = None) -> Any:
+    """Adapt :data:`agent.Observer` callbacks onto the wire protocol.
+
+    ``tracker`` (a ``StateTracker``) turns the same events into ``agent_state``
+    frames; it sees every kind, the wire frames below are unchanged.
+    """
 
     def observe(kind: str, text: str, data: dict[str, Any]) -> None:
         turn = session.turn_id
+        if tracker is not None:
+            try:
+                tracker.handle(kind, text, data)
+            except Exception:
+                pass            # state is a view; it must never break a turn
         if kind == "tool":
             session.emit(
                 "tool_call", id=turn,
@@ -437,6 +466,7 @@ def observer_for(session: Session) -> Any:
                 name=data.get("name", ""),
                 args=data.get("args", {}),
                 display=text,
+                **_who(data),
             )
         elif kind == "tool_result":
             session.emit(
@@ -444,9 +474,10 @@ def observer_for(session: Session) -> Any:
                 call_id=data.get("call_id", ""),
                 name=data.get("name", ""),
                 result=data.get("result", text),
+                **_who(data),
             )
         elif kind == "thinking":
-            session.emit("thinking", id=turn, text=text)
+            session.emit("thinking", id=turn, text=text, **_who(data))
         elif kind == "answer":
             session.emit("answer", id=turn, text=text)
         elif kind == "error":
@@ -474,6 +505,25 @@ class SessionStore:
 
     def __init__(self) -> None:
         self._items: "dict[str, Any]" = {}
+        self._trackers: "dict[str, Any]" = {}
+
+    def tracker(self, principal: str) -> Any:
+        """The agent-state tracker of one principal. Its frames go to every
+        session of that principal (the turn's own and its other tabs) and to
+        nobody else: a phone never sees another principal's state."""
+        from .agents.state import StateTracker
+
+        found = self._trackers.get(principal)
+        if found is None:
+            found = self._trackers.setdefault(
+                principal, StateTracker(lambda fields: self._fan_out(principal, fields))
+            )
+        return found
+
+    def _fan_out(self, principal: str, fields: "dict[str, Any]") -> None:
+        for item in self.items():
+            if item.principal == principal:
+                item.session.emit("agent_state", **fields)
 
     @staticmethod
     def new_id() -> str:
