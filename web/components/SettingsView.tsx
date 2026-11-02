@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/session";
 import { Button, Chip, Empty, Input, Panel, SectionTitle } from "./ui";
 import type { PolicyState } from "@/lib/usePolicy";
+import { AlwaysRules } from "./AlwaysRules";
 import { PolicyPanel } from "./PolicyPanel";
 import { Screen } from "./Shell";
 
@@ -398,6 +399,10 @@ export function SettingsView({ policy }: { policy: PolicyState }) {
 
         <div className="mb-4">
           <PolicyPanel policy={policy} />
+        </div>
+
+        <div className="mb-4">
+          <AlwaysRules />
         </div>
 
         {groups.length === 0 ? (

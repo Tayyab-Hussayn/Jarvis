@@ -26,6 +26,7 @@ import type {
   RoutineEvent,
   ConfirmView,
   Message,
+  Decision,
   ServerFrame,
   ToolCallView,
   VoicePhase,
@@ -37,7 +38,7 @@ import {
   type AgentEvent,
   type AgentsModel,
 } from "./agents";
-import { settleConfirm } from "./confirm";
+import { alwaysOffer, localStatus, replyFrame, settleConfirm } from "./confirm";
 import { routeHeard, scopedTurn, type HeardRoute } from "./heard";
 import {
   applyCancelled,
@@ -224,7 +225,7 @@ export function useKravein() {
       // inline or in the overlay — so it never stays open and unaware.
       if (frame.t === "confirm_resolved") {
         const settle = (confirm: ConfirmView) =>
-          settleConfirm(confirm, frame.confirm_id, frame.outcome, frame.by);
+          settleConfirm(confirm, frame.confirm_id, frame.outcome, frame.by, frame.decision);
         setMessages((current) =>
           current.map((message) => ({
             ...message,
@@ -253,6 +254,7 @@ export function useKravein() {
                 danger: frame.danger,
                 expiresAt: Date.now() + frame.timeout * 1000,
                 status: "pending",
+                always: alwaysOffer(frame.always) ?? undefined,
               },
             ]);
             break;
@@ -420,6 +422,7 @@ export function useKravein() {
             danger: frame.danger,
             expiresAt: Date.now() + frame.timeout * 1000,
             status: "pending",
+            always: alwaysOffer(frame.always) ?? undefined,
           };
           // A confirmation blocks a worker thread until it is answered, so it
           // must never be dropped. Voice sessions carry a turn id that has no
@@ -1066,11 +1069,15 @@ export function useKravein() {
   const markTaskSeen = useCallback((id: string) => setTasks((current) => markSeen(current, id)), []);
 
   const respondToConfirm = useCallback(
-    (confirmId: string, approve: boolean) => {
-      send({ t: "confirm_reply", confirm_id: confirmId, approve });
+    (confirmId: string, decision: Decision) => {
+      send(replyFrame(confirmId, decision));
       const settle = (confirm: ConfirmView) =>
         confirm.confirmId === confirmId && confirm.status === "pending"
-          ? { ...confirm, status: approve ? ("approved" as const) : ("denied" as const) }
+          ? {
+              ...confirm,
+              status: localStatus(decision),
+              ...(decision === "always" ? { decision } : {}),
+            }
           : confirm;
 
       setMessages((current) =>

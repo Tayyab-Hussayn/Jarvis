@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { ConfirmView, Message, ToolCallView } from "@/lib/protocol";
+import type { ConfirmView, Decision, Message, ToolCallView } from "@/lib/protocol";
 import { previewArgs } from "@/lib/format";
 import { ConfirmCard } from "./ConfirmCard";
 import { Markdown } from "./Markdown";
@@ -258,7 +258,7 @@ function Node({
   onRespond,
 }: {
   node: GraphNode;
-  onRespond: (confirmId: string, approve: boolean) => void;
+  onRespond: (confirmId: string, decision: Decision) => void;
 }) {
   switch (node.kind) {
     case "request":
@@ -409,7 +409,7 @@ export function TurnGraph({
 }: {
   message: Message;
   request: string;
-  onRespond: (confirmId: string, approve: boolean) => void;
+  onRespond: (confirmId: string, decision: Decision) => void;
 }) {
   const nodes = buildNodes(message, request);
   const [narrow, setNarrow] = useState(false);
