@@ -178,6 +178,9 @@ class Session:
             and self._transcript
             and self._transcript[-1].get("t") == "voice_state"
             and self._transcript[-1].get("phase") == phase
+            # Partials of different spoken turns must not swallow each other,
+            # or a replay would lose the earlier turn's line.
+            and self._transcript[-1].get("turn") == payload.get("turn")
         ):
             self._transcript[-1] = payload
             return

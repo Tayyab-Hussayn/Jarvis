@@ -260,6 +260,14 @@ class FakeVoice:
         return 0
 
 
+class ObservedVoice(FakeVoice):
+    """Keeps the observer so a test can speak as the engine does."""
+
+    def __init__(self, observer=None, **kw):
+        super().__init__(observer=observer, **kw)
+        self.observer = observer
+
+
 @pytest.fixture
 def voice_stub(monkeypatch):
     FakeVoice.instances = []
@@ -357,3 +365,37 @@ def test_panel_runs_are_not_part_of_the_replayed_chat(client):
     with _connect(client, sid) as ws:
         _frame(ws)
         assert all(not str(f.get("id", "")).startswith("p") for f in _frame(ws)["frames"])
+
+
+def test_heard_frames_carry_turn_and_replace_to_the_browser(client, monkeypatch):
+    """The page keys spoken lines by `turn`; dropped here, a late English
+    replace arrived untagged and the sentence showed twice (#189). Other
+    engine data must not leak onto the wire; a replay keeps both turns."""
+    FakeVoice.instances = []
+    monkeypatch.setattr(voice, "live_available", lambda: (True, ""))
+    monkeypatch.setattr(voice, "readiness", lambda: (False, ["no stt"]))
+    monkeypatch.setattr(live, "LiveSession", ObservedVoice)
+
+    with _connect(client) as ws:
+        sid = _frame(ws)["session_id"]
+        _start_voice(ws)
+        obs = FakeVoice.instances[0].observer
+        obs("heard_partial", "namaste", {"turn": "lt1"})
+        obs("heard", "namaste", {"turn": "lt1", "final": True})
+        obs("answer", "hi", {"secret": "x"})
+        obs("heard_partial", "second", {"turn": "lt2"})
+        obs("heard", "hello", {"turn": "lt1", "final": True, "replace": True})
+        seen = _until(ws, lambda f: f.get("replace") is True)
+
+    by_phase = {(f["phase"], f.get("turn")): f for f in seen if f["t"] == "voice_state"}
+    assert by_phase[("heard_partial", "lt1")]["text"] == "namaste"
+    assert by_phase[("heard", "lt1")]["final"] is True
+    assert seen[-1]["text"] == "hello" and seen[-1]["turn"] == "lt1"
+    answer = next(f for f in seen if f.get("phase") == "answer")
+    assert "turn" not in answer and "secret" not in answer
+
+    with _connect(client, sid) as ws:
+        _frame(ws)
+        replay = _frame(ws)["frames"]
+    partial_turns = [f["turn"] for f in replay if f.get("phase") == "heard_partial"]
+    assert partial_turns == ["lt1", "lt2"]
