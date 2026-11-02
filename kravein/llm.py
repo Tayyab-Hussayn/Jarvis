@@ -317,15 +317,42 @@ def _sanitize_tools(tools: list[dict]) -> list[dict]:
     return result
 
 
+def _has_signature(call: dict[str, Any]) -> bool:
+    sig = call.get("signature")
+    return isinstance(sig, (bytes, bytearray)) and bool(sig)
+
+
 def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[Any]:
-    """Translate the neutral message list into Gemini `Content` objects."""
+    """Translate the neutral message list into Gemini `Content` objects.
+
+    A step whose first call has no real signature (history saved before #154
+    lost it) cannot be replayed as a function call: Gemini 3.x answers 400
+    "missing a thought_signature". Google documents a dummy value for that
+    case, but ``gemini-3.5-flash-lite`` rejects it through the SDK ("Corrupted
+    thought signature" for the bytes form, a base64 error for the literal
+    string; verified live 2026-11-02), so such a call and its result are
+    flattened to plain text instead. The model still sees what was done.
+    """
     from google.genai import types
+
+    # Ids (or names) of calls we flatten, so their results flatten too.
+    flat: set[str] = set()
+    for msg in messages:
+        calls = msg.get("tool_calls") or [] if msg.get("role") == "assistant" else []
+        if calls and not _has_signature(calls[0]):
+            flat.update(c.get("id") or c["name"] for c in calls)
 
     contents: list[Any] = []
     for msg in messages:
         role = msg.get("role", "user")
 
         if role == "tool":
+            key = msg.get("tool_call_id") or msg.get("name", "tool")
+            if key in flat:
+                contents.append(types.Content(role="user", parts=[types.Part.from_text(
+                    text=f"[result of {msg.get('name', 'tool')}]: {msg.get('content', '')}"
+                )]))
+                continue
             contents.append(types.Content(
                 role="user",
                 parts=[types.Part.from_function_response(
@@ -339,16 +366,24 @@ def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[Any]:
             parts: list[Any] = []
             if msg.get("content"):
                 parts.append(types.Part.from_text(text=msg["content"]))
-            for call in msg.get("tool_calls", []) or []:
+            calls = msg.get("tool_calls", []) or []
+            if calls and not _has_signature(calls[0]):
+                for call in calls:
+                    parts.append(types.Part.from_text(
+                        text=f"[called {call['name']}({json.dumps(call.get('arguments', {}), default=str)})]"
+                    ))
+                contents.append(types.Content(role="model", parts=parts))
+                continue
+            for call in calls:
                 part = types.Part.from_function_call(
                     name=call["name"], args=call.get("arguments", {}),
                 )
                 # Gemini 3.x rejects a replayed function call that has lost
-                # its thought_signature, so put it back when we have one.
-                signature = call.get("signature")
-                if signature is not None:
+                # its thought_signature, so put it back when we have one
+                # (parallel calls after the first legitimately carry none).
+                if _has_signature(call):
                     try:
-                        part.thought_signature = signature
+                        part.thought_signature = call["signature"]
                     except (AttributeError, ValueError):
                         pass
                 parts.append(part)

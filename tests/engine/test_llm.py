@@ -95,7 +95,36 @@ def test_gemini_history_survives_a_missing_signature():
         ]},
     ])
     model_turn = next(c for c in contents if c.role == "model")
-    assert model_turn.parts[0].function_call.name == "get_volume"
+    assert "get_volume" in model_turn.parts[0].text
+
+
+def test_gemini_signatureless_calls_are_flattened_to_text():
+    """#154: a call whose signature was lost must not reach Gemini 3.x bare.
+
+    The call and its result become text parts (the documented dummy signature
+    is rejected by the live API); a real signature keeps its function call; a
+    str signature (old repr row, loaded as None) counts as lost.
+    """
+    contents = llm._to_gemini_contents([
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "a", "name": "one", "arguments": {"x": 1}, "signature": None},
+            {"id": "b", "name": "two", "arguments": {}},
+        ]},
+        {"role": "tool", "name": "one", "tool_call_id": "a", "content": "r1"},
+        {"role": "tool", "name": "two", "tool_call_id": "b", "content": "r2"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "d", "name": "four", "arguments": {}, "signature": b"real"},
+        ]},
+        {"role": "tool", "name": "four", "tool_call_id": "d", "content": "r4"},
+    ])
+    assert not any(p.function_call for c in contents[:4] for p in c.parts)
+    assert "one" in contents[1].parts[0].text and '"x": 1' in contents[1].parts[0].text
+    assert contents[2].parts[0].text == "[result of one]: r1"
+    assert contents[3].parts[0].text == "[result of two]: r2"
+    assert contents[4].parts[0].function_call.name == "four"
+    assert contents[4].parts[0].thought_signature == b"real"
+    assert contents[5].parts[0].function_response.name == "four"
 
 
 def test_agent_preserves_signatures_in_its_transcript():
