@@ -9,6 +9,7 @@ system Chrome (no browser download on the laptop).
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -59,6 +60,9 @@ def _ask(p, text: str, prefix: str, decision: str, budget: int) -> None:
     opening the screenshots.
     """
     b, pg = _page(p)
+    if os.environ.get("LIVE_UI_CLEAR"):
+        pg.get_by_role("button", name="Clear").first.click()
+        pg.wait_for_timeout(1000)
     pg.get_by_placeholder(re.compile(r"Ask Kravein")).fill(text)
     pg.get_by_role("button", name="Send").click()
     end, n, seen_card, last = time.time() + budget, 0, False, ""
