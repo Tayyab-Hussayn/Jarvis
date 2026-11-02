@@ -139,6 +139,16 @@ def status() -> str:
     """Human-readable readiness report, with the fix if it is not ready."""
     name = backend_name()
     if name:
+        if name != "ydotool" and shell.have("ydotool") and not _ydotool_socket():
+            # ydotool is installed but its daemon is down: it would exit 0
+            # and deliver nothing, so we fell back (wtype types only; no
+            # pointer, no mouse buttons). Say so instead of "ready".
+            return (
+                f"Input synthesis ready via {name} (keyboard text only). "
+                "ydotool is installed but ydotoold is not running, so pointer "
+                "and mouse input are unavailable. Owner: "
+                "systemctl --user enable --now ydotool.service"
+            )
         return f"Input synthesis ready via {name}."
 
     env = detect.environment()
