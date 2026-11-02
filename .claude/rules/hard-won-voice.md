@@ -58,3 +58,11 @@ metered pipeline, or away from it, is not a decision to make on someone's behalf
 failures through the same `error` phase, so treating every one as fatal put the whole toggle into
 an error state because one tool took too long. It is a turn error when a turn is open, a session
 error only when there is none.
+
+**The Live transcript language depends on the model, not the pin (#193, measured 2026-11-02).**
+The 2.5 native-audio Live models ignore `input_audio_transcription.language_codes` and
+`custom_vocabulary`: 0/96 transcripts came back in Latin script in every configuration.
+`gemini-3.1-flash-live-preview` honours an English pin (6/6 Latin). `['en-IN','ur-PK']` does worse
+than `['en-IN']`. Whisper is no longer in the Live path: it cost ~435 MB RSS per session, and its
+late English line created duplicate user turns. A non-Latin Live line gets a short LLM text
+translation, sent as a `replace` with the turn id (#190/#191). Never transliterate.
