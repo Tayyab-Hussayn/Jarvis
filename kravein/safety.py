@@ -777,13 +777,15 @@ def confirmation_policy() -> dict:
 
 
 def _persist_mode(mode: str) -> None:
-    settings = config.load_settings()
-    section = settings.setdefault("safety", {})
-    section["confirmation_mode"] = mode
-    # Keep the legacy switch coherent, or picking "ask" in the UI would stay
-    # "decline" forever for a file that still says allow_destructive: false.
-    section["allow_destructive"] = mode != "decline"
-    config.save_settings(settings)
+    def apply(settings: dict) -> None:
+        section = settings.setdefault("safety", {})
+        section["confirmation_mode"] = mode
+        # Keep the legacy switch coherent, or picking "ask" in the UI would stay
+        # "decline" forever for a file that still says allow_destructive: false.
+        section["allow_destructive"] = mode != "decline"
+
+    # Atomic with /api/settings writes: no lost update between the two.
+    config.update_settings(apply)
 
 
 def set_confirmation_mode(mode: str, seconds: int | None = None, *, by: str = "") -> dict:

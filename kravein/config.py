@@ -6,6 +6,7 @@ repository checkout.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -262,12 +263,15 @@ _settings_cache: dict[str, Any] | None = None
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    out = dict(base)
+    # Deep-copy so the result never aliases DEFAULT_SETTINGS (or the caller's
+    # dicts): writing a section of the loaded settings used to mutate the
+    # defaults in-process, and a later reload then "remembered" the write.
+    out = copy.deepcopy(base)
     for key, value in (override or {}).items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
             out[key] = _deep_merge(out[key], value)
         else:
-            out[key] = value
+            out[key] = copy.deepcopy(value)
     return out
 
 
@@ -329,6 +333,24 @@ def save_settings(data: dict[str, Any]) -> None:
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         tmp.replace(path)
         _settings_cache = _deep_merge(DEFAULT_SETTINGS, data)
+
+
+def update_settings(mutate) -> dict[str, Any]:
+    """Atomic read-modify-write of the settings file.
+
+    ``mutate(settings)`` gets a private copy and either edits it in place or
+    returns a replacement dict. The whole load→mutate→save runs under the
+    settings lock, so two writers (``/api/settings`` and
+    ``safety.set_confirmation_mode``) cannot overwrite each other's change
+    the way a separate load, merge, save did.
+    """
+    with _settings_lock:
+        working = copy.deepcopy(load_settings())
+        result = mutate(working)
+        if isinstance(result, dict):
+            working = result
+        save_settings(working)
+        return working
 
 
 def get(dotted: str, default: Any = None) -> Any:
