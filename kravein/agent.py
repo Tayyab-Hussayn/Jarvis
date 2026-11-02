@@ -828,3 +828,23 @@ def make_agent(*, source: str, thread_id: str | None = None, **kwargs: Any) -> A
             # the all-tools agent and say so.
             audit.record("agent.orchestrator_unavailable", error=str(exc))
     return Agent(source=source, thread_id=thread_id, **kwargs)
+
+
+def make_voice_agent(*, observer: Observer | None, thread_id: str | None) -> Agent | None:
+    """The Orchestrator context a Live voice session runs as, or ``None``.
+
+    Gemini Live is the model, so this agent never calls ``ask``: it supplies the
+    system prompt, the tool set (``_allowed``), the ``delegate`` context and the
+    persistent thread. ``None`` (switch off, or a broken profile) means the
+    session keeps its old all-tools behaviour exactly. ``observer`` is passed
+    by the transport so voice activity reaches the state tracker without
+    emitting the text UI per-turn ``tool_call`` frames.
+    """
+    if not config.get("agents.orchestrator", False):
+        return None
+    try:
+        return Agent(source="voice-live", observer=observer, thread_id=thread_id,
+                     profile=ORCHESTRATOR)
+    except Exception as exc:                  # voice must still start, as before
+        audit.record("agent.orchestrator_unavailable", error=str(exc), at="voice")
+        return None

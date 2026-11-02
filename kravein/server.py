@@ -836,12 +836,28 @@ def create_app(token: str | None = None) -> Any:
                         session.emit("voice_state", phase="error", text=why)
                         return
                     # LiveSession lives in live.py, not voice.py.
+                    from .agent import make_voice_agent
                     from .live import LiveSession
 
+                    # The Orchestrator as the Live session's context (None when
+                    # `agents.orchestrator` is off: the old session, unchanged).
+                    # Its observer feeds the state tracker only; the voice UI
+                    # keeps its own `voice_state` frames.
+                    tracker = store.tracker(principal)
+                    voice_agent = make_voice_agent(
+                        observer=lambda kind, text, data: tracker.handle(kind, text, data),
+                        thread_id=principal_thread_id("web", principal),
+                    )
+                    # Only passed when on: the switch off keeps the old constructor call.
+                    extra = {"agent": voice_agent} if voice_agent is not None else {}
+                    if voice_agent is not None:
+                        # `delegate` starts background tasks for this principal;
+                        # `task_status` and the confirmation cards find them by it.
+                        voice_agent.principal = principal
                     if net is not None:
                         live = LiveSession(
                             observer=voice_observer, confirmer=voice_confirmer,
-                            source=net, sink=net,
+                            source=net, sink=net, **extra,
                         )
                         reader = threading.Thread(
                             target=audio_reader, args=(net,), daemon=True,
@@ -850,7 +866,7 @@ def create_app(token: str | None = None) -> Any:
                         reader.start()
                     else:
                         live = LiveSession(
-                            observer=voice_observer, confirmer=voice_confirmer
+                            observer=voice_observer, confirmer=voice_confirmer, **extra,
                         )
                     voice_box["session"] = live
                     voice_box["info"] = {
@@ -860,6 +876,7 @@ def create_app(token: str | None = None) -> Any:
                     session.emit(
                         "voice_state", phase="started", text="live",
                         audio="device" if net is not None else "laptop",
+                        model=getattr(live, "model", ""), orchestrator=voice_agent is not None,
                     )
                     live.run()
                 else:
@@ -1285,7 +1302,17 @@ def _pickup_reports(held: Any) -> None:
     ``task_status``: a report is a sub-agent's output, i.e. untrusted text.
     """
     try:
-        if held.busy.is_set() or held.client is None:
+        if held.client is None:
+            return
+        # A live voice session (the Orchestrator on Gemini Live) is where the
+        # owner is talking: the report is spoken there, not typed into the chat.
+        live = (getattr(held, "voice_box", None) or {}).get("session")
+        if live is not None and getattr(live, "accepts_reports", lambda: False)():
+            rows = tasks.manager.claim_reports(held.principal)
+            if rows and not live.announce([tasks.manager.note_text(r) for r in rows]):
+                tasks.manager.note_rows(rows)      # claimed, so it must land somewhere
+            return
+        if held.busy.is_set():
             return
         rows = tasks.manager.claim_reports(held.principal)
         if not rows:
@@ -1527,14 +1554,36 @@ def _provider_available(provider: Any) -> bool:
         return False
 
 
+def _effective_model() -> tuple[str, str]:
+    """The provider that answers first and its own model (what the HUD shows).
+
+    ``llm.provider`` next to ``llm.cline_model`` mixed two providers
+    ("gemini · nvidia/nemotron"); this is the head of the failover chain.
+    """
+    try:
+        from .llm import client
+
+        return client().effective()
+    except Exception:
+        return str(config.get("llm.provider", "")), ""
+
+
+def _voice_model() -> str:
+    from .live import LIVE_MODEL
+
+    return str(config.get("voice.live_model", "") or LIVE_MODEL)
+
+
 def _hello_payload() -> dict[str, Any]:
     registry.load_skills()
     env = detect.environment()
+    provider, model = _effective_model()
     return {
         "assistant_name": config.get("assistant_name", "Kravein"),
         "skills": len(registry.all_skills()),
-        "provider": config.get("llm.provider", ""),
-        "model": config.get("llm.cline_model", ""),
+        "provider": provider,
+        "model": model,
+        "voice_model": _voice_model(),
         "environment": env.summary(),
     }
 
@@ -1558,12 +1607,14 @@ def _state_snapshot() -> dict[str, Any]:
     with contextlib.suppress(Exception):
         hostname = _socket.gethostname()
 
+    provider, model = _effective_model()
     return {
         "assistant_name": config.get("assistant_name", "Kravein"),
         "hostname": hostname,
         "skills": len(registry.all_skills()),
-        "provider": config.get("llm.provider", ""),
-        "model": config.get("llm.cline_model", ""),
+        "provider": provider,
+        "model": model,
+        "voice_model": _voice_model(),
         "fallback_model": config.get("llm.cline_fallback_model", ""),
         "provider_order": config.get("llm.provider_order", []),
         "providers": providers,

@@ -988,6 +988,28 @@ class LLM:
         healthy = [p for p in usable if not self._is_cooling(p.name)]
         return healthy or usable
 
+    def model_of(self, provider: Any) -> str:
+        """The model a provider would use now, as ``status()`` labels it."""
+        from .cline import configured_model
+
+        if provider.name == "cline":
+            return configured_model()
+        if provider.name in ("gemini", "novarouter", "zen"):
+            return provider.model_name()
+        return ""
+
+    def effective(self) -> tuple[str, str]:
+        """``(provider, model)`` of the provider that will answer first.
+
+        The HUD used to show ``llm.provider`` next to ``llm.cline_model``, i.e.
+        "gemini · nvidia/nemotron": the configured primary with another
+        provider's model. Empty strings when nothing is available.
+        """
+        ordered = self._ordered()
+        if not ordered:
+            return "", ""
+        return ordered[0].name, self.model_of(ordered[0])
+
     def status(self) -> str:
         active = self.providers()
         if not active:
@@ -1002,16 +1024,8 @@ class LLM:
 
         labels = []
         for provider in self._ordered():
-            if provider.name == "gemini":
-                labels.append(f"gemini:{self.gemini.model_name()}")
-            elif provider.name == "cline":
-                labels.append(f"cline:{configured_model()}")
-            elif provider.name == "novarouter":
-                labels.append(f"novarouter:{self.novarouter.model_name()}")
-            elif provider.name == "zen":
-                labels.append(f"zen:{self.zen.model_name()}")
-            else:
-                labels.append(provider.name)
+            model = self.model_of(provider)
+            labels.append(f"{provider.name}:{model}" if model else provider.name)
 
         preferred = str(config.get("llm.provider", "gemini")).lower()
         detail = " → ".join(labels)
