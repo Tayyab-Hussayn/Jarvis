@@ -36,6 +36,22 @@ export function turnKey(turn: unknown): string | null {
   return null;
 }
 
+/**
+ * A server turn id scoped to the voice session it came from.
+ *
+ * The server numbers turns per Live session (`lt1`, `lt2`, …) and starts again
+ * at `lt1` for every new session. The client's turn→line map outlives a
+ * session, so the second session's first sentence looked like a "known" turn
+ * and rewrote the *first session's* line in place: the owner's new spoken
+ * lines never appeared. Scoping the key by session keeps ids unique across
+ * restarts while a late `replace` from the previous session still finds its
+ * own line.
+ */
+export function scopedTurn(session: number, turn: unknown): string | null {
+  const key = turnKey(turn);
+  return key === null ? null : `${session}:${key}`;
+}
+
 export function routeHeard(state: HeardState, turn: unknown): HeardRoute {
   const key = turnKey(turn);
   if (key === null) {
