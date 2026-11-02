@@ -22,8 +22,11 @@ class FakeSession:
         self.sent: list[bytes] = []
         self._script = script  # async callable(session) -> yields responses
 
-    async def send_realtime_input(self, media):
-        self.sent.append(media["data"])
+    async def send_realtime_input(self, audio=None, text=None):
+        # 3.1 rejects the deprecated `media=` keyword, so the session must use `audio=`.
+        if audio is not None:
+            assert audio["mime_type"] == "audio/pcm;rate=16000"
+            self.sent.append(audio["data"])
 
     async def send_tool_response(self, function_responses):
         pass
