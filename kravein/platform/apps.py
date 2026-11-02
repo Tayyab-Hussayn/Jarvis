@@ -11,6 +11,7 @@ Falls back to a bare PATH binary, then ``xdg-open`` for URLs and files.
 
 from __future__ import annotations
 
+import difflib
 import functools
 import os
 import re
@@ -205,6 +206,85 @@ _CATEGORY_HINTS = {
 }
 
 
+def _norm(text: str) -> str:
+    """Case-fold and drop everything but letters and digits.
+
+    "Anti Gravity", "anti-gravity" and "AntiGravity" must all equal
+    "antigravity": the owner says app names as words, desktop files spell them
+    as one token (#181). Spaces, hyphens, underscores and dots carry no
+    meaning in an app name, so they are not compared.
+    """
+    return re.sub(r"[^0-9a-z]+", "", (text or "").casefold())
+
+
+# Trailing words people add that a desktop entry often lacks. Only used when
+# the full phrase matched nothing, so "Anti Gravity IDE" still finds the IDE.
+_SUFFIX_WORDS = ("application", "app", "desktop", "editor", "ide")
+
+_FUZZY_CUTOFF = 0.8
+
+
+def _binary(entry: DesktopEntry) -> str:
+    cmd = entry.command()
+    return Path(cmd[0]).name if cmd else ""
+
+
+def _score(entry: DesktopEntry, text: str, nq: str) -> int:
+    """How well one entry matches. 0 means not at all."""
+    name, n_name = entry.name.lower(), _norm(entry.name)
+    binary = _binary(entry).lower()
+    n_bin = _norm(binary)
+    n_id = _norm(entry.id.removesuffix(".desktop"))
+    n_generic = _norm(entry.generic_name)
+
+    if name == text or binary == text or (nq and nq in (n_name, n_bin)):
+        return 100
+    if nq and nq == n_id:
+        return 95
+    if name.startswith(text) or binary.startswith(text) or (
+        nq and (n_name.startswith(nq) or n_bin.startswith(nq) or n_id.startswith(nq))
+    ):
+        return 80
+    if text in name or (nq and nq in n_name):
+        return 60
+    if text in binary or (nq and (nq in n_bin or nq in n_id)):
+        return 55
+    if any(nq and nq == _norm(k) for k in entry.keywords):
+        return 50
+    if nq and nq == n_generic:
+        return 45
+    if text in entry.search_text():
+        return 30
+    # Fuzzy last, so a typo ("antigravty") still lands but never outranks a
+    # real substring hit. The cutoff keeps unrelated short names out.
+    if len(nq) >= 4:
+        best = max(
+            (difflib.SequenceMatcher(None, nq, c).ratio()
+             for c in (n_name, n_bin, n_id) if c),
+            default=0.0,
+        )
+        if best >= _FUZZY_CUTOFF:
+            return int(20 + best * 10)
+    return 0
+
+
+def _rank(entries: list[DesktopEntry], text: str,
+          wanted_categories: tuple[str, ...]) -> list[tuple[int, DesktopEntry]]:
+    nq = _norm(text)
+    scored: list[tuple[int, DesktopEntry]] = []
+    for entry in entries:
+        score = _score(entry, text, nq)
+        # A category match outranks any weak textual match.
+        if wanted_categories and any(c in entry.categories for c in wanted_categories):
+            score = max(score, 90)
+        # Prefer things the user can actually see in a menu.
+        if entry.no_display:
+            score -= 25
+        if score > 0:
+            scored.append((score, entry))
+    return scored
+
+
 def find(query: str, limit: int = 8) -> list[DesktopEntry]:
     """Rank installed applications against a natural-language query."""
     text = (query or "").strip().lower()
@@ -215,7 +295,6 @@ def find(query: str, limit: int = 8) -> list[DesktopEntry]:
         text = _ALIASES[text]
 
     entries = index()
-    scored: list[tuple[int, DesktopEntry]] = []
 
     # When the user names a *kind* of app ("terminal", "file manager"), the
     # freedesktop category is a far better signal than a name substring —
@@ -226,36 +305,13 @@ def find(query: str, limit: int = 8) -> list[DesktopEntry]:
             wanted_categories = categories
             break
 
-    for entry in entries:
-        name = entry.name.lower()
-        binary = Path(entry.command()[0]).name.lower() if entry.command() else ""
-        score = 0
+    scored = _rank(entries, text, wanted_categories)
 
-        if name == text or binary == text:
-            score = 100
-        elif entry.id.removesuffix(".desktop").lower() == text:
-            score = 95
-        elif name.startswith(text) or binary.startswith(text):
-            score = 80
-        elif text in name:
-            score = 60
-        elif text in binary:
-            score = 55
-        elif any(text == k.lower() for k in entry.keywords):
-            score = 50
-        elif text in entry.search_text():
-            score = 30
-
-        # A category match outranks any weak textual match.
-        if wanted_categories and any(c in entry.categories for c in wanted_categories):
-            score = max(score, 90)
-
-        # Prefer things the user can actually see in a menu.
-        if entry.no_display:
-            score -= 25
-
-        if score > 0:
-            scored.append((score, entry))
+    if not scored:
+        # Fallback: drop one trailing filler word ("firefox browser").
+        words = text.split()
+        if len(words) > 1 and words[-1] in _SUFFIX_WORDS:
+            scored = _rank(entries, " ".join(words[:-1]), ())
 
     if not scored:
         for hint, categories in _CATEGORY_HINTS.items():
@@ -268,6 +324,68 @@ def find(query: str, limit: int = 8) -> list[DesktopEntry]:
 
     scored.sort(key=lambda pair: (-pair[0], pair[1].name.lower()))
     return [entry for _, entry in scored[:limit]]
+
+
+def closest_names(query: str, n: int = 3) -> list[str]:
+    """The installed app names nearest to a query that matched nothing."""
+    nq = _norm(query)
+    if not nq:
+        return []
+    ranked: list[tuple[float, str]] = []
+    seen: set[str] = set()
+    for entry in index():
+        if entry.no_display or entry.name in seen:
+            continue
+        seen.add(entry.name)
+        ratio = max(
+            difflib.SequenceMatcher(None, nq, c).ratio()
+            for c in (_norm(entry.name), _norm(_binary(entry))) if c
+        ) if _norm(entry.name) else 0.0
+        if ratio >= 0.5:
+            ranked.append((ratio, entry.name))
+    ranked.sort(key=lambda p: (-p[0], p[1].lower()))
+    return [name for _, name in ranked[:n]]
+
+
+def not_found_message(query: str) -> str:
+    near = closest_names(query)
+    hint = (f" Closest installed: {', '.join(near)}." if near else "")
+    return (f"Could not find an application matching '{query}'.{hint} "
+            f"Try `search_apps {query}` to see what is installed.")
+
+
+def resolve(query: str) -> tuple[DesktopEntry | None, str]:
+    """Pick exactly one application for a name, or say why not.
+
+    Returns ``(entry, "")`` or ``(None, message)``. The single place that
+    decides ambiguity, so open_app with and without a workspace agree.
+    Never takes the first of several matches: "Anti Gravity" is Antigravity
+    only because that is the exact normalised name; Antigravity IDE merely
+    starts with it (#181).
+    """
+    # "kitty.desktop" is a desktop id; the suffix is not part of the name.
+    query = re.sub(r"\.desktop$", "", (query or "").strip(), flags=re.I)
+    matches = find(query)
+    if not matches:
+        return None, not_found_message(query)
+    text = query.strip().lower()
+    nq = _norm(text)
+    # Name or desktop id first: "kitty" is the app named kitty, even though
+    # "kitty URL Launcher" also execs the `kitty` binary.
+    named = [m for m in matches
+             if nq and nq in (_norm(m.name), _norm(m.id.removesuffix(".desktop")))]
+    exact = [m for m in matches if nq and nq == _norm(_binary(m))]
+    if len(named) == 1:
+        return named[0], ""
+    if not named and len(exact) == 1:
+        return exact[0], ""
+    if len(matches) == 1:
+        return matches[0], ""
+    # A *kind* of app ("terminal", "browser"): any good one is what was asked.
+    if text in _CATEGORY_HINTS or text in _ALIASES:
+        return matches[0], ""
+    names = ", ".join(m.name for m in (named or exact or matches)[:6])
+    return None, f"'{query}' matches several applications ({names}). Say which one to open."
 
 
 def is_running(entry: DesktopEntry) -> bool:
@@ -372,19 +490,6 @@ def list_entries(category: str = "", limit: int = 0) -> list[dict]:
     ]
 
 
-def _is_named(entry: DesktopEntry, text: str) -> bool:
-    """The query is this entry's own name or desktop id, case-insensitively."""
-    text = text.removesuffix(".desktop")
-    return text in (entry.name.lower(), entry.id.removesuffix(".desktop").lower())
-
-
-def _is_exact(entry: DesktopEntry, text: str) -> bool:
-    binary = Path(entry.command()[0]).name.lower() if entry.command() else ""
-    return text in (
-        entry.name.lower(), binary, entry.id.removesuffix(".desktop").lower()
-    )
-
-
 def check_workspace(workspace: str) -> str | None:
     """Normalise a workspace argument, or None when it is not acceptable.
 
@@ -422,30 +527,9 @@ def launch_on_workspace(query: str, workspace: str, focus: bool = True) -> str:
             "number or the name of an existing workspace."
         )
 
-    matches = find(query)
-    if not matches:
-        return (
-            f"Could not find an application matching '{query}'. "
-            f"Try `search_apps {query}` to see what is installed."
-        )
-    text = query.strip().lower()
-    # Name or desktop id first: "kitty" is the app named kitty, even though
-    # "kitty URL Launcher" also execs the `kitty` binary. Only when several
-    # entries match at the same tier is it ambiguous.
-    named = [m for m in matches if _is_named(m, text)]
-    exact = [m for m in matches if _is_exact(m, text)]
-    if len(named) == 1:
-        entry = named[0]
-    elif not named and len(exact) == 1:
-        entry = exact[0]
-    elif len(matches) == 1:
-        entry = matches[0]
-    else:
-        names = ", ".join(m.name for m in (named or exact or matches)[:6])
-        return (
-            f"'{query}' matches several applications ({names}). "
-            "Say which one to open."
-        )
+    entry, problem = resolve(query)
+    if entry is None:
+        return problem
 
     command = entry.command()
     if not command:
@@ -499,10 +583,12 @@ def launch_on_workspace(query: str, workspace: str, focus: bool = True) -> str:
 
 def launch_by_name(query: str) -> str:
     """Resolve a name to an app and launch it."""
-    matches = find(query)
-
-    if matches:
-        return launch(matches[0])
+    entry, problem = resolve(query)
+    if entry is not None:
+        return launch(entry)
+    ambiguous = "matches several" in problem
+    if ambiguous:
+        return problem
 
     # Not an installed .desktop app — maybe it is a plain binary.
     binary = shell.which(query) or shell.which(query.lower().replace(" ", "-"))
@@ -514,10 +600,7 @@ def launch_by_name(query: str) -> str:
     if re.match(r"^(https?|file|mailto)://", query) or Path(query).expanduser().exists():
         return open_uri(query)
 
-    return (
-        f"Could not find an application matching '{query}'. "
-        f"Try `apps_search {query}` to see what is installed."
-    )
+    return problem
 
 
 def open_uri(target: str) -> str:
