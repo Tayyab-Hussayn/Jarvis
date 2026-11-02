@@ -874,7 +874,7 @@ class LiveSession:
     # -- tools -----------------------------------------------------------
 
     async def _call_tool(
-        self, name: str, args: dict, timeout: float = TOOL_TIMEOUT,
+        self, name: str, args: dict, timeout: float | None = None,
         memory: TurnMemory | None = None,
     ) -> str:
         """Run one tool with a ceiling, always returning something to the model.
@@ -885,6 +885,7 @@ class LiveSession:
         started = time.monotonic()
         audit.record("voice.live_tool_start", tool=name)
         try:
+            timeout = TOOL_TIMEOUT if timeout is None else timeout   # read late: tests patch it
             result = await asyncio.wait_for(
                 asyncio.to_thread(
                     *((self._run_tool, name, args) if memory is None

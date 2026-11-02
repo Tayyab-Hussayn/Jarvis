@@ -848,6 +848,8 @@ def create_app(token: str | None = None) -> Any:
                         observer=lambda kind, text, data: tracker.handle(kind, text, data),
                         thread_id=principal_thread_id("web", principal),
                     )
+                    # Only passed when on: the switch off keeps the old constructor call.
+                    extra = {"agent": voice_agent} if voice_agent is not None else {}
                     if voice_agent is not None:
                         # `delegate` starts background tasks for this principal;
                         # `task_status` and the confirmation cards find them by it.
@@ -855,7 +857,7 @@ def create_app(token: str | None = None) -> Any:
                     if net is not None:
                         live = LiveSession(
                             observer=voice_observer, confirmer=voice_confirmer,
-                            source=net, sink=net, agent=voice_agent,
+                            source=net, sink=net, **extra,
                         )
                         reader = threading.Thread(
                             target=audio_reader, args=(net,), daemon=True,
@@ -864,8 +866,7 @@ def create_app(token: str | None = None) -> Any:
                         reader.start()
                     else:
                         live = LiveSession(
-                            observer=voice_observer, confirmer=voice_confirmer,
-                            agent=voice_agent,
+                            observer=voice_observer, confirmer=voice_confirmer, **extra,
                         )
                     voice_box["session"] = live
                     voice_box["info"] = {
@@ -875,7 +876,7 @@ def create_app(token: str | None = None) -> Any:
                     session.emit(
                         "voice_state", phase="started", text="live",
                         audio="device" if net is not None else "laptop",
-                        model=live.model, orchestrator=voice_agent is not None,
+                        model=getattr(live, "model", ""), orchestrator=voice_agent is not None,
                     )
                     live.run()
                 else:
@@ -1305,7 +1306,7 @@ def _pickup_reports(held: Any) -> None:
             return
         # A live voice session (the Orchestrator on Gemini Live) is where the
         # owner is talking: the report is spoken there, not typed into the chat.
-        live = (held.voice_box or {}).get("session")
+        live = (getattr(held, "voice_box", None) or {}).get("session")
         if live is not None and getattr(live, "accepts_reports", lambda: False)():
             rows = tasks.manager.claim_reports(held.principal)
             if rows:
