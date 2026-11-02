@@ -355,3 +355,24 @@ def test_a_dead_recorder_is_not_reported_as_silence(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+
+
+def test_self_test_reaches_tts_without_a_microphone(monkeypatch):
+    from kravein import voice
+    from kravein.platform import mic, stt, tts
+
+    spoken = []
+    monkeypatch.setattr(mic, "backend_name", lambda: "")
+    monkeypatch.setattr(mic, "status", lambda: "no recorder")
+    monkeypatch.setattr(stt, "backend_name", lambda: "fake")
+    monkeypatch.setattr(stt, "preload", lambda: "ok")
+    monkeypatch.setattr(stt, "status", lambda: "ready")
+    monkeypatch.setattr(tts, "available", lambda: True)
+    monkeypatch.setattr(tts, "speak", lambda t, blocking=False: spoken.append(t) or "Could not play audio")
+
+    out = voice.self_test()
+    assert spoken, "TTS was never tried"
+    assert "microphone    : FAILED" in out
+    assert "recognition   : ok" in out
+    assert "speech output : FAILED" in out      # the TTS failure is not hidden by the mic
+    assert "live capture  : skipped" in out

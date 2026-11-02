@@ -116,95 +116,128 @@ def status() -> str:
 
 
 def self_test(observer: VoiceObserver | None = None) -> str:
-    """Exercise the whole chain once and report where it breaks.
+    """Exercise the whole chain once and report each stage on its own.
 
-    Checks the microphone's health, records one real utterance, transcribes it,
-    and speaks a reply. This is the only way to validate live capture, which
-    cannot be tested without someone actually speaking.
+    Microphone, recognition and speech output are checked independently: a
+    machine with no microphone used to stop at the first stage, so a broken TTS
+    (edge-tts 403) stayed hidden behind it. Live capture is the only part that
+    needs someone actually speaking, and it runs only when mic and recognition
+    both came up.
     """
     def say(kind: str, text: str) -> None:
         if observer:
             observer(kind, text)
 
     lines: list[str] = []
-
-    ready, problems = readiness()
-    if not ready:
-        return "Voice is not ready:\n" + "\n".join(f"  - {p}" for p in problems)
+    verdict: dict[str, str] = {}
 
     # 1. Input device health.
-    say("info", "checking the microphone (stay quiet for 3 seconds)…")
-    try:
-        report = mic.health(3.0)
-    except mic.MicError as exc:
-        return f"Microphone check failed: {exc}"
-
-    lines.append("--- microphone ---")
-    lines.append(report.report())
+    mic_ok = False
+    if not mic.backend_name():
+        lines.append(f"--- microphone ---\nUnavailable: {mic.status()}")
+        verdict["microphone"] = "FAILED"
+    else:
+        say("info", "checking the microphone (stay quiet for 3 seconds)…")
+        try:
+            report = mic.health(3.0)
+            lines.append("--- microphone ---")
+            lines.append(report.report())
+            mic_ok = True
+            verdict["microphone"] = "ok"
+        except mic.MicError as exc:
+            lines.append(f"--- microphone ---\nMicrophone check failed: {exc}")
+            verdict["microphone"] = "FAILED"
 
     # 2. Speech recognition model.
-    say("info", "loading the speech model…")
-    try:
-        stt.preload()
-    except stt.STTError as exc:
-        lines.append(f"\nRecognition FAILED: {exc}")
-        return "\n".join(lines)
-    lines.append(f"\n--- recognition ---\n{stt.status()}")
+    stt_ok = False
+    if not stt.backend_name():
+        lines.append(f"\n--- recognition ---\nUnavailable: {stt.status()}")
+        verdict["recognition"] = "FAILED"
+    else:
+        say("info", "loading the speech model…")
+        try:
+            stt.preload()
+            lines.append(f"\n--- recognition ---\n{stt.status()}")
+            stt_ok = True
+            verdict["recognition"] = "ok"
+        except stt.STTError as exc:
+            lines.append(f"\n--- recognition ---\nRecognition FAILED: {exc}")
+            verdict["recognition"] = "FAILED"
 
-    # 3. Real capture and transcription.
+    # 3. Speech output - always reached, whatever happened above.
+    lines.append("\n--- speech output ---")
+    if not tts.available():
+        lines.append("No text-to-speech available. Install:  sudo pacman -S mpv")
+        verdict["speech output"] = "FAILED"
+    else:
+        say("info", "testing speech output…")
+        prompt = "Say a short sentence now." if (mic_ok and stt_ok) else "Voice test."
+        spoken = tts.speak(prompt, blocking=True)
+        lines.append(spoken)
+        problem = tts_problem(spoken)
+        if problem:
+            lines.append(f"Speech output problem: {problem}")
+            lines.append(
+                "Fix: upgrade edge-tts (pip install -U 'edge-tts>=7.3.1'; 7.2.x gets "
+                "HTTP 403 from Microsoft) or install an offline voice "
+                "(sudo pacman -S espeak-ng)."
+            )
+            verdict["speech output"] = "FAILED"
+        else:
+            verdict["speech output"] = "ok"
+
+    # 4. Real capture and transcription, only when both inputs are usable.
+    if mic_ok and stt_ok:
+        lines.append(_live_capture_stage(say, verdict))
+    else:
+        lines.append("\n--- live capture ---\nSkipped: needs a working microphone and recognition.")
+        verdict["live capture"] = "skipped"
+
+    lines.append("\n--- summary ---")
+    lines += [f"{name:14}: {state}" for name, state in verdict.items()]
+    if all(v == "ok" for v in verdict.values()):
+        lines.append("All four stages worked. Voice mode is good to go.")
+    return "\n".join(lines)
+
+
+def _live_capture_stage(say, verdict: dict[str, str]) -> str:
+    """Record one utterance, transcribe it. Returns its report section."""
+    verdict["live capture"] = "FAILED"
+    out = ["\n--- live capture ---"]
     say("info", "say a short sentence now…")
-    problem = tts_problem(tts.speak("Say a short sentence now.", blocking=True))
-    if problem:
-        lines.append(f"\n--- speech output ---\nSpeech output problem: {problem}")
-        lines.append(
-            "Fix: upgrade edge-tts (pip install -U 'edge-tts>=7.3.1'; 7.2.x gets "
-            "HTTP 403 from Microsoft) or install an offline voice "
-            "(sudo pacman -S espeak-ng)."
-        )
-
     result = mic.listen(
         silence_threshold=float(config.get("voice.silence_threshold", 0.0) or 0.0),
         silence_seconds=1.2,
         max_seconds=15.0,
         start_timeout=20.0,
     )
-
-    lines.append("\n--- live capture ---")
     if not result.ok:
-        lines.append(f"Captured nothing ({result.reason}).")
-        lines.append(
+        out.append(f"Captured nothing ({result.reason}).")
+        out.append(
             "If you did speak, the threshold is too high for this input. Set it "
             'by hand:  {"voice": {"silence_threshold": 0.35}}'
         )
-        return "\n".join(lines)
+        return "\n".join(out)
 
-    lines.append(f"Captured {result.seconds:.1f}s of audio.")
+    out.append(f"Captured {result.seconds:.1f}s of audio.")
     try:
         heard = stt.transcribe(result.path)
     except stt.STTError as exc:
-        lines.append(f"Transcription FAILED: {exc}")
-        return "\n".join(lines)
+        out.append(f"Transcription FAILED: {exc}")
+        return "\n".join(out)
     finally:
         try:
             result.path.unlink(missing_ok=True)
         except OSError:
             pass
 
-    lines.append(f"Transcribed: {heard!r}")
+    out.append(f"Transcribed: {heard!r}")
     if not heard.strip():
-        lines.append("Audio was captured but no words were recognised.")
-        return "\n".join(lines)
-
-    # 4. Speech output.
+        out.append("Audio was captured but no words were recognised.")
+        return "\n".join(out)
     say("heard", heard)
-    lines.append("\n--- speech output ---")
-    spoken = tts.speak(f"I heard: {heard}", blocking=True)
-    lines.append(spoken)
-    if tts_problem(spoken):
-        lines.append(f"\nSpeech output problem: {tts_problem(spoken)}")
-        return "\n".join(lines)
-    lines.append("\nAll four stages worked. Voice mode is good to go.")
-    return "\n".join(lines)
+    verdict["live capture"] = "ok"
+    return "\n".join(out)
 
 
 _TTS_FAILURES = ("Text-to-speech is unavailable", "No audio player", "Could not play")
