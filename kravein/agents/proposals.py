@@ -35,7 +35,7 @@ from typing import Any
 
 from .. import audit, config
 from ..registry import skill
-from ..safety import Danger
+from ..safety import Danger, SafetyError, Verdict, describe_targets, enforce
 from . import history
 from .profile import list_profiles, load_profile
 
@@ -412,6 +412,30 @@ def decide_proposal(id: str, decision: str, _source: str = "", _context: Any = N
         # the one in which the model made the proposal.
         audit.record("proposal.self_approval_refused", id=pid, source=_source)
         return "You proposed that in this same request; wait for the owner's own answer."
+    if decision.strip().lower() == "approve":
+        # Approving through the model is confirmed on the owner's card, at
+        # CRITICAL so auto-approve never answers it; no confirmer (unattended)
+        # or a "decline" policy denies. A decline needs nothing: it is the
+        # safe direction. The web/phone button is the owner's own act and
+        # goes through REST, not here.
+        current = get(pid)
+        if current is None:
+            return f"No proposal #{id}."
+        what = (f"{current.get('agent')}: {current.get('task')}"
+                if current.get("kind") == "delegate" else "advice only")
+        verdict = Verdict(
+            danger=Danger.CRITICAL,
+            reasons=["starts work the Orchestrator proposed; only the owner may approve it"],
+        )
+        try:
+            enforce(
+                verdict, f"Approve proposal #{current['id']}: {current.get('title')} — {what}",
+                skill="decide_proposal", source=_source or "local",
+                targets=describe_targets(f"proposal:{current['id']}"),
+            )
+        except SafetyError as exc:
+            audit.record("proposal.approve_not_confirmed", id=pid, source=_source)
+            return str(exc)
     try:
         p, changed = decide(pid, decision, source=_source, by=_source)
     except NotAllowed as exc:

@@ -247,7 +247,7 @@ def test_decide_proposal_from_a_live_session_runs_under_its_confirmer(wipes):
 
     def confirmer(action, detail, danger):
         asked.append(action)
-        return False                                 # the owner says no
+        return action.startswith("Approve proposal")  # yes to the card, no to the wipe
 
     agent, stub = _agent_with([say("x")], profile="orchestrator", source="voice", confirmer=confirmer)
     scripts = {
@@ -266,7 +266,7 @@ def test_decide_proposal_from_a_live_session_runs_under_its_confirmer(wipes):
     stub.complete = complete
     agent.ask("yes, do the proposal")
     assert wipes == []                               # the declined step stayed declined
-    assert asked and "x" in asked[0]
+    assert asked[0].startswith("Approve proposal") and any("wipe" in a for a in asked[1:])
     assert pr.get(p["id"])["status"] in ("failed", "done")
     assert pr.get(p["id"])["status"] != "pending"
 
@@ -560,21 +560,78 @@ def test_the_model_cannot_approve_its_own_proposal_in_the_same_request(wipes):
     assert any(r["event"] == "proposal.self_approval_refused" for r in audit_events())
 
 
-def test_a_later_request_from_the_owner_may_decide_it(wipes):
+class Cards:
+    """A confirmer that records every card and answers yes or no."""
+
+    def __init__(self, answer=True):
+        self.answer, self.cards = answer, []
+
+    def __call__(self, action, detail, danger):
+        self.cards.append((action, danger))
+        return self.answer
+
+
+def test_a_later_request_from_the_owner_may_decide_it_on_a_card(wipes):
     p = make("Wipe x", task="wipe x")
-    agent, stub = _agent_with([say("x")], profile="orchestrator", source="web")
+    cards = Cards(True)
+    agent, stub = _agent_with([say("x")], profile="orchestrator", source="web", confirmer=cards)
     _script(stub, [call("decide_proposal", id=p["id"], decision="approve"), say("ok")])
     agent.ask("yes, approve it")
     assert pr.get(p["id"])["status"] == "done"
+    (action, danger), *_ = cards.cards
+    assert action.startswith(f"Approve proposal #{p['id']}: Wipe x") and "system-ops" in action
+    assert int(danger) == int(Danger.CRITICAL) or str(danger).lower().startswith("crit")
 
 
-def test_voice_approval_of_an_already_approved_proposal_still_starts_it(wipes):
+def test_approve_through_the_tool_denied_leaves_it_pending(wipes):
+    p = make("Wipe x", task="wipe x")
+    cards = Cards(False)
+    agent, stub = _agent_with([say("x")], profile="orchestrator", source="web", confirmer=cards)
+    _script(stub, [call("decide_proposal", id=p["id"], decision="approve"), say("ok")])
+    agent.ask("ok")                                    # any owner message, no approval on the card
+    assert len(cards.cards) == 1
+    assert pr.get(p["id"])["status"] == "pending" and wipes == []
+
+
+def test_auto_mode_still_asks_for_a_proposal_approval(wipes, monkeypatch):
+    p = make("Wipe x", task="wipe x")
+    safety.set_confirmation_mode("auto", seconds=600, by="web")
+    try:
+        cards = Cards(False)
+        agent, stub = _agent_with([say("x")], profile="orchestrator", source="web", confirmer=cards)
+        _script(stub, [call("decide_proposal", id=p["id"], decision="approve"), say("ok")])
+        agent.ask("hello")
+        assert len(cards.cards) == 1                   # CRITICAL is never auto-answered
+        assert pr.get(p["id"])["status"] == "pending"
+    finally:
+        safety.set_confirmation_mode("ask", by="test")
+
+
+def test_approve_through_the_tool_without_a_confirmer_is_refused(wipes):
+    p = make("Wipe x", task="wipe x")
+    agent, stub = _agent_with([say("x")], profile="orchestrator", source="web", confirmer=None)
+    _script(stub, [call("decide_proposal", id=p["id"], decision="approve"), say("ok")])
+    agent.ask("hello")
+    assert pr.get(p["id"])["status"] == "pending"
+
+
+def test_decline_through_the_tool_needs_no_card(wipes):
+    p = make("Wipe x", task="wipe x")
+    cards = Cards(True)
+    agent, stub = _agent_with([say("x")], profile="orchestrator", source="web", confirmer=cards)
+    _script(stub, [call("decide_proposal", id=p["id"], decision="decline"), say("ok")])
+    agent.ask("no, skip that")
+    assert cards.cards == [] and pr.get(p["id"])["status"] == "declined"
+
+
+def test_voice_approval_of_an_already_approved_proposal_still_asks_then_starts_it(wipes):
     p = make("Wipe x", task="wipe x")
     pr.decide(p["id"], "approve", source="web")        # approved earlier, nobody was there
-    agent, stub = _agent_with([say("x")], profile="orchestrator", source="voice")
+    cards = Cards(True)
+    agent, stub = _agent_with([say("x")], profile="orchestrator", source="voice", confirmer=cards)
     _script(stub, [call("decide_proposal", id=p["id"], decision="approve"), say("ok")])
     agent.ask("do it now")
-    assert pr.get(p["id"])["status"] == "done"
+    assert len(cards.cards) == 1 and pr.get(p["id"])["status"] == "done"
 
 
 def test_manage_job_cannot_pause_the_review_job():
