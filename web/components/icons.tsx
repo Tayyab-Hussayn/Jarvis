@@ -34,7 +34,8 @@ export type IconName =
   | "chevron"
   | "mic"
   | "schedule"
-  | "habits";
+  | "habits"
+  | "proposals";
 
 const PATHS: Record<IconName, React.ReactNode> = {
   // A checklist with a rising line through it: sequence plus progress, which
@@ -44,6 +45,14 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M4 7h6M4 12h6M4 17h6" />
       <path d="m13 8 2.5 2.5L20 6" />
       <path d="M13 14.5 15.5 17 20 12.5" />
+    </>
+  ),
+  // A card with a spark: something suggested, waiting for a yes or no.
+  proposals: (
+    <>
+      <rect x="4" y="5" width="12" height="14" rx="2" />
+      <path d="M7.5 10h5M7.5 14h3" />
+      <path d="m19 4 .7 1.8L21.5 6.5l-1.8.7L19 9l-.7-1.8-1.8-.7 1.8-.7z" />
     </>
   ),
   // Clock with a hand — scheduled work.

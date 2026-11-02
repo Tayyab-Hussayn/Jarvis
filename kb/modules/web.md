@@ -8,7 +8,7 @@ updated: 2026-11-02
 
 ## Code map
 - `web/` Next.js app (screens, `TurnGraph`, `Screen`) → `npm run build` → `kravein/web-dist/` · `kravein/server.py` FastAPI + ws · `events.py` Session frames · `webauth.py` token/Origin/Host
-- v2 shell (#145): `web/app/page.tsx` (route, wiring) · `components/Shell.tsx` (Hud, Dock, Pane, ConfirmOverlay, Screen) · `Constellation.tsx` + `agentVisual.tsx` + `AgentPane.tsx` · `lib/agents.ts` (state store) · `lib/panes.ts` (hash routes) · tests `agents.test.ts`, `panes.test.ts`, `confirm.test.ts`, `format.test.ts`
+- v2 shell (#145): `web/app/page.tsx` (route, wiring) · `components/Shell.tsx` (Hud, Dock, Pane, ConfirmOverlay, Screen) · `Constellation.tsx` + `agentVisual.tsx` + `AgentPane.tsx` · `lib/agents.ts` (state store) · `lib/panes.ts` (hash routes) · tests `agents.test.ts`, `panes.test.ts`, `confirm.test.ts`, `format.test.ts`, `proposals.test.ts`
 - `kravein/phone.py` phone channel: offers, device store, `PhoneLink`, `call()` · `kravein/phone_protocol.json` the phone vocabulary · tests in `tests/web/test_phone_channel.py`
 
 - Phones panel: `web/components/PhonesView.tsx` (pair + paired list) · pure logic in `web/lib/phones.ts`, QR matrix in `web/lib/qr.ts` (`qrcode-generator`, offline) · tests `web/lib/phones.test.ts`
@@ -81,7 +81,8 @@ Spec: `kb/design/kravein-v2-ui.md`. No sidebar: HUD bar, constellation, transmis
 - **Confirm card:** Deny is `autoFocus` (safe default for Enter/Space), Approve is the primary (laser) button.
 - **Stream:** `TurnGraph` folds a delegate's tool calls (`tool.agent`) into one collapsed, expandable node labelled by agent. `Console` is the stream + composer capsule (`data-composer` on the textarea; Clear is hidden on phones, the palette has "Clear conversation").
 - **Palette:** `Palette` takes `commands` (modules, agents, conversation, clear) listed above the skills.
-- **Proposals:** dock slot exists (`soon`), the pane is a follow-up.
+- **Proposals (#149):** `lib/proposals.ts` (pure: defensive `parseProposal`, `upsert`/`mergeList`/`applyFrame` that never roll a card back past a live frame, `ordered` pending-first, `pendingCount` for the dock badge, `cardModel` = labels + coral accent for major risk + Decline-first/Approve-primary, `decideRequest` = `POST /api/proposals/{id}/decide {decision, session_id}` with the page's current session id) · `components/ProposalsView.tsx` (busy cleared in `finally`, errors shown, first pending card autofocuses Decline) · `useKravein` holds `proposals` (frame `proposal`, seeded by `/api/proposals` on every hello and Refresh). Approving only STARTS the task; every destructive step still asks through the normal confirmation card. Tests `proposals.test.ts`.
+- **Stream polish (#149):** the scroller has top padding and a mask fade under the HUD; the request node is `sticky top-0` inside its turn so the owner's message stays visible while a long turn scrolls (clamped to 4 lines, full text in the title).
 
 
 

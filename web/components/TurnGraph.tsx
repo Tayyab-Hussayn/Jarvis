@@ -264,7 +264,8 @@ function Node({
     case "request":
       return (
         <div
-          className="w-[min(30rem,100%)] border-l-2 py-1 pl-3 text-[length:var(--text-base)] whitespace-pre-wrap"
+          className="line-clamp-4 w-[min(30rem,100%)] border-l-2 py-1 pl-3 text-[length:var(--text-base)] whitespace-pre-wrap"
+          title={node.text}
           style={{
             borderColor: "var(--accent)",
             color: "var(--text-strong)",
@@ -467,8 +468,20 @@ export function TurnGraph({
             ref={(el) => {
               nodeRefs.current[index] = el;
             }}
+            // The owner's own message stays pinned at the top while its turn
+            // scrolls under it (it releases when the turn ends, since the
+            // sticky range is this turn's container).
             className={
-              asGraph && node.kind !== "request" ? "ml-9" : undefined
+              node.kind === "request"
+                ? "sticky top-0 z-[2] pb-2"
+                : asGraph
+                  ? "ml-9"
+                  : undefined
+            }
+            style={
+              node.kind === "request"
+                ? { background: "linear-gradient(var(--bg) 70%, transparent)" }
+                : undefined
             }
           >
             <Node node={node} onRespond={onRespond} />

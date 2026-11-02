@@ -296,7 +296,13 @@ export function Dock({
               key={mod.id}
               type="button"
               data-dock={mod.id}
-              aria-label={mod.soon ? `${mod.label} (coming soon)` : mod.label}
+              aria-label={
+                mod.soon
+                  ? `${mod.label} (coming soon)`
+                  : badge
+                    ? `${mod.label}, ${badge} waiting for you`
+                    : mod.label
+              }
               aria-current={active ? "page" : undefined}
               aria-disabled={mod.soon ? true : undefined}
               onClick={() => !mod.soon && onOpen(mod.id)}

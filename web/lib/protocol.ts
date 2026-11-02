@@ -39,6 +39,9 @@ export type ServerFrame =
   // Pushed by the routine pass inside the same tick. A reminder that was
   // just sent, so an open Habits panel updates without waiting for a poll.
   | { t: "routine_event"; routine: string; step: string; label: string; text: string; nag: number }
+  // A proposal was created or changed state (engine #144). Parsed defensively
+  // by `lib/proposals.ts`; the row shape is the server's.
+  | { t: "proposal"; proposal: unknown }
   | { t: "error"; id?: string; message: string }
   | { t: "reset_ok" }
   | { t: "voice_state"; phase: string; text: string; audio?: "device" | "laptop" }

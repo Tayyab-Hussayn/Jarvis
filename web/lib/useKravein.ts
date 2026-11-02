@@ -38,6 +38,7 @@ import {
   type AgentsModel,
 } from "./agents";
 import { settleConfirm } from "./confirm";
+import { applyFrame as applyProposalFrame, mergeList, type Proposal } from "./proposals";
 import { planRetry, settleOnClose } from "./connection";
 import { SESSION_LOST_NOTE, loadSessionId, maxTurnSeq, saveSessionId } from "./resume";
 import { isVoiceLive } from "./protocol";
@@ -130,6 +131,9 @@ export function useKravein() {
   // process, no turn behind them. Kept apart from `messages` — a nag is not
   // something the assistant said in conversation.
   const [routineEvents, setRoutineEvents] = useState<RoutineEvent[]>([]);
+  // What the Orchestrator suggests; updated live by `proposal` frames and
+  // seeded from /api/proposals (see `mergeProposals`).
+  const [proposals, setProposals] = useState<Proposal[]>([]);
   // The spoken turn currently being built, if any. Ids are `s…` so they cannot
   // collide with typed turns (`t…`), panel runs (`p…`) or the server's own
   // voice turn ids (`v…`, used for confirmation routing).
@@ -464,6 +468,10 @@ export function useKravein() {
             },
             ...current,
           ].slice(0, 20));
+          break;
+
+        case "proposal":
+          setProposals((current) => applyProposalFrame(current, frame));
           break;
 
         case "cancelled":
@@ -958,6 +966,11 @@ export function useKravein() {
     [send],
   );
 
+  // A REST listing or a decide answer: merged, never rolling a card back.
+  const mergeProposals = useCallback((rows: unknown) => {
+    setProposals((current) => mergeList(current, rows));
+  }, []);
+
   const respondToConfirm = useCallback(
     (confirmId: string, approve: boolean) => {
       send({ t: "confirm_reply", confirm_id: confirmId, approve });
@@ -1142,6 +1155,8 @@ export function useKravein() {
     cancelling: cancelling && busy,
     jobEvents,
     routineEvents,
+    proposals,
+    mergeProposals,
     respondToConfirm,
     dismissPanelConfirm,
     reset,
