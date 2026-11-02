@@ -33,12 +33,7 @@ def _load() -> dict[str, dict[str, Any]]:
     with _lock:
         path = config.MEMORY_FILE
         if not path.exists():
-            # Fall back to the original in-repo location on first run.
-            legacy = config.BASE_DIR / "memory" / "long_term.json"
-            if legacy.exists():
-                path = legacy
-            else:
-                return _empty()
+            return _empty()
 
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
