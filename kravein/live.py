@@ -71,7 +71,11 @@ _CONTROL_TOKEN = re.compile(
 # "tarn of dis flaishalaait". The display transcript comes from Whisper's
 # translate task instead (see `_english_heard`); this is the backstop that
 # keeps these scripts off screen when that is unavailable.
-_FOREIGN_SCRIPT = re.compile("[\u0600-\u06ff\u0750-\u077f\u0900-\u097f]+")
+# Telugu slipped through when only Arabic and Devanagari were listed (#182),
+# so the rule is "anything outside Latin text, punctuation and symbols".
+_FOREIGN_SCRIPT = re.compile(
+    "[^\u0000-\u024f\u1e00-\u1eff\u2000-\u206f\u20a0-\u20cf\u2100-\u214f\u2190-\u21ff]+"
+)
 
 # Per-turn microphone audio kept for the English transcript. 30s of PCM16 at
 # 16 kHz; older audio is dropped so a long silence cannot grow without bound.
@@ -89,6 +93,10 @@ def clean_transcript(text: str) -> str:
     """What the user may see: no control tokens, no Devanagari or Arabic script."""
     text = _FOREIGN_SCRIPT.sub(" ", strip_control_tokens(text))
     return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def has_foreign_script(text: str) -> bool:
+    return bool(_FOREIGN_SCRIPT.search(strip_control_tokens(text)))
 
 
 # A tool call blocks the model's turn. Without a ceiling the whole session can
@@ -632,9 +640,31 @@ class LiveSession:
             and stt.translate_ready()
         )
 
+    def _english_from_text(self, raw: str) -> str:
+        """Translate Gemini's foreign-script transcript to English (text LLM).
+
+        Last resort when Whisper is not ready (model still downloading, or no
+        faster-whisper): stripping the script would leave an empty line, and
+        transliterating is forbidden. Blocking; empty on any failure.
+        """
+        try:
+            from . import llm
+
+            out = llm.client().chat(
+                "Translate this speech transcript into plain English. It may be in "
+                "any script (Telugu, Hindi, Urdu...) and may be Roman Urdu or English "
+                "spoken with an accent. Reply with the English sentence only, no "
+                "quotes, no notes, no other script.\n\n" + raw,
+                temperature=0,
+            )
+            return clean_transcript(out)
+        except Exception as exc:
+            audit.record("voice.live_translate_failed", error=str(exc)[:300])
+            return ""
+
     async def _finish_heard(
         self, pcm: bytes, fallback: str, empty: bool = False,
-        said: str = "", actions: list[str] | None = None,
+        said: str = "", actions: list[str] | None = None, raw: str = "",
     ) -> None:
         """Emit the English transcript once Whisper has it, then end the turn.
 
@@ -652,6 +682,16 @@ class LiveSession:
         except Exception as exc:
             audit.record("voice.live_translate_failed", error=str(exc)[:300] or "timeout")
             text = ""
+        if not text and raw and has_foreign_script(raw):
+            try:
+                text = await asyncio.wait_for(
+                    asyncio.to_thread(self._english_from_text, strip_control_tokens(raw)),
+                    timeout=TRANSLATE_TIMEOUT,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                text = ""
         text = text or fallback
         if self._agent is not None:
             self._record_turn(text, said, actions or [])
@@ -720,7 +760,8 @@ class LiveSession:
         engaged = bool(raw_said.strip()) or bool(raw_heard.strip())
         empty = engaged and not spoke and not self._tool_called
         pcm = bytes(self._mic)
-        defer = bool(raw_heard.strip()) and self._can_translate()
+        defer = bool(raw_heard.strip()) and (
+            self._can_translate() or has_foreign_script(raw_heard))
         said_text = clean_transcript(raw_said)
         actions = list(self._actions)
         notes = list(self._report_notes)
@@ -731,7 +772,7 @@ class LiveSession:
             self._heard.clear()
             self._mic.clear()
             task = asyncio.get_running_loop().create_task(
-                self._finish_heard(pcm, heard, empty, said_text, actions))
+                self._finish_heard(pcm, heard, empty, said_text, actions, raw_heard))
             self._finals.add(task)
             task.add_done_callback(self._finals.discard)
         else:

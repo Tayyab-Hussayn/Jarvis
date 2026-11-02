@@ -133,9 +133,12 @@ def test_translate_failure_falls_back_to_geminis_latin_text(backend, monkeypatch
 
 
 def test_translate_failure_with_devanagari_shows_nothing_foreign(backend, monkeypatch):
+    from kravein import llm
+
     def boom(path):
         raise RuntimeError("offline")
 
+    monkeypatch.setattr(llm, "client", lambda: (_ for _ in ()).throw(RuntimeError("down")))
     events = _translated_session(backend, monkeypatch, ["टर्न ऑफ"], boom)
     assert [t for k, t in events if k == "heard"] == []
     assert [e for e in events if e[0] == "listening"][1:]  # the turn still closed
@@ -177,6 +180,9 @@ def test_a_slow_transcript_does_not_delay_the_reply(backend, monkeypatch):
 
 
 def test_reply_of_only_control_tokens_is_replaced_by_a_retry_prompt(backend, monkeypatch):
+    from kravein import llm
+
+    monkeypatch.setattr(llm, "client", lambda: (_ for _ in ()).throw(RuntimeError("down")))
     events, records = _drive(backend, monkeypatch, [
         _resp(server_content=_sc(input_transcription=_text("स्विच टू वर्क स्पेस वन"))),
         _resp(server_content=_sc(output_transcription=_text("<ctrl46>"))),
