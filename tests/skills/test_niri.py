@@ -405,7 +405,7 @@ def test_exact_app_name_is_not_ambiguous_with_a_lookalike(niri, monkeypatch, tmp
 def test_same_name_twice_is_still_ambiguous(niri, monkeypatch, tmp_path):
     backend, _ = niri
     monkeypatch.setattr(desktop, "_backend", backend)
-    twins = [apps.DesktopEntry(name="Editor", exec_cmd="ed1", path=tmp_path / "a.desktop"),
-             apps.DesktopEntry(name="Editor", exec_cmd="ed2", path=tmp_path / "b.desktop")]
+    twins = [apps.DesktopEntry(name="Notes", exec_cmd="ed1", path=tmp_path / "a.desktop"),
+             apps.DesktopEntry(name="Notes", exec_cmd="ed2", path=tmp_path / "b.desktop")]
     monkeypatch.setattr(apps, "find", lambda q: twins)
-    assert "matches several applications" in apps.launch_on_workspace("editor", "2")
+    assert "matches several applications" in apps.launch_on_workspace("notes", "2")

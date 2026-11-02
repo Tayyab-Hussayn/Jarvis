@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 from .. import config
+from ..platform import commands
 from ..platform import shell as shell_platform
 from ..registry import skill
 from ..safety import Danger, classify_command, enforce
@@ -53,6 +54,11 @@ def run_command(
     command = (command or "").strip()
     if not command:
         return "No command given."
+
+    # Unknown program: fail fast with candidates, not "command not found" (#200).
+    command, problem = commands.check_command_line(command)
+    if problem:
+        return problem
 
     verdict = classify_command(command)
     enforce(

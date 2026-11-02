@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 
 from ..platform import apps as apps_platform
+from ..platform import appreg, commands
 from ..platform import desktop, packages, shell
 from ..registry import skill
 from ..safety import Danger, Verdict, describe_targets, enforce
@@ -35,6 +36,40 @@ def open_app(app_name: str, workspace: str = "", focus: bool = True) -> str:
     if str(workspace).strip():
         return apps_platform.launch_on_workspace(app_name, workspace, focus=focus)
     return apps_platform.launch_by_name(app_name)
+
+
+@skill(category="apps", danger=Danger.SAFE)
+def resolve_command(name: str) -> str:
+    """Find the exact executable behind a program name, before running it.
+
+    Use this before typing or running a program whose exact command you are
+    not sure of ("antigravity cli", "the claude tool"). Matches ignore case,
+    spaces and hyphens, and look in PATH, ~/.local/bin, /opt/*/bin, desktop
+    entries and the learned app list. It never guesses: with no exact match
+    it lists the closest candidates for you to choose from.
+
+    Args:
+        name: The program name as the owner said it, e.g. 'antigravity'.
+    """
+    if not name.strip():
+        return "Which program?"
+    return commands.resolve_command(name).explain(name)
+
+
+@skill(category="apps", danger=Danger.MODERATE)
+def forget_app(name: str) -> str:
+    """Remove a wrong or outdated name from the learned app list.
+
+    Kravein remembers what each spoken app name opened after a verified
+    launch. Use this when a remembered name opens the wrong thing: all names
+    for that app are dropped and the next open searches the system again.
+
+    Args:
+        name: The spoken name to forget, e.g. 'anti gravity'.
+    """
+    if not name.strip():
+        return "Which app name should I forget?"
+    return appreg.forget(name)
 
 
 @skill(category="apps", danger=Danger.SAFE)
