@@ -32,16 +32,28 @@ from .agents import history as _history
 from .platform import detect
 from .safety import Confirmer, TurnMemory, confirmer_scope
 
-# Matches the original's constants exactly.
-LIVE_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+# Gemini 3.1 leads (owner decision 2026-11-02, #195): on 13 spoken Orchestrator
+# requests it chose the right first tool 13/13 (2.5: 10/13), answered in half the
+# time, and gives Latin-script transcripts. It needs `send_realtime_input(audio=)`.
+LIVE_MODEL_31 = "models/gemini-3.1-flash-live-preview"
+LIVE_MODEL_25 = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+LIVE_MODEL = LIVE_MODEL_31
 
-# The original's model is a dated preview, so keep replacements ready. All of
-# these advertise bidiGenerateContent (checked against the live models list).
+# Both are previews that get retired, so the 2.5 models stay behind it as the
+# fallback when 3.1 is unavailable or rejects the session. All of these
+# advertise bidiGenerateContent (checked against the live models list).
 LIVE_FALLBACKS = [
-    LIVE_MODEL,
+    LIVE_MODEL_31,
+    LIVE_MODEL_25,
     "models/gemini-2.5-flash-native-audio-latest",
-    "models/gemini-3.1-flash-live-preview",
 ]
+
+# Close codes / statuses that mean "this model will not take the session":
+# retry the next one. 1007/1008 are 3.1's rejection of an invalid payload or
+# policy, 429 a quota on the preview model. Only before any turn has happened,
+# so a dropped connection mid-conversation never silently swaps the voice.
+_RETRY_ALWAYS = ("404", "NOT_FOUND", "503", "UNAVAILABLE")
+_RETRY_BEFORE_FIRST_TURN = ("1007", "1008", "429", "RESOURCE_EXHAUSTED", "timed out")
 SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHANNELS = 1
@@ -1192,9 +1204,11 @@ class LiveSession:
             [self.model] if self.model not in LIVE_FALLBACKS
             else LIVE_FALLBACKS[LIVE_FALLBACKS.index(self.model):]
         )
-        configured = config.get("voice.live_model", "")
+        configured = str(config.get("voice.live_model", "") or "").strip()
         if configured:
-            candidates = [configured]
+            # Tried first, then the rest of the chain: a configured model must
+            # not switch the fallback off (it used to replace the whole list).
+            candidates = [configured] + [m for m in LIVE_FALLBACKS if m != configured]
 
         last: Exception | None = None
         for candidate in candidates:
@@ -1216,7 +1230,9 @@ class LiveSession:
                     "voice.live_error", model=candidate, error=text,
                     trace=traceback.format_exc()[:1200],
                 )
-                if any(t in text for t in ("404", "NOT_FOUND", "503", "UNAVAILABLE")):
+                if any(t in text for t in _RETRY_ALWAYS) or (
+                    self.turns == 0 and any(t in text for t in _RETRY_BEFORE_FIRST_TURN)
+                ):
                     self._emit("info", f"{candidate} unavailable, trying the next model")
                     continue
                 self._emit("error", f"{type(exc).__name__}: {exc}")

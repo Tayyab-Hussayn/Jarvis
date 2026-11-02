@@ -291,7 +291,7 @@ def test_gemini_remains_available_for_voice_and_vision():
     from kravein import config, live
 
     # Removing Gemini from the text chain must not touch the voice pipeline.
-    assert live.LIVE_MODEL == "models/gemini-2.5-flash-native-audio-preview-12-2025"
+    assert live.LIVE_MODEL == "models/gemini-3.1-flash-live-preview"
     assert config.get("voice.live_voice") == "Charon"
     assert config.get("voice.tts_voice") == "en-US-GuyNeural"
     assert config.get("llm.gemini_model")  # still set, for vision
