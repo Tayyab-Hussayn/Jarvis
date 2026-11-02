@@ -420,7 +420,9 @@ def _classify_level(text: str) -> Danger:
     return level
 
 
-def classify_command(command: str, cwd: "str | os.PathLike | None" = None) -> Verdict:
+def classify_command(
+    command: str, cwd: "str | os.PathLike | None" = None, *, _depth: int = 0
+) -> Verdict:
     """Classify a free-form shell command string.
 
     ``cwd`` is the directory the command will run in. Without it a relative
@@ -439,6 +441,13 @@ def classify_command(command: str, cwd: "str | os.PathLike | None" = None) -> Ve
             verdict.danger = Danger.CRITICAL
             verdict.block_reason = why
             return verdict
+
+    # A command this long is not typed by anyone and the analysis below is not
+    # free: ask instead of parsing it (a 100 KB wrapper chain stalled the worker).
+    if len(text) > _MAX_COMMAND_CHARS:
+        verdict.danger = Danger.DESTRUCTIVE
+        verdict.reasons.append("command is unusually long")
+        return verdict
 
     # Writing Kravein's own settings through the shell is refused outright, as
     # check_path() does for file skills. Reading it (cat, grep) stays allowed.
@@ -482,6 +491,14 @@ def classify_command(command: str, cwd: "str | os.PathLike | None" = None) -> Ve
                 matched.append((level, why))
     if _overwrites_existing(text, where):
         matched.append((Danger.DESTRUCTIVE, "overwrites an existing file"))
+    interp_blocked, interp_danger, interp_reason, _ = _interpreter_findings(text, where, _depth)
+    if interp_blocked:
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = interp_blocked
+        return verdict
+    if interp_danger >= Danger.MODERATE:
+        matched.append((interp_danger, interp_reason or _INLINE_REASON))
     blocked_reason, startup_reason = _write_findings(text, where)
     if blocked_reason:
         verdict.blocked = True
@@ -746,7 +763,11 @@ def _argv_safe(command: str, cwd: Path | None) -> bool:
         prog = argv[0]
         if "/" in prog or "=" in prog:
             return False
-        if prog in ("cp", "mv"):
+        if prog in _SHELLS:
+            kind, inner = _shell_inline(argv[1:])
+            if kind != "c" or inner is None or argv[1:] != ["-c", inner] or not _argv_safe(inner, cwd):
+                return False
+        elif prog in ("cp", "mv"):
             if _copy_move_state(prog, argv[1:], cwd) != "new":
                 return False
         elif prog in _SAFE_PROGRAMS:
@@ -912,6 +933,286 @@ def _write_findings(text: str, cwd: Path | None) -> tuple[str, str]:
             if verdict.danger >= Danger.DESTRUCTIVE:
                 return "", "; ".join(verdict.reasons) or "writes to a login/startup location"
     return "", ""
+
+
+# -- inline interpreter code (#206) -------------------------------------------
+#
+# `python3 -c 'import shutil; shutil.rmtree(...)'` classified SAFE and ran with
+# no card: the verb list only knew shell tools, and hard-won-safety.md names
+# interpreter one-liners as the obvious next workaround after a declined `rm`.
+# Kravein cannot prove what arbitrary code does and does not try to parse per
+# API: inline code (a -c/-e/-r flag, code on stdin, a heredoc, eval) is
+# DESTRUCTIVE at minimum and never gets "Always". `bash -c STRING` is
+# classified by its inner string. Running a script *file* keeps its old
+# verdict - a residue: the file's contents are not read.
+
+_SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ash", "fish", "xonsh", "csh", "tcsh"})
+_INTERP_RE = re.compile(
+    r"^(i?python[\d.]*|pythonw[\d.]*|pypy[\d.]*|node(?:js)?[\d.]*|deno|bun|ruby[\d.]*|irb|pry|"
+    r"perl[\d.]*|php[\d.]*|lua[\d.]*|luajit[\d.]*|julia|groovy|jshell|Rscript|"
+    r"awk|gawk|mawk|nawk|tclsh[\d.]*|osascript)$"
+)
+_INTERP_WRAPPERS = _WRAPPERS | {"xargs", "sudo", "doas"}
+# Wrapper options that take a value, so the value is not mistaken for the program.
+_WRAPPER_VALUED = {
+    "nice": {"-n", "--adjustment"}, "ionice": {"-c", "-n", "-p", "--class", "--classdata"},
+    "timeout": {"-s", "-k", "--signal", "--kill-after"}, "stdbuf": {"-i", "-o", "-e"},
+    "xargs": {"-I", "-i", "-n", "-L", "-P", "-s", "-d", "-E", "-a"},
+    "env": {"-u", "-C", "--unset", "--chdir"},
+    "sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"},
+    "doas": {"-u", "-C"},
+    "exec": {"-a"},
+}
+_CODE_MODULES = frozenset({"runpy", "code", "timeit", "cProfile", "profile", "trace", "pdb",
+                           "idlelib", "pydoc", "IPython"})
+_HELP_FLAGS = frozenset({"-V", "--version", "-h", "--help", "-version", "-v"})
+_AWK_SIDE_EFFECTS = re.compile(r"system\s*\(|getline|\||>>?\s*[\"(A-Za-z_]|\bclose\s*\(|\bfflush\b")
+_INLINE_REASON = "runs inline interpreter code"
+_MAX_DEPTH = 3
+_MAX_COMMAND_CHARS = 20000
+
+
+_CONTROL_WORDS = frozenset({"if", "then", "else", "elif", "while", "until", "do", "!", "{",
+                            "coproc", "time"})
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
+_MAX_WRAPPERS = 40          # more than this is not a real command line: treat as inline code
+
+
+def _strip_wrappers(args: list[str]) -> tuple[list[str], bool]:
+    """Drop everything in front of the real program: `NAME=value` words, shell
+    control words (`if/then/do/{/!`), and env/nohup/timeout/xargs/... with
+    their options. Returns (rest, inline) - `env -S 'prog args'` is inline by
+    construction. Index-based and capped: a 100 KB `xargs -I{} xargs ...` chain
+    used to take over a minute (quadratic re-slicing)."""
+    i, n, hops = 0, len(args), 0
+    while i < n:
+        hops += 1
+        if hops > _MAX_WRAPPERS:
+            return args[i:], True
+        word = args[i]
+        name = os.path.basename(word)
+        if _ASSIGN_RE.match(word) or word in _CONTROL_WORDS:
+            i += 1                                   # FOO=1 python3 ...  /  then python3 ...
+            continue
+        if name not in _INTERP_WRAPPERS:
+            break
+        i += 1
+        while i < n and (args[i].startswith("-") or (name == "env" and "=" in args[i])):
+            flag = args[i]
+            i += 1
+            if name == "command" and flag in ("-v", "-V"):
+                return [], False                     # `command -v python3` looks, it does not run
+            if name == "env" and (flag == "-S" or flag.startswith("--split-string")):
+                return args[i:], True
+            if flag in _WRAPPER_VALUED.get(name, ()) and i < n:
+                i += 1
+        if name == "timeout" and i < n:
+            i += 1                                   # the duration
+    return args[i:], False
+
+
+def _scan_interpreter(prog: str, rest: list[str]) -> bool:
+    """True if this interpreter invocation carries inline code or reads code
+    from stdin. False for a script file, a module, or --version/--help."""
+    if rest and all(a in _HELP_FLAGS for a in rest):
+        return False
+    base = re.sub(r"[\d.]+$", "", prog)
+    i = 0
+    if base.endswith("python") or base.startswith(("python", "pypy")):
+        while i < len(rest):
+            a = rest[i]
+            if a == "-":
+                return True
+            if a.startswith("--"):
+                i += 1
+                continue
+            if a.startswith("-"):
+                if "m" in a[1:] and "c" not in a[1:]:
+                    # -m MODULE is a script by our rule, except the modules whose
+                    # whole job is to run code you hand them.
+                    module = (rest[i + 1] if a.endswith("m") and i + 1 < len(rest)
+                              else a[a.index("m") + 1:])
+                    return module.split(".")[0] in _CODE_MODULES
+                if "c" in a[1:]:
+                    return True
+                i += 2 if a in ("-W", "-X") else 1
+                continue
+            return False                              # a script file
+        return True                                   # no script: reads stdin
+    if base in ("node", "nodejs"):
+        valued = {"-r", "--require", "--import", "--loader", "--experimental-loader"}
+        while i < len(rest):
+            a = rest[i]
+            if a.startswith(("--eval", "--print")):
+                return True
+            if a in valued:
+                i += 2
+                continue
+            if a.startswith("--"):
+                i += 1
+                continue
+            if a.startswith("-") and len(a) > 1:
+                if any(ch in a[1:] for ch in "ep"):
+                    return True
+                i += 1
+                continue
+            return a == "-"
+        return True
+    if base in ("deno", "bun"):
+        return any(a in ("eval", "-e", "--eval", "-p", "--print") for a in rest) or not any(
+            not a.startswith("-") for a in rest)
+    if base in ("ruby", "irb", "perl", "php", "lua", "luajit", "tclsh", "osascript", "pry",
+                "julia", "groovy", "jshell", "Rscript"):
+        letters = {"ruby": "e", "irb": "", "perl": "eE", "php": "rRBE", "lua": "e",
+                   "luajit": "e", "tclsh": "", "osascript": "e", "pry": "",
+                   "julia": "eE", "groovy": "e", "jshell": "", "Rscript": "e"}[base]
+        # Options that carry a value (attached or as the next word) and so can
+        # contain the letter by accident: `perl -Mfeature`, `ruby -rjson`.
+        attached = {"perl": ("-M", "-m", "-I", "-d", "-D", "-C"), "ruby": ("-I", "-r", "-C", "-x", "-K"),
+                    "php": ("-d", "-c", "-z", "-f"), "lua": ("-l",), "luajit": ("-l",)}.get(base, ())
+        separate = {"-I", "-r", "-d", "-c", "-z", "-l"} if base != "perl" else set()
+        while i < len(rest):
+            a = rest[i]
+            if a == "-":
+                return True
+            if a.startswith("--"):
+                if a.startswith(("--eval", "--run", "--exec")):
+                    return True
+                i += 1
+                continue
+            if a == "-f" and base == "php":
+                return False                          # a script file
+            if a.startswith("-") and len(a) > 1:
+                if a.startswith(attached) and not (base == "php" and a.startswith("-r")):
+                    i += 2 if a in separate else 1
+                    continue
+                if letters and any(ch in a[1:] for ch in letters):
+                    return True
+                i += 1
+                continue
+            return False                              # a script file
+        return base != "osascript"                    # no script given: reads stdin
+    if base in ("awk", "gawk", "mawk", "nawk"):
+        program = None
+        while i < len(rest):
+            a = rest[i]
+            if a in ("-f", "--file") or a.startswith("--file="):
+                target = rest[i + 1] if a in ("-f", "--file") and i + 1 < len(rest) else a.partition("=")[2]
+                return target in ("-", "") or target.startswith("/dev/")   # a file, unless stdin
+            if a in ("-i", "--include") or a.startswith(("-i", "--include=")) and a != "-":
+                return True                           # gawk -i inplace / includes
+            if a in ("-F", "-v", "-e", "--source") and i + 1 < len(rest):
+                if a in ("-e", "--source"):
+                    program = rest[i + 1]
+                    break
+                i += 2
+                continue
+            if a.startswith("-"):
+                i += 1
+                continue
+            program = a
+            break
+        return bool(program and (_AWK_SIDE_EFFECTS.search(program) or "@include" in program
+                                 or "@load" in program))
+    return False
+
+
+def _shell_inline(rest: list[str]) -> tuple[str, str | None]:
+    """For a shell: ("c", inner) for `-c STRING`, ("stdin", None) when it reads
+    its script from stdin, ("script", None) for a script file or --version."""
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in _HELP_FLAGS:
+            return "script", None
+        if a == "--":
+            i += 1
+            break
+        if a in ("-o", "+o"):
+            i += 2
+            continue
+        if a.startswith("-") and len(a) > 1 and not a.startswith("--"):
+            if "c" in a[1:]:
+                inner = next((x for x in rest[i + 1:] if not x.startswith("-")), None)
+                return ("c", inner) if inner is not None else ("stdin", None)
+            if a == "-s" or a == "-":
+                return "stdin", None
+            i += 1
+            continue
+        if a.startswith("--"):
+            i += 1
+            continue
+        return "script", None
+    return ("stdin", None) if i >= len(rest) else ("script", None)
+
+
+def _interpreter_findings(
+    text: str, cwd: Path | None, depth: int = 0
+) -> tuple[str, Danger, str, bool]:
+    """(blocked reason, danger, reason, all_inner_safe) for interpreter use.
+
+    `all_inner_safe` is only for argv_safe(): every interpreter segment is a
+    `sh -c STRING` whose inner string is itself in the safe set."""
+    segments = _segments(text)
+    if segments is None:
+        return _unparsed_interpreter(text)
+    danger, reason = Danger.SAFE, ""
+    for argv, redirects in segments:
+        rest, inline = _strip_wrappers(list(argv))
+        if not rest:
+            continue
+        prog = os.path.basename(rest[0])
+        args = rest[1:]
+        if prog == "eval":
+            inline = True
+        elif prog in _SHELLS:
+            kind, inner = _shell_inline(args)
+            if kind == "c" and inner is not None:
+                if depth >= _MAX_DEPTH:
+                    inline = True
+                else:
+                    sub = classify_command(inner, cwd, _depth=depth + 1)
+                    if sub.blocked:
+                        return sub.block_reason, Danger.CRITICAL, "", False
+                    if sub.danger > danger:
+                        danger, reason = sub.danger, sub.summary()
+            elif kind == "stdin":
+                inline = True
+        elif _INTERP_RE.match(prog):
+            inline = inline or _scan_interpreter(prog, args)
+        if inline:
+            danger, reason = max(danger, Danger.DESTRUCTIVE), _INLINE_REASON
+    return "", danger, reason, True
+
+
+_UNPARSED_INTERP = re.compile(
+    r"(?:^|[;&|(\n`{]|\$\()\s*"
+    r"(?:(?:env|nohup|nice|time|command|exec|stdbuf|timeout|xargs|sudo|doas|busybox)\s+"
+    r"(?:-\S+\s+|\w+=\S*\s+|\d+\s+)*)*"
+    r"(?:\S*/)?(?P<p>python[\d.]*|pypy[\d.]*|node(?:js)?|deno|bun|ruby|irb|perl|php[\d.]*|"
+    r"lua[\d.]*|luajit|awk|gawk|mawk|nawk|tclsh|osascript|bash|sh|zsh|dash|ksh|ash|eval)\b"
+    r"(?P<rest>[^\n;&|]*)"
+)
+_UNPARSED_INLINE = re.compile(
+    r"(?:^|\s)-[A-Za-z]*[cerEpRB][A-Za-z]*(?:\s|=|$)|--eval|--print|<<|<\s*\S|(?:^|\s)-(?:\s|$)"
+)
+
+
+def _unparsed_interpreter(text: str) -> tuple[str, Danger, str, bool]:
+    """Fallback when the argv cannot be read ($VAR, heredoc, newline): an
+    interpreter in command position with an inline-code marker, or none of
+    the usual script arguments, is treated as inline code."""
+    for m in _UNPARSED_INTERP.finditer(text):
+        prog, rest = m.group("p"), m.group("rest")
+        if prog in ("awk", "gawk", "mawk", "nawk"):
+            if _AWK_SIDE_EFFECTS.search(rest):
+                return "", Danger.DESTRUCTIVE, _INLINE_REASON, False
+            continue
+        if prog == "eval" or not rest.strip() or _UNPARSED_INLINE.search(rest):
+            if any(h in rest for h in ("--version", "--help")) or rest.strip() in ("-V", "-h"):
+                continue
+            return "", Danger.DESTRUCTIVE, _INLINE_REASON, False
+    return "", Danger.SAFE, "", False
 
 # -- "Always" signatures -------------------------------------------------------
 #
@@ -1196,6 +1497,11 @@ def _target_keys(action_desc: str) -> set[str]:
         p.strip("`\"'(),;:").rstrip("/").lower()
         for p in _candidate_paths(action_desc)
     }
+    # A path named inside inline code (`os.remove("/home/u/f")`) is not a
+    # separate word, so it was never a key: a declined `rm` could be retried
+    # through `python3 -c` (#206).
+    for raw in re.findall(r"(?<![\w/.~-])((?:~|/)[\w.+@%~/-]*[\w+@%~-])", action_desc):
+        keys.add(os.path.normpath(os.path.expanduser(raw)).rstrip("/").lower())
     keys |= {f"pid:{pid}" for pid in re.findall(r"\bpid\s*(\d+)", action_desc, re.I)}
     # Named targets are conventionally quoted in these descriptions —
     # "close window 'foot'", "stop service 'nginx'".
