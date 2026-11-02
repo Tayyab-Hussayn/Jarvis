@@ -494,9 +494,25 @@ class Agent:
 
     def ask(self, text: str, stop: threading.Event | None = None) -> Turn:
         """Handle one user request (see ``_ask``) and persist the history."""
+        name = self.profile.name if self.profile is not None else "orchestrator"
+        self._emit("agent_state", "", phase="turn_start", agent=name, task=text)
+        turn: Turn | None = None
         try:
-            return self._ask(text, stop)
+            turn = self._ask(text, stop)
+            return turn
         finally:
+            outcome, summary = "failed", "The turn crashed."
+            if turn is not None:
+                if turn.cancelled:
+                    outcome, summary = "failed", "Stopped at your request."
+                elif turn.error:
+                    outcome, summary = "failed", turn.error
+                elif turn.reply == DECLINED_REPLY:
+                    outcome, summary = "declined", turn.reply
+                else:
+                    outcome, summary = "done", turn.reply
+            self._emit("agent_state", "", phase="turn_end", agent=name,
+                       outcome=outcome, summary=summary)
             self._persist()
 
     def _ask(self, text: str, stop: threading.Event | None = None) -> Turn:
@@ -588,6 +604,8 @@ class Agent:
                     try:
                         if not escalated:
                             tools = self._current_tools(text, tools)
+                        self._emit("agent_state", "", phase="llm_start",
+                                   agent=self.profile.name if self.profile else "orchestrator")
                         kwargs = {"prefer": self.profile.model} if (
                             self.profile is not None and self.profile.model) else {}
                         reply = self._llm.complete(

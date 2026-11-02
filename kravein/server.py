@@ -274,6 +274,24 @@ def create_app(token: str | None = None) -> Any:
                 _run_approved(candidates[-1], p)
         return {"proposal": proposals.get(pid) or p}
 
+    # -- agents (the v2 UI's constellation) -----------------------------------
+
+    @app.get("/api/agents", dependencies=auth)
+    def api_agents() -> dict[str, Any]:
+        from .agents import state as agent_state
+
+        return agent_state.agent_list()
+
+    @app.get("/api/agents/state", dependencies=auth)
+    def api_agents_state(request: Request) -> dict[str, Any]:
+        # Only the caller's own principal: a phone never reads the browser's state.
+        supplied = webauth.token_from_request(
+            request.headers.get("authorization"), request.query_params.get("token")
+        )
+        device = webauth.ui_token_device(supplied)
+        principal = f"device:{device}" if device else "browser"
+        return {"states": app.state.sessions.tracker(principal).snapshot()}
+
     # Posted by the jobs tick (its own process) after it created a proposal.
     @app.post("/api/proposal-event", dependencies=auth)
     async def api_proposal_event(request: Request) -> dict[str, Any]:
@@ -579,6 +597,12 @@ def create_app(token: str | None = None) -> Any:
                 busy=busy.is_set(), voice=held.voice_info(),
             ))
             prelude.extend(session.pending_confirm_frames())
+        # Agents that have had a state, so a (re)connecting client is right at
+        # once; the rest are idle (GET /api/agents/state lists them all).
+        prelude.extend(
+            events.frame("agent_state", **s)
+            for s in store.tracker(principal).snapshot(seen_only=True)
+        )
         session.attach(prelude)
         # A proposal approved while nobody was here starts now.
         _pickup_approved(held)
@@ -1213,9 +1237,13 @@ class _Held:
         self.loop = loop
         self.store = store
         self.session = events.Session(loop)
+        # One tracker per principal: this session's agents report to it, and it
+        # fans the frames out to this principal's sessions only.
+        tracker = store.tracker(principal)
+        self.session.on_wait = tracker.waiting
         self.agent = make_agent(
             source="web",
-            observer=events.observer_for(self.session),
+            observer=events.observer_for(self.session, tracker),
             confirmer=self.session.confirm,
             # Persistent history per principal (the browser, or one paired
             # phone), so it survives a server restart and a phone never reads
