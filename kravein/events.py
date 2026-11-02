@@ -234,8 +234,14 @@ class Session:
 
     # -- confirmations: blocking on the worker, answered on the loop -----
 
-    def confirm(self, action: str, detail: str, danger: Danger) -> bool:
+    def confirm(self, action: str, detail: str, danger: Danger,
+                turn_id: str | None = None) -> bool:
         """A :data:`safety.Confirmer`. **Blocks the calling worker thread.**
+
+        ``turn_id`` names the card's owner when it is not the session's current
+        turn (a background task: ``task:<id>``). It matches no message, so the
+        client shows the global overlay, and ``deny_pending(turn_id)`` can
+        release exactly that task's card.
 
         Returns ``False`` on timeout, on a closed session, or if the client
         answers "no" — deny is the default at every exit.
@@ -244,13 +250,14 @@ class Session:
             return False
 
         confirm_id = f"c{next(_confirm_ids)}"
+        turn_id = self.turn_id if turn_id is None else turn_id
         info = {
             "action": action, "detail": detail, "danger": danger.name,
             "expires_at": time.time() + self.confirm_timeout,
         }
         pending = _Pending(
             frame=frame(
-                "confirm_request", id=self.turn_id, confirm_id=confirm_id,
+                "confirm_request", id=turn_id, confirm_id=confirm_id,
                 action=action, detail=detail, danger=danger.name,
             ),
             expires_at=info["expires_at"],
@@ -265,12 +272,12 @@ class Session:
             confirm_id=confirm_id,
             action=action,
             danger=danger.name,
-            turn=self.turn_id,
+            turn=turn_id,
         )
 
         self.emit(
             "confirm_request",
-            id=self.turn_id,
+            id=turn_id,
             confirm_id=confirm_id,
             action=action,
             detail=detail,
@@ -323,13 +330,13 @@ class Session:
         # `denied` also covers a cancel or a dropped session.
         outcome = "expired" if not answered else "approved" if approved else "denied"
         self.emit(
-            "confirm_resolved", id=self.turn_id, confirm_id=confirm_id,
+            "confirm_resolved", id=turn_id, confirm_id=confirm_id,
             outcome=outcome, by=pending.by,
         )
         if not answered:
             # Kept for clients that predate confirm_resolved.
             self.emit(
-                "confirm_expired", id=self.turn_id, confirm_id=confirm_id,
+                "confirm_expired", id=turn_id, confirm_id=confirm_id,
             )
         return approved
 
@@ -363,7 +370,7 @@ class Session:
         pending.event.set()
         return True
 
-    def deny_pending(self) -> int:
+    def deny_pending(self, turn_id: str | None = None, keep_tasks: bool = False) -> int:
         """Release every waiting confirmation as a denial. Returns how many.
 
         Cancelling a turn that is parked on a confirmation has to answer it,
@@ -376,8 +383,16 @@ class Session:
         it is the turn that is being abandoned.
         """
         with self._pending_lock:
-            pending = list(self._pending.values())
-            self._pending.clear()
+            if turn_id is not None:
+                # Only one task's cards: Stop on a task must not answer the
+                # Orchestrator's own (or another task's) open confirmation.
+                ids = [k for k, v in self._pending.items() if v.frame.get("id") == turn_id]
+            elif keep_tasks:
+                ids = [k for k, v in self._pending.items()
+                       if not str(v.frame.get("id", "")).startswith("task:")]
+            else:
+                ids = list(self._pending)
+            pending = [self._pending.pop(k) for k in ids]
         for p in pending:
             p.approved = False
             p.event.set()

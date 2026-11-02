@@ -38,7 +38,7 @@ from typing import Any, Optional
 
 from . import audit, config, discovery, events, phone, registry, safety, webauth
 from .agent import Agent, make_agent
-from .agents import proposals
+from .agents import proposals, tasks
 from .agents.history import principal_thread_id
 from .platform import detect
 from .safety import confirmer_scope
@@ -111,11 +111,21 @@ def create_app(token: str | None = None) -> Any:
                     proposals.sweep_expired()
 
         threading.Thread(target=sweep_proposals, name="proposal-expiry", daemon=True).start()
+        # Background sub-agent tasks: a previous process's leftovers are dead;
+        # this server is now their host (frames, confirmations, follow-ups).
+        tasks.manager.reset()
+        with contextlib.suppress(Exception):
+            tasks.manager.fail_orphans()
+        tasks.configure(_TaskHost(_app.state.sessions))
         try:
             yield
         finally:
             proposals.in_server = False
             stop.set()
+            # Tasks first: they are marked `failed: server stopped` and their
+            # open cards denied, never left "running".
+            tasks.manager.shutdown()
+            tasks.configure(None)
             # Nothing may keep a microphone or a blocked confirmation alive
             # past the server; sessions are not persisted across a restart.
             for held in _app.state.sessions.items():
@@ -291,6 +301,44 @@ def create_app(token: str | None = None) -> Any:
         device = webauth.ui_token_device(supplied)
         principal = f"device:{device}" if device else "browser"
         return {"states": app.state.sessions.tracker(principal).snapshot()}
+
+    # -- background sub-agent tasks (contract for the web client) -------------
+    #
+    #   GET  /api/tasks?status=&id=   {"tasks": [{id, agent, task, status, step,
+    #                                  tool, created, elapsed, started?, ended?,
+    #                                  outcome?, summary?}]}   (+ "report" with ?id=)
+    #   POST /api/tasks/{id}/cancel   {"ok": bool, "detail": str, "task": {...}?}
+    #   ws frame {"t": "task", ...same fields...} on create, each step, end;
+    #   "cancelled" frames carry tasks_cancelled + other_tasks.
+    # Only the caller's own principal's tasks, like /api/agents/state.
+
+    def _principal_of(request: Request) -> str:
+        supplied = webauth.token_from_request(
+            request.headers.get("authorization"), request.query_params.get("token")
+        )
+        device = webauth.ui_token_device(supplied)
+        return f"device:{device}" if device else "browser"
+
+    @app.get("/api/tasks", dependencies=auth)
+    def api_tasks(request: Request, status: str = "", id: str = "") -> dict[str, Any]:
+        principal = _principal_of(request)
+        found = tasks.manager.list(principal, status)
+        if id:
+            found = [t for t in found if t["id"] == id]
+            return {"tasks": found, "report": tasks.manager.report(principal, id) if found else ""}
+        return {"tasks": found}
+
+    @app.post("/api/tasks/{task_id}/cancel", dependencies=auth)
+    def api_task_cancel(task_id: str, request: Request) -> Any:
+        principal = _principal_of(request)
+        detail = tasks.manager.cancel(task_id, principal)
+        known = [t for t in tasks.manager.list(principal) if t["id"] == task_id]
+        out: dict[str, Any] = {"ok": detail.startswith(f"task {task_id}: stopping"), "detail": detail}
+        if known:
+            out["task"] = known[0]
+        if not known:
+            return JSONResponse(out, status_code=404)
+        return out
 
     # Posted by the jobs tick (its own process) after it created a proposal.
     @app.post("/api/proposal-event", dependencies=auth)
@@ -604,8 +652,10 @@ def create_app(token: str | None = None) -> Any:
             for s in store.tracker(principal).snapshot(seen_only=True)
         )
         session.attach(prelude)
-        # A proposal approved while nobody was here starts now.
+        # A proposal approved while nobody was here starts now; so does the
+        # announcement of a task that finished while nobody was attached.
         _pickup_approved(held)
+        _pickup_reports(held)
 
         # The JSON pump and the audio sender both write to this socket.
         send_lock = asyncio.Lock()
@@ -652,8 +702,10 @@ def create_app(token: str | None = None) -> Any:
                 session.emit("turn_end", id=turn_id, iterations=0, error=str(exc))
             finally:
                 busy.clear()
-                # An approval that arrived while this turn ran starts now.
+                # An approval that arrived while this turn ran starts now, and
+                # so does the announcement of a task report that ended meanwhile.
                 _pickup_approved(held)
+                _pickup_reports(held)
 
         def _dispatch(skill: str, args: dict) -> str:
             """Run one skill on the worker thread, with confirmations wired.
@@ -980,17 +1032,29 @@ def create_app(token: str | None = None) -> Any:
                     # for ever otherwise — the same failure the voice toggle
                     # had.
                     if not busy.is_set():
-                        session.emit("cancelled", id="", pending_confirms=0)
+                        # Nothing of this turn to stop; still say which
+                        # background tasks are running so the UI can offer them.
+                        _, running = tasks.manager.cancel_turn(principal, -1)
+                        session.emit("cancelled", id="", pending_confirms=0,
+                                     tasks_cancelled=0, other_tasks=running)
                         continue
                     stop_turn.set()
                     # A turn parked on a confirmation is not looping; it is
                     # blocked. Answering the card is what lets it reach the
-                    # next stop check at all.
-                    released = session.deny_pending()
-                    audit.record("web.cancel", released_confirms=released)
+                    # next stop check at all. (Task cards are left alone here:
+                    # an older task's card must not be denied by this Stop.)
+                    released = session.deny_pending(keep_tasks=True)
+                    # Stop also cancels every task this turn started (their own
+                    # cards are released there); earlier ones keep running and
+                    # are listed so the owner can cancel them too.
+                    cancelled_tasks, other_tasks = tasks.manager.cancel_turn(
+                        principal, getattr(agent, "turn_no", 0), str(id(agent)))
+                    audit.record("web.cancel", released_confirms=released,
+                                 tasks_cancelled=len(cancelled_tasks))
                     session.emit(
                         "cancelled", id=session.turn_id or "",
                         pending_confirms=released,
+                        tasks_cancelled=len(cancelled_tasks), other_tasks=other_tasks,
                     )
 
                 elif kind == "reset":
@@ -1182,6 +1246,9 @@ def _run_approved(held: Any, p: dict) -> bool:
         session.turn_id = turn_id
         held.stop_turn.clear()
         session.emit("turn_start", id=turn_id)
+        # The proposal is finished from this turn's result, so a delegate inside
+        # it must block until the real report (a background handle is not one).
+        held.agent.delegate_wait = True
         try:
             turn = await asyncio.to_thread(held.agent.ask, text, held.stop_turn)
             proposals.finish(
@@ -1200,11 +1267,116 @@ def _run_approved(held: Any, p: dict) -> bool:
             proposals.finish(pid, False, "The session ended before it finished.")
             raise
         finally:
+            held.agent.delegate_wait = False
             held.busy.clear()
             _pickup_approved(held)
+            _pickup_reports(held)
 
     held.turn_task = asyncio.create_task(go())
     return True
+
+
+def _pickup_reports(held: Any) -> None:
+    """Announce finished background tasks in this (idle, attached) session.
+
+    Event-loop thread only. The claim (`announced` 0 -> 1) is one SQL UPDATE, so
+    two sessions or two simultaneous task ends cannot announce a report twice;
+    several ready reports share one short turn. That turn may only call
+    ``task_status``: a report is a sub-agent's output, i.e. untrusted text.
+    """
+    try:
+        if held.busy.is_set() or held.client is None:
+            return
+        rows = tasks.manager.claim_reports(held.principal)
+        if not rows:
+            return
+        if not _run_report_turn(held, rows):
+            tasks.manager.note_rows(rows)          # still known to the thread
+    except Exception as exc:
+        audit.record("task.pickup_failed", error=type(exc).__name__)
+
+
+def _run_report_turn(held: Any, rows: list) -> bool:
+    text = "\n\n".join(tasks.manager.note_text(r) for r in rows) + (
+        "\n\nTell the owner the result in one short sentence."
+    )
+    turn_id = "tk-" + rows[0]["id"]
+    session = held.session
+    held.busy.set()
+
+    async def go() -> None:
+        session.turn_id = turn_id
+        held.stop_turn.clear()
+        session.emit("turn_start", id=turn_id)
+        try:
+            turn = await asyncio.to_thread(
+                held.agent.ask, text, held.stop_turn, allowed=frozenset({"task_status"}))
+            session.emit(
+                "turn_end", id=turn_id, iterations=turn.iterations,
+                tool_calls=turn.tool_calls, error=turn.error, cancelled=turn.cancelled,
+            )
+        except Exception as exc:
+            audit.record("web.turn_failed", error=f"{type(exc).__name__}: {exc}")
+            session.emit("turn_end", id=turn_id, iterations=0, error=str(exc))
+        finally:
+            held.busy.clear()
+            _pickup_approved(held)
+            _pickup_reports(held)
+
+    held.turn_task = asyncio.create_task(go())
+    return True
+
+
+class _TaskHost:
+    """What ``agents.tasks`` needs from the running server (see its docstring).
+
+    Called from task threads, so everything here is thread-safe or hops to the
+    event loop. Sessions are looked up per call: a task outlives any one socket.
+    """
+
+    def __init__(self, store: "events.SessionStore") -> None:
+        self.store = store
+
+    def _mine(self, principal: str) -> list:
+        try:
+            return [h for h in self.store.items() if h.principal == principal]
+        except RuntimeError:               # the dict changed while we copied it
+            return []
+
+    def _attached(self, principal: str) -> list:
+        return [h for h in self._mine(principal)
+                if h.client is not None and not h.session.closed]
+
+    def tracker(self, principal: str) -> Any:
+        return self.store.tracker(principal)
+
+    def emit(self, principal: str, fields: dict) -> None:
+        for h in self._mine(principal):
+            h.session.emit("task", **fields)
+
+    def attended(self, principal: str) -> bool:
+        return bool(self._attached(principal))
+
+    def confirm(self, principal: str, action: str, detail: str, danger: Any,
+                task_id: str) -> bool:
+        # The newest attached session of the owner. None -> deny at once: a card
+        # nobody can see would only wait out its timeout.
+        attached = self._attached(principal)
+        if not attached:
+            return False
+        return bool(attached[-1].session.confirm(
+            action, detail, danger, turn_id=f"task:{task_id}"))
+
+    def cancel_cards(self, principal: str, task_id: str) -> None:
+        for h in self._mine(principal):
+            h.session.deny_pending(f"task:{task_id}")
+
+    def deliver(self, principal: str) -> bool:
+        attached = self._attached(principal)
+        for h in attached:
+            with contextlib.suppress(RuntimeError):
+                h.loop.call_soon_threadsafe(_pickup_reports, h)
+        return bool(attached)
 
 
 def _pickup_approved(held: Any) -> None:
@@ -1251,6 +1423,9 @@ class _Held:
             # must not carry the device id or any token verbatim.
             thread_id=principal_thread_id("web", principal),
         )
+        # Who `delegate` starts background tasks for, and where `task_status`
+        # looks: the owner's principal, never a token.
+        self.agent.principal = principal
         # One turn at a time. A second `ask` mid-turn is rejected outright
         # rather than queued — queuing would let a user stack destructive
         # requests behind a confirmation they have not answered yet.

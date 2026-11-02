@@ -39,6 +39,8 @@ ORCHESTRATOR_TOOLS = (
     "write_clipboard", "take_screenshot", "delegate",
     # Phase 4 (#143): the proposals queue.
     "propose", "decide_proposal",
+    # Background tasks (#158): progress and cancel for `delegate`.
+    "task_status", "cancel_task",
 )
 
 

@@ -164,9 +164,56 @@ def _close_dangling_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     )]
 
 
-def save(profile: str, thread: str, messages: list[dict[str, Any]], summary: str) -> None:
+def stamp(profile: str, thread: str) -> float:
+    """When the thread was last written (0.0 if it never was).
+
+    An agent compares this with the value it saw at its last load/save to
+    notice that another writer (a voice session) appended to its thread.
+    """
+    with closing(_connect()) as conn:
+        row = conn.execute(
+            "SELECT updated FROM threads WHERE profile=? AND thread=?", (profile, thread)
+        ).fetchone()
+    return float(row[0]) if row else 0.0
+
+
+def append(profile: str, thread: str, messages: list[dict[str, Any]]) -> float:
+    """Add whole messages to the end of a thread; returns the new stamp.
+
+    Voice writes spoken turns here instead of holding the text agent's list:
+    one INSERT transaction, so it cannot interleave with a ``save``.
+    """
     import time
 
+    import secrets
+
+    now = time.time()
+    # `xid` lets a running agent recognise a message it did not write and keep
+    # it when it next saves the thread (see `Agent._persist`).
+    messages = [{**m, "xid": m.get("xid") or secrets.token_hex(6)} for m in messages]
+    with _write_lock, closing(_connect()) as conn:
+        with conn:
+            (top,) = conn.execute(
+                "SELECT COALESCE(MAX(seq), -1) FROM messages WHERE profile=? AND thread=?",
+                (profile, thread),
+            ).fetchone()
+            conn.executemany(
+                "INSERT INTO messages (profile, thread, seq, body) VALUES (?,?,?,?)",
+                [(profile, thread, top + 1 + i, json.dumps(m, ensure_ascii=False, default=_encode))
+                 for i, m in enumerate(messages)],
+            )
+            conn.execute(
+                "INSERT INTO threads (profile, thread, summary, updated) VALUES (?,?,?,?) "
+                "ON CONFLICT(profile, thread) DO UPDATE SET updated=excluded.updated",
+                (profile, thread, "", now),
+            )
+    return now
+
+
+def save(profile: str, thread: str, messages: list[dict[str, Any]], summary: str) -> float:
+    import time
+
+    now = time.time()
     rows = [
         (profile, thread, i, json.dumps(m, ensure_ascii=False, default=_encode))
         for i, m in enumerate(messages)
@@ -183,8 +230,9 @@ def save(profile: str, thread: str, messages: list[dict[str, Any]], summary: str
                 "INSERT INTO threads (profile, thread, summary, updated) VALUES (?,?,?,?) "
                 "ON CONFLICT(profile, thread) DO UPDATE SET "
                 "summary=excluded.summary, updated=excluded.updated",
-                (profile, thread, summary, time.time()),
+                (profile, thread, summary, now),
             )
+    return now
 
 
 def delete(profile: str, thread: str) -> None:
