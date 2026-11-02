@@ -855,7 +855,8 @@ class LiveSession:
             # drops the chunk: stale audio is worse than a gap.
             with contextlib.suppress(asyncio.QueueFull, RuntimeError):
                 loop.call_soon_threadsafe(
-                    out_queue.put_nowait, {"data": data, "mime_type": "audio/pcm"}
+                    out_queue.put_nowait,
+                    {"data": data, "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}"},
                 )
 
         await self._source.capture(put, self._astop, lambda: self._emit("listening", ""))
@@ -866,7 +867,10 @@ class LiveSession:
             if self._session is None:
                 continue
             try:
-                await self._session.send_realtime_input(media=message)
+                # `audio=`, not the deprecated `media=`: gemini-3.1-flash-live-
+                # preview closes the socket (1007 "media_chunks is deprecated")
+                # on the first chunk otherwise. 2.5 accepts both (#195).
+                await self._session.send_realtime_input(audio=message)
             except Exception as exc:
                 self._emit("error", f"send failed: {exc}")
                 return

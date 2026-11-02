@@ -382,7 +382,7 @@ def _typed_session(backend, tmp_path, monkeypatch, **kw):
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)      # `backend` points it nowhere
     sent = []
 
-    async def rec(self, media=None, text=None):
+    async def rec(self, audio=None, text=None):
         if text is not None:
             sent.append(text)
 
