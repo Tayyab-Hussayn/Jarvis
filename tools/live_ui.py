@@ -73,7 +73,7 @@ def _ask(p, text: str, prefix: str, decision: str, budget: int) -> None:
         body = pg.inner_text("body")
         if body != last:
             last = body
-        deny = pg.get_by_role("button", name="Deny")
+        deny = pg.get_by_role("button", name="Deny", exact=True)
         if deny.count() and not seen_card:
             seen_card = True
             print("CARD:", pg.locator("body").inner_text()[-900:].replace("\n", " | "))
