@@ -35,7 +35,7 @@ git ls-files -z --exclude-standard \
 # One array element per filter: a missing space once glued two into one argument
 # and silently left .build.log and __pycache__ unprotected.
 PROTECT=(/.venv/ /web/node_modules/ /web/.next/ /kravein/web-dist/ /.pip-cache/
-         /.npm-cache/ /.install.log /.build.log __pycache__/ .pytest_cache/)
+         /.npm-cache/ /.install.log /.build.log /.qa-shots/ /.qa-state/ /.qa-scratch/ /.qa-serve.log __pycache__/ .pytest_cache/)
 FILTERS=()
 for p in "${PROTECT[@]}"; do FILTERS+=("--filter=P $p"); done
 

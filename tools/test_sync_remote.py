@@ -13,6 +13,7 @@ SCRIPT = ROOT / "tools" / "sync-remote.sh"
 PROTECTED = [
     ".venv/x", "web/node_modules/x", "web/.next/x", "kravein/web-dist/x",
     ".pip-cache/x", ".npm-cache/x", ".install.log", ".build.log",
+    ".qa-shots/x", ".qa-state/x/y", ".qa-scratch/x", ".qa-serve.log",
     "pkg/__pycache__/x.pyc", ".pytest_cache/x",
 ]
 
