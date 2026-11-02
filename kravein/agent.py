@@ -641,7 +641,7 @@ class Agent:
 
             # The confirmer must be installed for the whole loop, since skills
             # run on this thread and read it from thread-local state.
-            with confirmer_scope(self.confirmer, self._memory):
+            with confirmer_scope(self.confirmer, self._memory, principal=self.principal or None):
                 for iteration in range(1, max_iterations + 1):
                     turn.iterations = iteration
                     if cancelled():

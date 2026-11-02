@@ -275,12 +275,16 @@ class TaskManager:
             if t.stop.is_set():
                 return False
             try:
-                ok = bool(host.confirm(t.principal, action, detail, danger, t.id))
+                raw = host.confirm(t.principal, action, detail, danger, t.id)
             except Exception:
                 return False
             # Cancelled while the card was open: an approval that lands after the
             # owner said stop must not let the step run.
-            return ok and not t.stop.is_set()
+            if t.stop.is_set():
+                return False
+            # "Always" (#199) passes through so the card's third button works
+            # on a background task too; enforce() stores the rule.
+            return safety.ALWAYS if raw == safety.ALWAYS else bool(raw)
 
         confirm.attended = lambda: bool(host.attended(t.principal))  # type: ignore[attr-defined]
         return confirm

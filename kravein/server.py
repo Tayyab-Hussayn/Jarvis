@@ -441,6 +441,21 @@ def create_app(token: str | None = None) -> Any:
         except ValueError as exc:
             return JSONResponse({"detail": str(exc)}, status_code=400)
 
+    # -- "Always approve" rules (#199): list and revoke only. Rules are
+    # created solely by the owner's "Always" answer on a confirmation card, so
+    # there is deliberately no POST here. Scoped to the caller's principal; an
+    # id that belongs to someone else is a 404, like any unknown id.
+
+    @app.get("/api/safety/rules", dependencies=auth)
+    def api_rules(request: Request) -> dict[str, Any]:
+        return {"rules": safety.list_rules(_principal_of(request))}
+
+    @app.delete("/api/safety/rules/{rule_id}", dependencies=auth)
+    def api_rule_revoke(rule_id: str, request: Request) -> Any:
+        if not safety.revoke_rule(rule_id, _principal_of(request), by="web"):
+            return JSONResponse({"detail": "No such rule"}, status_code=404)
+        return {"ok": True}
+
     @app.post("/api/safety/auto/off", dependencies=auth)
     def api_policy_auto_off() -> dict[str, Any]:
         return safety.disable_auto_approve(by="web")
@@ -715,7 +730,7 @@ def create_app(token: str | None = None) -> Any:
             `kill_process` raises the identical confirmation card, and the
             per-turn denial memory applies here too.
             """
-            with confirmer_scope(session.confirm):
+            with confirmer_scope(session.confirm, principal=principal):
                 return registry.dispatch(skill, args, source="web-panel")
 
         async def run_skill(turn_id: str, skill: str, args: dict) -> None:
@@ -1042,8 +1057,17 @@ def create_app(token: str | None = None) -> Any:
                         session.emit("voice_state", phase="stopped", text="")
 
                 elif kind == "confirm_reply":
+                    # `decision` ("approve" | "always" | "deny") is the contract
+                    # since #199; `approve: bool` still works. A decision that
+                    # is present but not a string is a denial.
+                    if "decision" in msg:
+                        answer: Any = msg.get("decision")
+                        if not isinstance(answer, str):
+                            answer = "deny"
+                    else:
+                        answer = bool(msg.get("approve"))
                     ok = session.resolve_confirm(
-                        str(msg.get("confirm_id") or ""), bool(msg.get("approve"))
+                        str(msg.get("confirm_id") or ""), answer
                     )
                     if not ok:
                         session.emit(
@@ -1399,8 +1423,10 @@ class _TaskHost:
         attached = self._attached(principal)
         if not attached:
             return False
-        return bool(attached[-1].session.confirm(
-            action, detail, danger, turn_id=f"task:{task_id}"))
+        # Not bool(): "always" (#199) must reach safety.enforce() unchanged.
+        answer = attached[-1].session.confirm(
+            action, detail, danger, turn_id=f"task:{task_id}")
+        return answer if answer == safety.ALWAYS else bool(answer)
 
     def cancel_cards(self, principal: str, task_id: str) -> None:
         for h in self._mine(principal):
