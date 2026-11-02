@@ -22,7 +22,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 case "$DEST" in
   /home/*/Projects/*/kravein|/home/*/Projects/*/kravein/) ;;
-  *) echo "refusing: $DEST is not under ~/Projects/<group>/kravein" >&2; exit 2 ;;
+  *) [ "$HOST" = "-" ] && true || { echo "refusing: $DEST is not under ~/Projects/<group>/kravein" >&2; exit 2; } ;;
 esac
 
 STAGE="$(mktemp -d)"
@@ -32,9 +32,14 @@ git ls-files -z --exclude-standard \
   | grep -zvE '^(android/|\.claude/|\.github/|kb/)' \
   | rsync -a --from0 --files-from=- ./ "$STAGE/"
 
-rsync -a --delete --mkpath \
-  --filter='P /.venv/' --filter='P /web/node_modules/' --filter='P /web/.next/' \
-  --filter='P /kravein/web-dist/' --filter='P /.pip-cache/' --filter='P /.npm-cache/' \
-  --filter='P /.install.log' --filter='P /.build.log'--filter='P __pycache__/' --filter='P .pytest_cache/' \
-  "$STAGE/" "$HOST:$DEST/"
+# One array element per filter: a missing space once glued two into one argument
+# and silently left .build.log and __pycache__ unprotected.
+PROTECT=(/.venv/ /web/node_modules/ /web/.next/ /kravein/web-dist/ /.pip-cache/
+         /.npm-cache/ /.install.log /.build.log __pycache__/ .pytest_cache/)
+FILTERS=()
+for p in "${PROTECT[@]}"; do FILTERS+=("--filter=P $p"); done
+
+# HOST "-" = local directory (used by the test); anything else is ssh.
+if [ "$HOST" = "-" ]; then TARGET="$DEST/"; else TARGET="$HOST:$DEST/"; fi
+rsync -a --delete --mkpath "${FILTERS[@]}" "$STAGE/" "$TARGET"
 echo "synced $(git rev-parse --short HEAD) -> $HOST:$DEST"
