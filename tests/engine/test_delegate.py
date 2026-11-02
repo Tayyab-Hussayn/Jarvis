@@ -474,11 +474,13 @@ def test_subagent_activity_reaches_the_observer_labelled(_zz_skills):
     agent.observer = lambda kind, text, data: frames.append((kind, text, data))
     agent.ask("wipe x")
     child = [f for f in frames if f[2].get("agent") == "system-ops"]
-    assert {f[0] for f in child} == {"tool", "tool_result"}
-    assert all(f[1].startswith("[system-ops]") for f in child)
+    # agent_state (#146) is the state tracker's feed; activity is tool/tool_result.
+    assert {f[0] for f in child} == {"tool", "tool_result", "agent_state"}
+    assert all(f[1].startswith("[system-ops]") for f in child if f[0] != "agent_state")
+    assert {f[2]["phase"] for f in frames if f[0] == "agent_state"} >= {"delegate_end"}
     assert not [f for f in frames if f[0] == "answer" and f[2].get("agent")]
     parent_ids = {f[2]["call_id"] for f in frames if f[0] == "tool" and not f[2].get("agent")}
-    assert not parent_ids & {f[2]["call_id"] for f in child}   # no id collision in the UI
+    assert not parent_ids & {f[2]["call_id"] for f in child if f[0] != "agent_state"}   # no id collision in the UI
 
 
 # -- profile model ----------------------------------------------------------------------------

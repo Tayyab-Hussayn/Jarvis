@@ -209,12 +209,14 @@ def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> 
 
         def observer(kind: str, text: str, data: dict) -> None:
             # Activity only: the sub-agent's answer/error are not the turn's.
-            if parent_observer is None or kind not in ("tool", "tool_result", "thinking"):
+            if parent_observer is None or kind not in (
+                "tool", "tool_result", "thinking", "agent_state"
+            ):
                 return
             data = {**data, "agent": name, "delegation": did}
             if data.get("call_id"):
                 data["call_id"] = f"{did}:{data['call_id']}"
-            parent_observer(kind, f"[{name}] {text}", data)
+            parent_observer(kind, f"[{name}] {text}" if text else "", data)
 
         child = Agent(
             source=parent.source,
@@ -283,4 +285,14 @@ def delegate(agent: str, task: str, context: str = "", _context: Any = None) -> 
 
         audit.record("agent.delegate_end", outcome=report.outcome, tools=tools,
                      rounds=getattr(turn, "iterations", 0))
+        if parent_observer is not None:
+            # The end of the delegation, with the outcome decided above: this is
+            # what the UI shows (done / failed / declined), not the child's turn end.
+            try:
+                parent_observer("agent_state", "", {
+                    "phase": "delegate_end", "agent": name, "delegation": did,
+                    "outcome": report.outcome, "summary": report.summary,
+                })
+            except Exception:
+                pass
     return render(report, agent=name, delegation=did, tools=tools, limit=limit)
