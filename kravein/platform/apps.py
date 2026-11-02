@@ -372,6 +372,12 @@ def list_entries(category: str = "", limit: int = 0) -> list[dict]:
     ]
 
 
+def _is_named(entry: DesktopEntry, text: str) -> bool:
+    """The query is this entry's own name or desktop id, case-insensitively."""
+    text = text.removesuffix(".desktop")
+    return text in (entry.name.lower(), entry.id.removesuffix(".desktop").lower())
+
+
 def _is_exact(entry: DesktopEntry, text: str) -> bool:
     binary = Path(entry.command()[0]).name.lower() if entry.command() else ""
     return text in (
@@ -417,13 +423,19 @@ def launch_on_workspace(query: str, workspace: str) -> str:
             f"Try `search_apps {query}` to see what is installed."
         )
     text = query.strip().lower()
+    # Name or desktop id first: "kitty" is the app named kitty, even though
+    # "kitty URL Launcher" also execs the `kitty` binary. Only when several
+    # entries match at the same tier is it ambiguous.
+    named = [m for m in matches if _is_named(m, text)]
     exact = [m for m in matches if _is_exact(m, text)]
-    if len(exact) == 1:
+    if len(named) == 1:
+        entry = named[0]
+    elif not named and len(exact) == 1:
         entry = exact[0]
     elif len(matches) == 1:
         entry = matches[0]
     else:
-        names = ", ".join(m.name for m in (exact or matches)[:6])
+        names = ", ".join(m.name for m in (named or exact or matches)[:6])
         return (
             f"'{query}' matches several applications ({names}). "
             "Say which one to open."

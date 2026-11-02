@@ -30,6 +30,9 @@ def backend_name() -> str:
         for tool in ("grimblast", "grim"):
             if shell.have(tool):
                 return tool
+        # niri screenshots itself, so a box without grim still captures.
+        if env.compositor == "niri" and shell.have("niri"):
+            return "niri"
         return ""
     for tool in ("maim", "scrot", "import", "gnome-screenshot", "spectacle"):
         if shell.have(tool):
@@ -76,6 +79,9 @@ def capture(
 
     env = detect.environment()
 
+    if tool == "niri":
+        return _niri_capture(path, region, window, monitor)
+
     if env.is_wayland:
         args = _wayland_args(tool, path, region, window, monitor)
     else:
@@ -90,6 +96,33 @@ def capture(
         raise CaptureError(f"capture failed via {tool}: {result.output}")
 
     return path
+
+
+def _niri_capture(path: Path, region: bool, window: bool, monitor: str) -> Path:
+    """Capture with niri's own screenshot actions (no grim installed).
+
+    The action returns as soon as niri accepts it and writes the file a
+    moment later, so the file is awaited rather than assumed. niri cannot
+    pick a region or a named output without a UI, so those refuse and name
+    the package that can.
+    """
+    if region:
+        raise CaptureError("Region capture needs grim and slurp:  sudo pacman -S grim slurp")
+    if monitor:
+        raise CaptureError("Capturing a named output needs grim:  sudo pacman -S grim")
+    action = "screenshot-window" if window else "screenshot-screen"
+    # Pointer off so it does not cover what is being asked about.
+    result = shell.run(
+        ["niri", "msg", "action", action, "--path", str(path), "--show-pointer", "false"],
+        timeout=20, env={"NIRI_SOCKET": detect.find_niri_socket()},
+    )
+    if not result.ok:
+        raise CaptureError(f"capture failed via niri: {result.output}")
+    for _ in range(40):
+        if path.exists() and path.stat().st_size > 0:
+            return path
+        time.sleep(0.1)
+    raise CaptureError("niri accepted the screenshot but no file appeared.")
 
 
 def _wayland_args(

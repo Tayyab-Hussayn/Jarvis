@@ -71,7 +71,66 @@ def _read_os_release() -> dict[str, str]:
     return data
 
 
+def _runtime_dir() -> Path:
+    return Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def find_niri_socket() -> str:
+    """Path of a live niri IPC socket, or "" when none is running.
+
+    ``NIRI_SOCKET`` is only set for processes started *by* niri. From ssh or a
+    systemd user service it is missing, and without it ``niri msg`` fails with
+    "NIRI_SOCKET is not set" -- which would read as "no window manager" and
+    silently turn every desktop skill off. The socket is named
+    ``niri.<wayland-display>.<pid>.sock``; a stale one from a crashed niri
+    is skipped by checking its pid, newest wins.
+    """
+    env_socket = os.environ.get("NIRI_SOCKET", "")
+    if env_socket and Path(env_socket).exists():
+        return env_socket
+    live: list[tuple[float, str]] = []
+    for sock in _runtime_dir().glob("niri.*.sock"):
+        parts = sock.name.split(".")
+        pid = parts[-2] if len(parts) >= 4 else ""
+        if pid.isdigit() and not _pid_alive(int(pid)):
+            continue
+        try:
+            live.append((sock.stat().st_mtime, str(sock)))
+        except OSError:
+            continue
+    return max(live)[1] if live else ""
+
+
+def _adopt_niri_session() -> None:
+    """Export the niri session variables a non-session process lacks.
+
+    grim, wl-copy, ydotool and every app niri's IPC spawns find the
+    compositor through these; set once here so every ``shell.run`` inherits
+    them instead of each caller rediscovering the socket.
+    """
+    sock = find_niri_socket()
+    if not sock:
+        return
+    os.environ["NIRI_SOCKET"] = sock
+    os.environ.setdefault("XDG_RUNTIME_DIR", str(_runtime_dir()))
+    parts = Path(sock).name.split(".")
+    if len(parts) >= 4 and not os.environ.get("WAYLAND_DISPLAY"):
+        os.environ["WAYLAND_DISPLAY"] = parts[1]
+
+
 def _detect_session() -> str:
+    if os.environ.get("NIRI_SOCKET"):
+        return "wayland"
     session = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
     if session in ("wayland", "x11", "tty"):
         return session
@@ -87,6 +146,8 @@ def _detect_compositor(desktop: str) -> str:
         return "hyprland"
     if os.environ.get("SWAYSOCK"):
         return "sway"
+    if os.environ.get("NIRI_SOCKET"):
+        return "niri"
 
     lowered = desktop.lower()
     for token, name in (
@@ -147,7 +208,7 @@ def _detect_package_manager() -> str:
 
 
 _INTERESTING_TOOLS = (
-    "hyprctl", "swaymsg", "wmctrl", "xdotool", "ydotool", "wtype", "dotool",
+    "hyprctl", "swaymsg", "niri", "wmctrl", "xdotool", "ydotool", "wtype", "dotool",
     "grim", "slurp", "wl-copy", "wl-paste", "xclip", "xsel", "scrot", "maim",
     "grimblast", "gnome-screenshot", "spectacle",
     "wpctl", "pactl", "amixer", "playerctl", "brightnessctl", "light",
@@ -165,6 +226,8 @@ _INTERESTING_TOOLS = (
 def environment() -> Environment:
     """Detect the host environment once per process."""
     os_release = _read_os_release()
+    if not (os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") or os.environ.get("SWAYSOCK")):
+        _adopt_niri_session()
     desktop = (
         os.environ.get("XDG_CURRENT_DESKTOP")
         or os.environ.get("DESKTOP_SESSION")
@@ -219,6 +282,8 @@ def missing_report() -> list[tuple[str, str, str]]:
         need("input synthesis", ("ydotool", "wtype", "dotool"), "ydotool")
         if env.compositor == "hyprland":
             need("window control", ("hyprctl",), "hyprland")
+        if env.compositor == "niri":
+            need("window control", ("niri",), "niri")
     else:
         need("screenshots", ("grim", "scrot", "maim"), "maim")
         need("clipboard", ("xclip", "xsel"), "xclip")
