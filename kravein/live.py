@@ -32,16 +32,28 @@ from .agents import history as _history
 from .platform import detect
 from .safety import Confirmer, TurnMemory, confirmer_scope
 
-# Matches the original's constants exactly.
-LIVE_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+# Gemini 3.1 leads (owner decision 2026-11-02, #195): on 13 spoken Orchestrator
+# requests it chose the right first tool 13/13 (2.5: 10/13), answered in half the
+# time, and gives Latin-script transcripts. It needs `send_realtime_input(audio=)`.
+LIVE_MODEL_31 = "models/gemini-3.1-flash-live-preview"
+LIVE_MODEL_25 = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+LIVE_MODEL = LIVE_MODEL_31
 
-# The original's model is a dated preview, so keep replacements ready. All of
-# these advertise bidiGenerateContent (checked against the live models list).
+# Both are previews that get retired, so the 2.5 models stay behind it as the
+# fallback when 3.1 is unavailable or rejects the session. All of these
+# advertise bidiGenerateContent (checked against the live models list).
 LIVE_FALLBACKS = [
-    LIVE_MODEL,
+    LIVE_MODEL_31,
+    LIVE_MODEL_25,
     "models/gemini-2.5-flash-native-audio-latest",
-    "models/gemini-3.1-flash-live-preview",
 ]
+
+# Close codes / statuses that mean "this model will not take the session":
+# retry the next one. 1007/1008 are 3.1's rejection of an invalid payload or
+# policy, 429 a quota on the preview model. Only before any turn has happened,
+# so a dropped connection mid-conversation never silently swaps the voice.
+_RETRY_ALWAYS = ("404", "NOT_FOUND", "503", "UNAVAILABLE")
+_RETRY_BEFORE_FIRST_TURN = ("1007", "1008", "429", "RESOURCE_EXHAUSTED", "timed out")
 SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHANNELS = 1
@@ -68,18 +80,15 @@ _CONTROL_TOKEN = re.compile(
 # Scripts the owner never wants to see. Gemini's input transcription returns
 # Hindustani (and, by accident, accented English) in Devanagari, and a letter-
 # by-letter transliteration of that turned "turn off this flashlight" into
-# "tarn of dis flaishalaait". The display transcript comes from Whisper's
-# translate task instead (see `_english_heard`); this is the backstop that
-# keeps these scripts off screen when that is unavailable.
+# "tarn of dis flaishalaait". The display transcript comes from a short text translation instead
+# (see `_english_from_text`); this is the backstop that keeps these scripts off
+# screen when that fails.
 # Telugu slipped through when only Arabic and Devanagari were listed (#182),
 # so the rule is "anything outside Latin text, punctuation and symbols".
 _FOREIGN_SCRIPT = re.compile(
     "[^\u0000-\u024f\u1e00-\u1eff\u2000-\u206f\u20a0-\u20cf\u2100-\u214f\u2190-\u21ff]+"
 )
 
-# Per-turn microphone audio kept for the English transcript. 30s of PCM16 at
-# 16 kHz; older audio is dropped so a long silence cannot grow without bound.
-MAX_TURN_AUDIO = 30 * SEND_SAMPLE_RATE * 2
 # Placeholder while the English transcript is still being produced.
 HEARING_TEXT = "…"
 
@@ -420,9 +429,6 @@ class LiveSession:
         # Each tool call gets its own confirmer_scope, so the owner's "no" has
         # to be carried across the calls of one model turn explicitly.
         self._memory = TurnMemory()
-        # The user's own audio for the turn in progress, kept so Whisper can
-        # write the English transcript (see `_english_heard`).
-        self._mic = bytearray()
         self._finals: set[asyncio.Task] = set()
 
         # The Orchestrator context (see agent.make_voice_agent), or None for the
@@ -605,62 +611,14 @@ class LiveSession:
     def _flush_heard(self) -> None:
         text = clean_transcript("".join(self._heard)).strip()
         self._heard.clear()
-        self._mic.clear()
         if text:
             self._emit("heard", text, {"turn": self._turn(), "final": True})
-
-    def _english_heard(self, pcm: bytes) -> str:
-        """The user's turn as English text, from Whisper's translate task.
-
-        Blocking (runs in a thread). Empty when unavailable or it failed, in
-        which case the caller falls back to Gemini's own text.
-
-        Gemini's input transcription cannot be pinned to English: it comes back
-        in Devanagari for Hindustani and for some accented English, and
-        transliterating that gives phonetic junk. Whisper hears the same audio
-        and translates any language straight to English.
-        """
-        import tempfile
-        import wave
-        from pathlib import Path
-
-        from .platform import stt
-
-        if len(pcm) < SEND_SAMPLE_RATE // 4 * 2:  # under a quarter second
-            return ""
-        if not self._can_translate():
-            return ""
-        with tempfile.TemporaryDirectory(prefix="kravein-live-") as tmp:
-            path = Path(tmp) / "turn.wav"
-            with wave.open(str(path), "wb") as w:
-                w.setnchannels(CHANNELS)
-                w.setsampwidth(2)
-                w.setframerate(SEND_SAMPLE_RATE)
-                w.writeframes(pcm)
-            try:
-                return clean_transcript(stt.translate_to_english(path))
-            except Exception as exc:
-                audit.record("voice.live_translate_failed", error=str(exc)[:300])
-                return ""
-
-    def _can_translate(self) -> bool:
-        from .platform import stt
-
-        # Ready, not just available: on first use the model is still being
-        # downloaded, and waiting on that would hold every turn open. Until it
-        # lands, turns fall back to Gemini's text with foreign script removed.
-        return (
-            bool(config.get("voice.live_translate", True))
-            and stt.translate_available()
-            and stt.translate_ready()
-        )
 
     def _english_from_text(self, raw: str) -> str:
         """Translate Gemini's foreign-script transcript to English (text LLM).
 
-        Last resort when Whisper is not ready (model still downloading, or no
-        faster-whisper): stripping the script would leave an empty line, and
-        transliterating is forbidden. Blocking; empty on any failure.
+        Stripping the script would leave an empty line and transliterating is
+        forbidden. Blocking; empty on any failure.
         """
         try:
             from . import llm
@@ -678,27 +636,19 @@ class LiveSession:
             return ""
 
     async def _finish_heard(
-        self, pcm: bytes, fallback: str, empty: bool = False,
+        self, fallback: str, empty: bool = False,
         said: str = "", actions: list[str] | None = None, raw: str = "",
         turn: str = "",
     ) -> None:
-        """Emit the English transcript once Whisper has it, then end the turn.
+        """Emit the English line for a foreign-script transcript, then end the turn.
 
-        The reply never waits for this — audio keeps streaming while Whisper
-        runs. Only the `listening` marker is held back, because the client
-        closes the user's bubble on it and a `heard` after that would open a
-        second one.
+        Only a non-Latin transcript gets here (Latin text is shown at once).
+        The text LLM translates it; the reply never waits — only the
+        `listening` marker is held back, because the client closes the user's
+        bubble on it and a `heard` after that would open a second one.
         """
-        try:
-            text = await asyncio.wait_for(
-                asyncio.to_thread(self._english_heard, pcm), timeout=TRANSLATE_TIMEOUT
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            audit.record("voice.live_translate_failed", error=str(exc)[:300] or "timeout")
-            text = ""
-        if not text and raw and has_foreign_script(raw):
+        text = ""
+        if raw and has_foreign_script(raw):
             try:
                 text = await asyncio.wait_for(
                     asyncio.to_thread(self._english_from_text, strip_control_tokens(raw)),
@@ -706,7 +656,8 @@ class LiveSession:
                 )
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                audit.record("voice.live_translate_failed", error=str(exc)[:300] or "timeout")
                 text = ""
         text = text or fallback
         if self._agent is not None:
@@ -720,14 +671,6 @@ class LiveSession:
             # After the user's words, so the retry prompt reads as the reply.
             self._emit("answer", EMPTY_REPLY_TEXT)
         self._emit("listening", "")
-
-    def _preload_translate(self) -> None:
-        from .platform import stt
-
-        try:
-            stt.preload_translate()
-        except Exception as exc:
-            audit.record("voice.live_translate_failed", error=str(exc)[:300])
 
     def _flush_said(self) -> None:
         text = clean_transcript("".join(self._said)).strip()
@@ -775,9 +718,9 @@ class LiveSession:
         # "empty"; a stray turn_complete on an idle session is not.
         engaged = bool(raw_said.strip()) or bool(raw_heard.strip())
         empty = engaged and not spoke and not self._tool_called
-        pcm = bytes(self._mic)
-        defer = bool(raw_heard.strip()) and (
-            self._can_translate() or has_foreign_script(raw_heard))
+        # Latin text is final as it stands; only a foreign-script line needs the
+        # short text translation, delivered later as a `replace` frame.
+        defer = bool(raw_heard.strip()) and has_foreign_script(raw_heard)
         said_text = clean_transcript(raw_said)
         actions = list(self._actions)
         notes = list(self._report_notes)
@@ -787,9 +730,8 @@ class LiveSession:
         if defer:
             turn = self._turn()          # before _reset_turn forgets it
             self._heard.clear()
-            self._mic.clear()
             task = asyncio.get_running_loop().create_task(
-                self._finish_heard(pcm, heard, empty, said_text, actions, raw_heard, turn))
+                self._finish_heard(heard, empty, said_text, actions, raw_heard, turn))
             self._finals.add(task)
             task.add_done_callback(self._finals.discard)
         else:
@@ -925,7 +867,8 @@ class LiveSession:
             # drops the chunk: stale audio is worse than a gap.
             with contextlib.suppress(asyncio.QueueFull, RuntimeError):
                 loop.call_soon_threadsafe(
-                    out_queue.put_nowait, {"data": data, "mime_type": "audio/pcm"}
+                    out_queue.put_nowait,
+                    {"data": data, "mime_type": f"audio/pcm;rate={SEND_SAMPLE_RATE}"},
                 )
 
         await self._source.capture(put, self._astop, lambda: self._emit("listening", ""))
@@ -933,13 +876,13 @@ class LiveSession:
     async def _drain_queue(self, out_queue: asyncio.Queue) -> None:
         while not self._stop.is_set():
             message = await out_queue.get()
-            self._mic += message["data"]
-            if len(self._mic) > MAX_TURN_AUDIO:
-                del self._mic[: len(self._mic) - MAX_TURN_AUDIO]
             if self._session is None:
                 continue
             try:
-                await self._session.send_realtime_input(media=message)
+                # `audio=`, not the deprecated `media=`: gemini-3.1-flash-live-
+                # preview closes the socket (1007 "media_chunks is deprecated")
+                # on the first chunk otherwise. 2.5 accepts both (#195).
+                await self._session.send_realtime_input(audio=message)
             except Exception as exc:
                 self._emit("error", f"send failed: {exc}")
                 return
@@ -1211,18 +1154,6 @@ class LiveSession:
         async with client.aio.live.connect(model=self.model, config=self._config()) as session:
             self._session = session
             self._emit("info", "connected — start speaking")
-            from .platform import stt as _stt
-
-            if config.get("voice.live_translate", True) and _stt.translate_available():
-                # Downloads the multilingual model on first use; doing it now
-                # keeps that wait out of the first spoken turn.
-                # A daemon thread, not the loop's executor: asyncio.run waits
-                # for executor threads, so a stalled download would make Stop
-                # hang.
-                threading.Thread(
-                    target=self._preload_translate, daemon=True,
-                    name="kravein-live-translate-preload",
-                ).start()
 
             out_queue: asyncio.Queue = asyncio.Queue(maxsize=60)
             audio_queue: asyncio.Queue = asyncio.Queue()
@@ -1273,9 +1204,11 @@ class LiveSession:
             [self.model] if self.model not in LIVE_FALLBACKS
             else LIVE_FALLBACKS[LIVE_FALLBACKS.index(self.model):]
         )
-        configured = config.get("voice.live_model", "")
+        configured = str(config.get("voice.live_model", "") or "").strip()
         if configured:
-            candidates = [configured]
+            # Tried first, then the rest of the chain: a configured model must
+            # not switch the fallback off (it used to replace the whole list).
+            candidates = [configured] + [m for m in LIVE_FALLBACKS if m != configured]
 
         last: Exception | None = None
         for candidate in candidates:
@@ -1297,7 +1230,9 @@ class LiveSession:
                     "voice.live_error", model=candidate, error=text,
                     trace=traceback.format_exc()[:1200],
                 )
-                if any(t in text for t in ("404", "NOT_FOUND", "503", "UNAVAILABLE")):
+                if any(t in text for t in _RETRY_ALWAYS) or (
+                    self.turns == 0 and any(t in text for t in _RETRY_BEFORE_FIRST_TURN)
+                ):
                     self._emit("info", f"{candidate} unavailable, trying the next model")
                     continue
                 self._emit("error", f"{type(exc).__name__}: {exc}")

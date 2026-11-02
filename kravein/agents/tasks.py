@@ -356,7 +356,12 @@ class TaskManager:
             except Exception as exc:
                 audit.record("task.deliver_failed", task=t.id, error=type(exc).__name__)
         if not delivered:
-            self.note_rows(self.claim_reports(t.principal, only=t.id))
+            try:
+                # Claim and note in one transaction: a crash between the two
+                # used to leave the report announced but written nowhere.
+                self.claim_reports(t.principal, only=t.id, note=True)
+            except Exception as exc:           # rolled back: still claimable later
+                audit.record("task.note_failed", task=t.id, error=type(exc).__name__)
 
     @staticmethod
     def note_text(row: dict[str, Any]) -> str:
@@ -382,11 +387,17 @@ class TaskManager:
             except Exception as exc:
                 audit.record("task.note_failed", task=row["id"], error=type(exc).__name__)
 
-    def claim_reports(self, principal: str, only: str = "") -> list[dict[str, Any]]:
+    def claim_reports(self, principal: str, only: str = "",
+                      note: bool = False) -> list[dict[str, Any]]:
         """Finished, not-yet-announced tasks of ``principal``, each claimed once.
 
         The claim is one ``UPDATE ... WHERE announced = 0``: two sessions (or
         two tasks ending together) cannot both announce the same report.
+        With ``note=True`` the marked note is written into the task's thread in
+        the SAME transaction as the claim, so there is no state in which the
+        report is claimed but written nowhere (a failure rolls both back and
+        the report stays claimable). Callers that deliver the rows themselves
+        (a live session) leave it off and call :meth:`note_rows` on failure.
         """
         out: list[dict[str, Any]] = []
         marks = ",".join("?" * len(FINISHED))
@@ -400,6 +411,9 @@ class TaskManager:
                 with conn:
                     cur = conn.execute(
                         "UPDATE tasks SET announced=1 WHERE id=? AND announced=0", (row["id"],))
+                    if note and cur.rowcount == 1 and row["thread"]:
+                        history.append_in(conn, ORCHESTRATOR, row["thread"], [
+                            {"role": "user", "content": self.note_text(dict(row))}])
                 if cur.rowcount == 1:
                     out.append({k: row[k] for k in row.keys()})
         return out

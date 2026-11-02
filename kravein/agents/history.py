@@ -185,28 +185,41 @@ def append(profile: str, thread: str, messages: list[dict[str, Any]]) -> float:
     """
     import time
 
-    import secrets
-
     now = time.time()
+    with _write_lock, closing(_connect()) as conn:
+        with conn:
+            append_in(conn, profile, thread, messages, now)
+    return now
+
+
+def append_in(conn: sqlite3.Connection, profile: str, thread: str,
+              messages: list[dict[str, Any]], now: float | None = None) -> None:
+    """``append`` inside the caller's transaction (caller holds ``_write_lock``).
+
+    Lets a task report be marked announced and written into the thread in ONE
+    transaction: a crash between the two can no longer drop the report.
+    """
+    import secrets
+    import time
+
+    now = time.time() if now is None else now
     # `xid` lets a running agent recognise a message it did not write and keep
     # it when it next saves the thread (see `Agent._persist`).
     messages = [{**m, "xid": m.get("xid") or secrets.token_hex(6)} for m in messages]
-    with _write_lock, closing(_connect()) as conn:
-        with conn:
-            (top,) = conn.execute(
-                "SELECT COALESCE(MAX(seq), -1) FROM messages WHERE profile=? AND thread=?",
-                (profile, thread),
-            ).fetchone()
-            conn.executemany(
-                "INSERT INTO messages (profile, thread, seq, body) VALUES (?,?,?,?)",
-                [(profile, thread, top + 1 + i, json.dumps(m, ensure_ascii=False, default=_encode))
-                 for i, m in enumerate(messages)],
-            )
-            conn.execute(
-                "INSERT INTO threads (profile, thread, summary, updated) VALUES (?,?,?,?) "
-                "ON CONFLICT(profile, thread) DO UPDATE SET updated=excluded.updated",
-                (profile, thread, "", now),
-            )
+    (top,) = conn.execute(
+        "SELECT COALESCE(MAX(seq), -1) FROM messages WHERE profile=? AND thread=?",
+        (profile, thread),
+    ).fetchone()
+    conn.executemany(
+        "INSERT INTO messages (profile, thread, seq, body) VALUES (?,?,?,?)",
+        [(profile, thread, top + 1 + i, json.dumps(m, ensure_ascii=False, default=_encode))
+         for i, m in enumerate(messages)],
+    )
+    conn.execute(
+        "INSERT INTO threads (profile, thread, summary, updated) VALUES (?,?,?,?) "
+        "ON CONFLICT(profile, thread) DO UPDATE SET updated=excluded.updated",
+        (profile, thread, "", now),
+    )
     return now
 
 

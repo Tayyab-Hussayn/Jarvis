@@ -189,7 +189,7 @@ def test_live_uses_the_original_audio_constants():
     assert live.SEND_SAMPLE_RATE == 16000
     assert live.RECEIVE_SAMPLE_RATE == 24000
     assert live.VOICE_NAME == "Charon"
-    assert "native-audio" in live.LIVE_MODEL
+    assert any("native-audio" in m for m in live.LIVE_FALLBACKS)
 
 
 def test_tts_voice_matches_the_original():
