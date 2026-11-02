@@ -23,7 +23,7 @@ class _Backend:
 
     def __init__(self, new_window_ws="3", workspaces=("1", "3")):
         self.spawned: list[tuple[list[str], str]] = []
-        self.focused: list[str] = []
+        self.focus_calls: list[str] = []
         self.windows: list = []
         self.new_ws = new_window_ws
         self.workspaces = list(workspaces)
@@ -35,8 +35,18 @@ class _Backend:
         return self.workspaces
 
     def focus(self, window):
-        self.focused.append(window.id)
+        self.focus_calls.append(window.id)
         return True
+
+    def workspace(self, target):
+        self.switched = getattr(self, "switched", []) + [target]
+        return True
+
+    def current_workspace(self):
+        return (getattr(self, "switched", None) or ["1"])[-1]
+
+    def focused(self):
+        return self.windows[-1] if self.focus_calls and self.windows else None
 
     def spawn_on_workspace(self, command, workspace):
         self.spawned.append((command, workspace))
@@ -53,13 +63,21 @@ def _setup(monkeypatch, tmp_path, backend, entries):
     monkeypatch.setattr(apps.time, "sleep", lambda s: None)
 
 
-def test_workspace_launch_dispatches_to_workspace_and_never_focuses(monkeypatch, tmp_path):
+def test_workspace_launch_switches_user_and_focuses_new_window(monkeypatch, tmp_path):
     backend = _Backend()
     _setup(monkeypatch, tmp_path, backend, [_entry("Foot", "foot", tmp_path)])
     out = skill_apps.open_app("foot", workspace="3")
     assert backend.spawned == [(["foot"], "3")]
-    assert backend.focused == []
-    assert "workspace 3" in out and "Started" in out
+    assert backend.switched == ["3"] and backend.focus_calls == ["0xnew"]
+    assert "Opened" in out and "workspace 3" in out
+
+
+def test_workspace_launch_focus_false_stays_in_background(monkeypatch, tmp_path):
+    backend = _Backend()
+    _setup(monkeypatch, tmp_path, backend, [_entry("Foot", "foot", tmp_path)])
+    out = skill_apps.open_app("foot", workspace="3", focus=False)
+    assert backend.focus_calls == [] and not getattr(backend, "switched", [])
+    assert "background" in out
 
 
 def test_window_landing_elsewhere_is_reported_not_claimed(monkeypatch, tmp_path):

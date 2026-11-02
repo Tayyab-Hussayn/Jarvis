@@ -119,6 +119,18 @@ class WindowBackend:
     def list_workspaces(self) -> list[str]:
         return []
 
+    def current_workspace(self) -> str | None:
+        """Label of the workspace the user is on now (None when unknown)."""
+        win = self.focused()
+        return win.workspace if win is not None and win.workspace else None
+
+    # Only a backend whose workspaces have a known order implements this.
+    can_step_workspace = False
+
+    def step_workspace(self, delta: int) -> bool:
+        """Move to the next (+1) or previous (-1) workspace; verified."""
+        return False
+
     def spawn(self, command: list[str]) -> bool:
         """Launch through the compositor so the app lands on the right output."""
         shell.spawn(command)
@@ -636,6 +648,24 @@ class NiriBackend(WindowBackend):
         if not self._action("focus-workspace", ref):
             return False
         return self._settle(lambda: self._focused_workspace() == ref)
+
+    def current_workspace(self) -> str | None:
+        return self._focused_workspace()
+
+    # niri workspaces are stacked VERTICALLY per output (columns are the
+    # horizontal axis). Next/previous therefore means down/up; the column
+    # actions (focus-column-left/right) move between windows, not workspaces,
+    # and a Hyprland-style left/right mapping lands the user on the wrong thing.
+    can_step_workspace = True
+
+    def step_workspace(self, delta: int) -> bool:
+        before = self._focused_workspace()
+        if before is None or delta == 0:
+            return False
+        if not self._action("focus-workspace-down" if delta > 0 else "focus-workspace-up"):
+            return False
+        # "Handled" is also the answer at the edge; only a changed focus counts.
+        return self._settle(lambda: self._focused_workspace() not in (None, before))
 
     def move_to_workspace(self, target: str, window: Window | None = None) -> bool:
         ref = str(target).strip()

@@ -400,8 +400,14 @@ def check_workspace(workspace: str) -> str | None:
     return None
 
 
-def launch_on_workspace(query: str, workspace: str) -> str:
-    """Start a new instance of an app on a workspace without switching to it."""
+def launch_on_workspace(query: str, workspace: str, focus: bool = True) -> str:
+    """Start a new instance of an app on a workspace.
+
+    ``focus`` (default) takes the user there and focuses the new window: the
+    owner who says "open kitty on workspace 2" expects to see it, and a
+    silent placement read as "it did not open" (#179). ``focus=False`` leaves
+    the view alone.
+    """
     backend = desktop.backend()
     if not backend.can_spawn_on_workspace:
         return (
@@ -467,7 +473,20 @@ def launch_on_workspace(query: str, workspace: str) -> str:
         if new:
             win = new[0]
             if str(win.workspace) == target:
-                return f"Started {entry.name} on workspace {target}."
+                if not focus:
+                    return (f"Opened {entry.name} on workspace {target} in the "
+                            "background; you are still where you were.")
+                # Verified, not assumed: report only what the compositor shows.
+                if not backend.workspace(target):
+                    return (f"Opened {entry.name} on workspace {target}, but I "
+                            f"could not switch you there (you are on workspace "
+                            f"{backend.current_workspace() or '?'}).")
+                backend.focus(win)
+                if (backend.focused() or win).id == win.id:
+                    return (f"Opened {entry.name} on workspace {target} and "
+                            "switched you there.")
+                return (f"Opened {entry.name} on workspace {target} and switched "
+                        "you there, but its window did not take focus.")
             return (
                 f"Started {entry.name}, but its window opened on workspace "
                 f"{win.workspace}, not {target}."
