@@ -436,40 +436,72 @@ def test_a_report_turn_cannot_decide_proposals(env):
     assert "cannot decide others" in out
 
 
-def test_two_tasks_finishing_together_are_each_announced_once():
+def _release_together(models, roles):
+    barrier = threading.Barrier(len(roles))
+
+    def release(role):
+        barrier.wait()
+        models.gates[role].set()
+
+    ts = [threading.Thread(target=release, args=(r,)) for r in roles]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+
+
+def _task_threads_done(*ids):
+    """True once the worker threads have fully finished, notes included.
+
+    `status_of` flips as soon as `_finish` saves the row, but `_announce` then
+    claims the report (announced=1) and appends the thread note a moment later.
+    A reader in that window sees a report that is neither claimable nor noted
+    yet -- late, not lost -- which made this test flaky under load (~4%).
+    """
+    names = {f"kravein-task-{i}" for i in ids}
+    return wait_for(lambda: not any(t.name in names for t in threading.enumerate()))
+
+
+def test_two_tasks_finishing_together_are_each_noted_exactly_once():
     agent, models = orchestrator()
     models.gate("system-ops")
     models.gate("research")
     a = task_id(start(agent, "one", "system-ops"))
     b = task_id(start(agent, "two", "research"))
     assert wait_for(lambda: all(e.is_set() for e in models.started.values()))
-    barrier = threading.Barrier(2)
+    _release_together(models, ("system-ops", "research"))
+    assert done(a) and done(b) and _task_threads_done(a, b)
+    # No session is attached (host.deliver is False), so each task noted its own
+    # report as it ended: exactly once each, and nothing is left to claim.
+    notes = [m["content"] for m in history.load("orchestrator", THREAD)[0]]
+    assert sum(n.startswith(f"[task {a} report]") for n in notes) == 1
+    assert sum(n.startswith(f"[task {b} report]") for n in notes) == 1
+    assert tasks.manager.claim_reports(PRINCIPAL) == []
 
-    def release(role):
-        barrier.wait()
-        models.gates[role].set()
 
-    ts = [threading.Thread(target=release, args=(r,)) for r in ("system-ops", "research")]
-    [t.start() for t in ts]
-    [t.join() for t in ts]
-    assert done(a) and done(b)
+def test_two_reports_claimed_by_racing_sessions_are_each_announced_once(env):
+    env["host"].deliver_ok = True          # an attached session announces them
+    agent, models = orchestrator()
+    models.gate("system-ops")
+    models.gate("research")
+    a = task_id(start(agent, "one", "system-ops"))
+    b = task_id(start(agent, "two", "research"))
+    assert wait_for(lambda: all(e.is_set() for e in models.started.values()))
+    _release_together(models, ("system-ops", "research"))
+    assert done(a) and done(b) and _task_threads_done(a, b)
     claimed: list[str] = []
     lock = threading.Lock()
+    barrier = threading.Barrier(6)
 
     def grab():
+        barrier.wait()
         rows = tasks.manager.claim_reports(PRINCIPAL)
         with lock:
             claimed.extend(r["id"] for r in rows)
 
-    # Whatever was not already noted (host.deliver is False => noted at the end of
-    # each task) is claimed exactly once even under contention.
     grabbers = [threading.Thread(target=grab) for _ in range(6)]
     [g.start() for g in grabbers]
     [g.join() for g in grabbers]
-    assert len(claimed) == len(set(claimed))
-    notes = [m["content"] for m in history.load("orchestrator", THREAD)[0]]
-    assert sum(n.startswith(f"[task {a} report]") for n in notes) + (a in claimed) == 1
-    assert sum(n.startswith(f"[task {b} report]") for n in notes) + (b in claimed) == 1
+    assert sorted(claimed) == sorted([a, b])         # each exactly once, none lost
+    assert tasks.manager.claim_reports(PRINCIPAL) == []
 
 
 # -- safety ----------------------------------------------------------------------------------------------
