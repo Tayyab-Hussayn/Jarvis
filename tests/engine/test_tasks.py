@@ -821,7 +821,13 @@ def test_a_task_id_that_exists_in_the_store_is_never_reused(monkeypatch):
     assert done(first)
     tasks.manager.reset()                                    # "restart": memory forgets, db keeps
     ids = iter([first[1:], "ffffff"])
-    monkeypatch.setattr(tasks.secrets, "token_hex", lambda n: next(ids))
+    # `tasks.secrets` is the process-wide module: the child run on a worker thread
+    # also calls token_hex (delegate: 4, history xid: 6) and used to eat the
+    # scripted ids, so the test flaked. Only the task-id call (3 bytes) is scripted.
+    real = tasks.secrets.token_hex
+    monkeypatch.setattr(
+        tasks.secrets, "token_hex", lambda n=32: next(ids) if n == 3 else real(n)
+    )
     second = task_id(start(agent))
     assert second == "tffffff" and second != first
     assert done(second)
