@@ -337,3 +337,45 @@ def test_full_result_stays_in_the_audit_log(tmp_path, monkeypatch):
     last = json.loads((tmp_path / "audit.jsonl").read_text().splitlines()[-1])
     assert len(last["note"]) < 2100
     monkeypatch.setattr(audit, "_fd", None)
+
+
+# --- #154: Gemini thought_signature must survive the history store -----------
+
+def _sig_message(sig):
+    return [
+        {"role": "user", "content": "list my workspaces"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "name": "list_workspaces", "arguments": {}, "signature": sig}]},
+        {"role": "tool", "name": "list_workspaces", "tool_call_id": "c1", "content": "ok"},
+    ]
+
+
+def test_bytes_signature_round_trips_as_bytes():
+    sig = b"\x12`\xff\x00opaque"
+    history.save("p", "t", _sig_message(sig), "")
+    msgs, _ = history.load("p", "t")
+    got = msgs[1]["tool_calls"][0]["signature"]
+    assert isinstance(got, bytes) and got == sig
+
+
+def test_legacy_repr_signature_is_dropped_and_audited(events):
+    msgs = _sig_message("b'\\x12`abc'")  # what default=str used to store
+    history.save("p", "t", msgs, "")
+    loaded, _ = history.load("p", "t")
+    assert loaded[1]["tool_calls"][0]["signature"] is None
+    assert [e for e, _ in events] == ["agent.history_signature_dropped"]
+
+
+def test_two_turn_gemini_shaped_agent_replays_bytes_signature(monkeypatch):
+    sig = b"\x12`sig"
+    first, _ = _agent_with(
+        [llm.Reply(provider="stub", text="", tool_calls=[
+            llm.ToolCall(name="nope", arguments={}, id="c1", signature=sig)]),
+         say("done")],
+        thread_id="g1", profile="_example",
+    )
+    first.ask("list my workspaces")
+    second, stub = _agent_with([say("ok")], thread_id="g1", profile="_example")
+    second.ask("open kitty")
+    replayed = [c for m in second.messages for c in (m.get("tool_calls") or [])]
+    assert replayed and all(c["signature"] == sig for c in replayed)
