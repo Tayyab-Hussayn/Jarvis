@@ -258,7 +258,7 @@ def move_window_to_workspace(workspace: str) -> str:
 
     Args:
         workspace: Destination workspace number as shown on the bar, or name.
-            The window keeps focus; the view stays where it is.
+            On niri the view follows the focused window to its new workspace.
     """
     backend = desktop.backend()
     win = backend.focused()
