@@ -20,7 +20,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import desktop, detect, shell
+from .. import audit
+from . import appreg, commands, desktop, detect, shell
 
 
 @dataclass
@@ -354,6 +355,71 @@ def not_found_message(query: str) -> str:
             f"Try `search_apps {query}` to see what is installed.")
 
 
+# "terminal", "browser", "editor" mean the owner's preferred app of that kind
+# (#200). Without a setting: the detected default, and for terminals kitty
+# first, because that is what the owner uses; before this, "open a terminal"
+# landed on whichever terminal happened to rank first, and the owner got a
+# different one each time several were installed.
+_KINDS = {
+    "terminal": "terminal", "console": "terminal", "terminal emulator": "terminal",
+    "browser": "browser", "web browser": "browser",
+    "editor": "editor", "text editor": "editor",
+}
+_TERMINAL_ORDER = ("kitty", "foot", "alacritty", "wezterm", "ghostty", "konsole",
+                   "gnome-terminal", "xterm")
+
+
+def _default_handler(*cmd: str) -> str:
+    """Desktop id from xdg-settings / xdg-mime ('' when unknown)."""
+    if not shell.have(cmd[0]):
+        return ""
+    result = shell.run(list(cmd), timeout=5)
+    return result.stdout.strip() if result.ok else ""
+
+
+def preferred_entry(kind: str) -> DesktopEntry | None:
+    """The preferred app of a kind ('terminal'|'browser'|'editor'), or None.
+
+    Setting ``apps.preferred.<kind>`` (an app name or desktop id) wins; a value
+    that no longer resolves is ignored rather than failing the launch.
+    """
+    from .. import config
+
+    wanted = str(config.get(f"apps.preferred.{kind}", "") or "").strip()
+    if wanted and wanted.lower() not in _KINDS:
+        entry, _ = resolve(wanted)
+        if entry is not None:
+            return entry
+    entries = index()
+    if kind == "terminal":
+        # NoDisplay helpers are excluded: kitty ships "kitty URL Launcher"
+        # (same binary, TerminalEmulator category) and "terminal" resolved to
+        # that on the niri laptop. Entries named exactly like the emulator
+        # come before ones that merely run its binary.
+        terms = [e for e in entries
+                 if "TerminalEmulator" in e.categories and not e.no_display] or \
+                [e for e in entries if "TerminalEmulator" in e.categories]
+        for name in _TERMINAL_ORDER:
+            for e in terms:
+                if _norm(name) == _norm(e.name):
+                    return e
+            for e in terms:
+                if _norm(name) == _norm(_binary(e)):
+                    return e
+        return sorted(terms, key=lambda e: e.name.lower())[0] if terms else None
+    if kind == "browser":
+        ident = _default_handler("xdg-settings", "get", "default-web-browser")
+    else:
+        ident = _default_handler("xdg-mime", "query", "default", "text/plain")
+    return next((e for e in entries if ident and e.id == ident), None)
+
+
+def preferred_terminal_binary() -> str:
+    """Executable name of the preferred terminal emulator ('' if none)."""
+    entry = preferred_entry("terminal")
+    return _binary(entry) if entry else ""
+
+
 def resolve(query: str) -> tuple[DesktopEntry | None, str]:
     """Pick exactly one application for a name, or say why not.
 
@@ -365,6 +431,11 @@ def resolve(query: str) -> tuple[DesktopEntry | None, str]:
     """
     # "kitty.desktop" is a desktop id; the suffix is not part of the name.
     query = re.sub(r"\.desktop$", "", (query or "").strip(), flags=re.I)
+    kind = _KINDS.get(query.lower())
+    if kind:
+        entry = preferred_entry(kind)
+        if entry is not None:
+            return entry, ""
     matches = find(query)
     if not matches:
         return None, not_found_message(query)
@@ -421,6 +492,9 @@ def focus_running(entry: DesktopEntry) -> bool:
 
 def _terminal_command() -> list[str]:
     """Find a terminal emulator to host Terminal=true entries."""
+    pref = preferred_terminal_binary()
+    if pref and shell.have(pref):
+        return [pref, "--" if pref == "gnome-terminal" else "-e"]
     for term, flag in (
         ("kitty", "-e"), ("foot", "-e"), ("alacritty", "-e"),
         ("wezterm", "-e"), ("konsole", "-e"), ("gnome-terminal", "--"),
@@ -527,7 +601,10 @@ def launch_on_workspace(query: str, workspace: str, focus: bool = True) -> str:
             "number or the name of an existing workspace."
         )
 
-    entry, problem = resolve(query)
+    entry, problem = _learned_entry(query), ""
+    from_registry = entry is not None
+    if entry is None:
+        entry, problem = resolve(query)
     if entry is None:
         return problem
 
@@ -556,6 +633,8 @@ def launch_on_workspace(query: str, workspace: str, focus: bool = True) -> str:
         new = [w for w in backend.list_windows() if w.id not in before]
         if new:
             win = new[0]
+            if not from_registry:
+                _learn(query, entry)    # a window appeared: the launch is verified
             if str(win.workspace) == target:
                 if not focus:
                     return (f"Opened {entry.name} on workspace {target} in the "
@@ -581,20 +660,151 @@ def launch_on_workspace(query: str, workspace: str, focus: bool = True) -> str:
     )
 
 
+# How long to wait for proof that a launch did something.
+_VERIFY_TIMEOUT = 5.0
+
+
+def _learn(query: str, entry: DesktopEntry) -> None:
+    """Remember a verified launch under every name the entry goes by."""
+    if query.strip().lower() in _KINDS:
+        return          # "terminal" is a preference, not a learned name
+    names = [query, entry.name, _binary(entry), entry.id.removesuffix(".desktop")]
+    try:
+        appreg.learn(names, kind="desktop", ident=entry.id, display=entry.name)
+    except OSError:
+        pass            # a read-only data dir must never fail a launch
+
+
+def _launch_verified(entry: DesktopEntry, query: str, *, learn: bool = True) -> str:
+    """Launch, then look for evidence it opened; learn the name only if seen.
+
+    ``gio launch`` and Popen both return as soon as the process is spawned, so
+    "Launched" alone proves nothing (an app that dies at start-up looked the
+    same as one that opened). Evidence is a new window, or failing that a
+    process with the app's binary.
+    """
+    backend = desktop.backend()
+    have_windows = backend.available()
+    before = {w.id for w in backend.list_windows()} if have_windows else set()
+    already = is_running(entry) if have_windows else False
+
+    message = launch(entry)
+    if already and "already running" in message:
+        evidence = "it already had a window"
+    elif not (message.startswith("Launched") or "already running" in message):
+        return message                       # launch() already says what failed
+    else:
+        evidence = ""
+        deadline = time.monotonic() + _VERIFY_TIMEOUT
+        binary = _binary(entry)
+        while True:
+            if have_windows:
+                new = [w for w in backend.list_windows() if w.id not in before]
+                if new:
+                    w = new[0]
+                    evidence = f"new window '{w.title[:40] or w.app}' on workspace {w.workspace}"
+                    break
+            if binary and not have_windows:
+                proc = commands.process_running(binary)
+                if proc:
+                    evidence = proc
+                    break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.25)
+        if not evidence and binary:
+            # Windowless or single-instance apps hand off to a running process.
+            proc = commands.process_running(binary)
+            if proc:
+                evidence = f"{proc}, no new window"
+    if not evidence:
+        return (f"Started {entry.name}, but no new window or process appeared within "
+                f"{_VERIFY_TIMEOUT:.0f}s, so I cannot say it opened.")
+    if learn:
+        _learn(query, entry)
+    return f"{message.rstrip('.')} - verified: {evidence}."
+
+
+def _learned_entry(query: str) -> DesktopEntry | None:
+    """Desktop entry the registry remembers for a spoken name (audited hit)."""
+    if query.strip().lower() in _KINDS:
+        return None
+    record = appreg.lookup(query)
+    if not record or record.get("kind") != "desktop":
+        return None
+    entry = next((e for e in index() if e.id == record.get("id")), None)
+    if entry is not None:
+        audit.record("apps.registry_hit", name=query, kind="desktop", id=entry.id)
+        appreg.touch(query)
+    return entry
+
+
+def _launch_learned(record: dict, query: str) -> str:
+    """Launch what the registry remembers for a name ('' = stale, search again)."""
+    audit.record("apps.registry_hit", name=query, kind=record.get("kind"), id=record.get("id"))
+    if record.get("kind") == "desktop":
+        entry = next((e for e in index() if e.id == record.get("id")), None)
+        if entry is None:
+            return ""
+        appreg.touch(query)
+        return _launch_verified(entry, query, learn=False) + " (learned name)"
+    appreg.touch(query)
+    return _spawn_cli(record["id"], query, learn=False)
+
+
+def _spawn_cli(path: str, query: str, *, learn: bool = True) -> str:
+    """Start a plain executable (no desktop entry) and look for its process."""
+    name = Path(path).name
+    try:
+        shell.spawn([path])
+    except RuntimeError as exc:
+        return f"Could not start {name}: {exc}"
+    deadline = time.monotonic() + 2.0
+    evidence = ""
+    while not evidence and time.monotonic() < deadline:
+        time.sleep(0.2)
+        evidence = commands.process_running(name)
+    if not evidence:
+        return (f"Started {name} ({path}) but no process by that name is running. If it is "
+                "a terminal program, it needs a terminal: use open_terminal or "
+                "type_into_terminal.")
+    if learn and query.strip().lower() not in _KINDS:
+        try:
+            appreg.learn([query, name], kind="cli", ident=path, display=name)
+        except OSError:
+            pass
+    return f"Launched {name} - verified: {evidence}."
+
+
 def launch_by_name(query: str) -> str:
-    """Resolve a name to an app and launch it."""
+    """Resolve a name to an app and launch it.
+
+    Order: the learned registry (O(1), no model involvement), then the system
+    search. A launch that is verified is remembered under its names.
+    """
+    query = query.strip()
+    if query.lower() not in _KINDS:
+        record = appreg.lookup(query)
+        if record is not None:
+            done = _launch_learned(record, query)
+            if done:
+                return done
+
     entry, problem = resolve(query)
     if entry is not None:
-        return launch(entry)
+        return _launch_verified(entry, query)
     ambiguous = "matches several" in problem
     if ambiguous:
         return problem
 
-    # Not an installed .desktop app — maybe it is a plain binary.
-    binary = shell.which(query) or shell.which(query.lower().replace(" ", "-"))
-    if binary:
-        shell.spawn([binary])
-        return f"Launched {Path(binary).name}."
+    # Not an installed .desktop app - maybe it is a plain executable, found by
+    # the same exact-name rules run_command uses (never a guess).
+    found = commands.resolve_command(query)
+    if found.ok:
+        return _spawn_cli(found.path, query)
+    if found.candidates:
+        return (f"No application called '{query}'. Executables that are close: "
+                f"{', '.join(found.candidates)}. Say which one.")
 
     # Or a URL / file path.
     if re.match(r"^(https?|file|mailto)://", query) or Path(query).expanduser().exists():

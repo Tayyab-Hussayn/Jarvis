@@ -25,7 +25,8 @@ from __future__ import annotations
 import shlex
 import time
 
-from ..platform import desktop, inputs
+from ..platform import apps as apps_platform
+from ..platform import commands, desktop, inputs
 from ..registry import skill
 from ..safety import Danger, classify_command, describe_targets, enforce, own_pids
 from .windows import AmbiguousTarget, _describe, _resolve_one
@@ -42,6 +43,11 @@ def _pick_terminal(preferred: str = "") -> str:
 
     if preferred:
         return preferred if shell.have(preferred) else ""
+    # The owner's preferred terminal (setting apps.preferred.terminal, else
+    # kitty-first detection) beats the static list, which used to pick foot.
+    pref = apps_platform.preferred_terminal_binary()
+    if pref and shell.have(pref):
+        return pref
     for name in _TERMINALS:
         if shell.have(name):
             return name
@@ -141,6 +147,13 @@ def type_into_terminal(
             "in. Typing into it would interfere with the assistant itself."
         )
 
+    # Resolve the program before typing. A guessed name ("antigravity cli")
+    # gets "command not found" from the shell, and typing is fire-and-forget,
+    # so nothing would ever say so (#200). Refuse with candidates instead.
+    command, problem = commands.check_command_line(command)
+    if problem:
+        return problem
+
     # The text is going to a shell, so it runs with the user's privileges the
     # moment Return is pressed. A human pressing that key does not make
     # `rm -rf` safer, so it is classified exactly as run_command classifies it.
@@ -166,10 +179,14 @@ def type_into_terminal(
             "Focus does not always land on Wayland; try again."
         )
 
+    program = commands.last_program(command) if press_enter else ""
+    before = commands.process_snapshot(target.pid) if program else set()
     try:
         _type_command(command, press_enter)
     except inputs.InputError as exc:
         return f"Could not type into the terminal: {exc}"
+    evidence = (commands.wait_for_process(target.pid, program, before)
+                if program else "")
 
     # Leave the user where they were, not where the command ran.
     if origin is not None and origin.id != target.id:
@@ -183,6 +200,18 @@ def type_into_terminal(
     # Synthetic input is fire-and-forget: the keystrokes go to the compositor
     # and there is no channel back to say the shell accepted them. Report what
     # was actually done rather than asserting the command succeeded.
+    if evidence:
+        return (
+            f"Typed `{command}` into {_describe(target)} and pressed Return. "
+            f"Verified: {evidence} is running under that terminal."
+        )
+    if program:
+        return (
+            f"Typed `{command}` into {_describe(target)} and pressed Return, but no "
+            f"new `{program}` process appeared under that terminal within a few "
+            "seconds. It may have exited at once or failed: NOT confirmed. Look "
+            "at the terminal (take_screenshot) before telling the owner it ran."
+        )
     if press_enter:
         return (
             f"Typed `{command}` into {_describe(target)} and pressed Return. "
@@ -226,6 +255,9 @@ def open_terminal(
 
     if command:
         problem = _check_input_available()
+        if problem:
+            return problem
+        command, problem = commands.check_command_line(command)
         if problem:
             return problem
         verdict = classify_command(command)
@@ -276,14 +308,21 @@ def open_terminal(
             "command was not typed."
         )
 
+    program = commands.last_program(command)
+    before = commands.process_snapshot(target.pid) if program else set()
     try:
         _type_command(command, press_enter=True)
     except inputs.InputError as exc:
         return f"Opened the terminal but could not type into it: {exc}"
 
+    evidence = commands.wait_for_process(target.pid, program, before) if program else ""
+    if evidence:
+        return (f"Opened {_describe(target)} and ran `{command}` in it. "
+                f"Verified: {evidence} is running under that terminal.")
     return (
-        f"Opened {_describe(target)} and typed `{command}` into it. "
-        "Check the terminal for its output."
+        f"Opened {_describe(target)} and typed `{command}` into it, but I could not "
+        "see a matching process under that terminal: NOT confirmed. Check the "
+        "terminal (take_screenshot) before saying it ran."
     )
 
 
