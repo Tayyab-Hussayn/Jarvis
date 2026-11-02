@@ -13,6 +13,12 @@ agent holding 118 tools on a live desktop:
 Usage:
     python tools/eval_models.py MODEL [MODEL ...]
     python tools/eval_models.py --restraint MODEL [MODEL ...]
+    python tools/eval_models.py --scenarios FILE|DIR PROVIDER:MODEL [...]
+
+--scenarios scores only the model's FIRST tool choice for each prompt in an
+agent scenario file (tools/eval/agents/*.json), using that agent profile's
+real system prompt and tool schema. Nothing is executed. MODEL there must be
+``provider:model`` (gemini, cline, openrouter, novarouter, zen).
 """
 from __future__ import annotations
 
@@ -239,8 +245,140 @@ def restraint(model: str, runs: int = 5) -> None:
           f"calls med {statistics.median(calls):.0f} | time med {statistics.median(times):.0f}s")
 
 
+# ---------------------------------------------------------------------------
+# Agent scenario files: first tool choice only, nothing executed
+# ---------------------------------------------------------------------------
+
+def load_scenarios(path: str | Path) -> list[dict]:
+    """Read one scenario file, or every ``*.json`` in a directory.
+
+    Each returned scenario carries its ``agent``. A malformed file raises: a
+    scenario that silently vanished would read as a better score.
+    """
+    p = Path(path)
+    files = sorted(p.glob("*.json")) if p.is_dir() else [p]
+    if not files:
+        raise ValueError(f"no scenario files in {p}")
+    out: list[dict] = []
+    for f in files:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        agent = data.get("agent")
+        if not agent or not isinstance(data.get("scenarios"), list):
+            raise ValueError(f"{f}: needs 'agent' and a 'scenarios' list")
+        for sc in data["scenarios"]:
+            for key in ("id", "prompt", "expect_first_tool"):
+                if not sc.get(key):
+                    raise ValueError(f"{f}: scenario missing '{key}': {sc}")
+            if sc["expect_first_tool"] == "delegate" and not sc.get("expect_delegate_to"):
+                raise ValueError(f"{f}: {sc['id']}: delegate needs expect_delegate_to")
+            out.append({**sc, "agent": agent})
+    return out
+
+
+def score_first_choice(scenario: dict, reply) -> tuple[bool, str]:
+    """Did the first tool call match? Returns (passed, one-line reason)."""
+    if not reply.tool_calls:
+        text = (reply.text or "").strip().replace("\n", " ")[:60]
+        return False, f"no tool call (replied {text!r})"
+    first = reply.tool_calls[0]
+    want = scenario["expect_first_tool"]
+    if first.name != want:
+        return False, f"called {first.name}, expected {want}"
+    if want == "delegate":
+        target = first.arguments.get("agent")
+        if target != scenario["expect_delegate_to"]:
+            return False, (f"delegated to {target!r}, "
+                           f"expected {scenario['expect_delegate_to']!r}")
+    return True, "ok"
+
+
+_TRANSIENT = ("500", "502", "503", "429", "unavailable", "overloaded",
+              "resource_exhausted", "rate limit", "timed out", "timeout")
+
+
+def _transient(exc: Exception) -> bool:
+    return any(t in str(exc).lower() for t in _TRANSIENT)
+
+
+def first_choice(spec: str, scenario: dict, *, sleep=time.sleep, tries: int = 4):
+    """One model call for a scenario, with the agent's real prompt and tools.
+
+    Retries transient provider errors so a server hiccup is not scored as a
+    model miss (same reason ``run`` retries 5xx).
+    """
+    provider_name, _, model = spec.partition(":")
+    if not model:
+        raise ValueError(f"model must be provider:model, got {spec!r}")
+    agent = Agent(profile=scenario["agent"], source="eval", confirmer=lambda *a: False)
+    provider = getattr(agent._llm, provider_name, None)
+    if provider is None:
+        raise ValueError(f"unknown provider {provider_name!r}")
+    kwargs = dict(
+        system=agent.system_prompt(),
+        tools=agent._tools_for_turn(scenario["prompt"]),
+        temperature=0.0,
+        model=model,
+    )
+    messages = [{"role": "user", "content": scenario["prompt"]}]
+    for attempt in range(tries):
+        try:
+            return provider.complete(messages, **kwargs)
+        except Exception as exc:
+            if attempt == tries - 1 or not _transient(exc):
+                raise
+            # A per-minute quota needs a real pause; a 5xx blip does not.
+            quota = "429" in str(exc) or "resource_exhausted" in str(exc).lower()
+            sleep((20 if quota else 1.5) * (attempt + 1))
+
+
+def evaluate_scenarios(spec: str, scenarios: list[dict], *, call=first_choice) -> dict:
+    """Score every scenario once. Returns per-agent tallies, misses and errors.
+
+    A call that still fails after retries did not run: it is listed under
+    ``errors`` and left out of the denominator, never counted as a miss or a pass.
+    """
+    per_agent: dict[str, list[int]] = {}
+    misses: list[dict] = []
+    errors: list[dict] = []
+    for sc in scenarios:
+        tally = per_agent.setdefault(sc["agent"], [0, 0])
+        try:
+            ok, why = score_first_choice(sc, call(spec, sc))
+        except Exception as exc:
+            errors.append({"agent": sc["agent"], "id": sc["id"],
+                           "why": f"{type(exc).__name__}: {str(exc)[:80]}"})
+            continue
+        tally[1] += 1
+        if ok:
+            tally[0] += 1
+        else:
+            misses.append({"agent": sc["agent"], "id": sc["id"],
+                           "prompt": sc["prompt"], "why": why})
+    return {"model": spec, "per_agent": per_agent, "misses": misses, "errors": errors}
+
+
+def report_scenarios(res: dict) -> None:
+    print(f"\n{res['model']}")
+    done = total = 0
+    for agent, (ok, n) in sorted(res["per_agent"].items()):
+        print(f"  {agent:12} {ok}/{n}  ({100 * ok // max(n, 1)}%)")
+        done, total = done + ok, total + n
+    print(f"  {'all':12} {done}/{total}  ({100 * done // max(total, 1)}%)")
+    for m in res["misses"]:
+        print(f"  MISS {m['agent']}/{m['id']}: {m['why']}  <- {m['prompt'][:60]!r}")
+    for e in res["errors"]:
+        print(f"  NOT RUN {e['agent']}/{e['id']}: {e['why']}")
+
+
 def main() -> None:
     args = sys.argv[1:]
+    if args and args[0] == "--scenarios":
+        if len(args) < 3:
+            sys.exit("usage: --scenarios FILE|DIR PROVIDER:MODEL [...]")
+        scenarios = load_scenarios(args[1])
+        for spec in args[2:]:
+            report_scenarios(evaluate_scenarios(spec, scenarios))
+        return
     if args and args[0] == "--restraint":
         for m in args[1:]:
             restraint(m)
@@ -264,4 +402,5 @@ def main() -> None:
                 print(f"  - {n}")
 
 
-main()
+if __name__ == "__main__":
+    main()
