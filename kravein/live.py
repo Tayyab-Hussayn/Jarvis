@@ -536,7 +536,10 @@ class LiveSession:
             head = "Summary of earlier conversation: " + a.summary[: max(budget // 3, 300)] + "\n"
         if not kept and not head:
             return ""
-        return ("## Recent conversation (text and voice, same thread)\n" + head
+        return ("## The conversation so far (typed and spoken, one thread)\n"
+                "This is what you and the owner already said. You know it: answer "
+                "questions about it from these lines, and do not search memory notes "
+                "for it.\n" + head
                 + "\n".join(reversed(kept)))
 
     def _allowed_now(self) -> "frozenset[str] | None":
@@ -1159,6 +1162,11 @@ class LiveSession:
                 # Reports claimed but never spoken still belong in the thread.
                 pending, self._pending_reports = self._pending_reports, []
                 self._note_reports(pending)
+                if self._agent is not None:
+                    # A turn cut off by Stop is still part of the conversation.
+                    self._record_turn(clean_transcript("".join(self._heard)),
+                                      clean_transcript("".join(self._said)),
+                                      list(self._actions))
                 for task in list(self._finals):
                     task.cancel()
                 await asyncio.gather(*self._finals, return_exceptions=True)
