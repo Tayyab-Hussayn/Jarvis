@@ -482,6 +482,49 @@ compositor socket, audio and file permissions. Put credentials in
 
 ---
 
+## Using Kravein on the niri laptop
+
+The second machine runs niri with Noctalia. The project lives in
+`/home/kravein/Projects/desktop/kravein`; nothing is installed outside it by
+the checks, and there is **no autostart** — you start and stop Kravein yourself.
+
+**One-time setup** (needs you, once):
+
+```bash
+cd /home/kravein/Projects/desktop/kravein
+./install-linux.sh --check            # lists missing native tools, writes nothing
+systemctl --user enable --now ydotool # lets Kravein type and click (no sudo)
+./install-linux.sh                    # adds the `kravein` command + a user unit that is NOT enabled
+```
+
+Keys go in `~/.config/kravein/api_keys.json`, settings in
+`~/.config/kravein/settings.json`.
+
+**Daily use** (after `./install-linux.sh`):
+
+| Want to | Command |
+|---|---|
+| start the web UI | `kravein start` |
+| open it | `kravein open` (or http://127.0.0.1:8787 — always port 8787, one server only) |
+| stop it | `kravein stop` |
+| is it running? | `kravein status` |
+| logs | `kravein logs` (`-f` to follow) |
+| pair a phone | `kravein pair` — scan the QR in the Kravein app; `kravein phones` lists/removes pairings |
+| what did it do? | `.venv/bin/python -m kravein audit -n 30` |
+
+Without the installer, run it by hand from the project directory:
+`.venv/bin/python -m kravein serve` (Ctrl-C stops it).
+
+**Voice.** Use the Voice button in the web UI (or the phone app's mic). Speech
+output works (edge-tts, `kravein voice test` reaches it); the laptop currently
+reports **no microphone input source**, so use the phone's mic or plug in a
+headset mic and re-run `kravein voice test`. Check `kravein voice status`.
+
+**If answers stop coming:** the Gemini free tier allows about 15 requests per
+minute, and a delegated task or a Live session uses several; a "429
+RESOURCE_EXHAUSTED" in the chat means wait a minute. `kravein doctor` shows
+which providers are reachable.
+
 ## Known gaps
 
 | Feature | Status |
