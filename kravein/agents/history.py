@@ -13,6 +13,7 @@ contention shows up as waiting, not as "database is locked".
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -22,7 +23,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from .. import config
+from .. import audit, config
 
 _write_lock = threading.Lock()
 
@@ -42,6 +43,44 @@ CREATE TABLE IF NOT EXISTS messages (
     PRIMARY KEY (profile, thread, seq)
 );
 """
+
+
+_BYTES_TAG = "__b64__"
+
+
+def _encode(value: Any) -> Any:
+    """json ``default=``: bytes round-trip as a tagged base64 object.
+
+    ``default=str`` used to store ``ToolCall.signature`` (Gemini's opaque
+    ``thought_signature`` bytes) as its repr, which came back as a str and made
+    Gemini answer 400 "Base64 decoding failed" on every later turn (#154).
+    """
+    if isinstance(value, (bytes, bytearray)):
+        return {_BYTES_TAG: base64.b64encode(bytes(value)).decode("ascii")}
+    return str(value)
+
+
+def _restore_signatures(message: dict[str, Any]) -> None:
+    """Decode tagged signatures back to bytes; drop any that are not.
+
+    Rows written before the fix hold a repr string like ``"b'\\x12`...'"``.
+    Sent to Gemini it fails the whole request, and the repr cannot be turned
+    back into the original bytes, so the signature is dropped and audited.
+    A call without a signature may be refused by Gemini 3.x, but then the
+    failover chain answers; garbage would poison every provider attempt.
+    """
+    for call in message.get("tool_calls") or []:
+        if not isinstance(call, dict) or call.get("signature") is None:
+            continue
+        sig = call["signature"]
+        if isinstance(sig, dict) and isinstance(sig.get(_BYTES_TAG), str):
+            try:
+                call["signature"] = base64.b64decode(sig[_BYTES_TAG], validate=True)
+                continue
+            except ValueError:
+                pass
+        call["signature"] = None
+        audit.record("agent.history_signature_dropped", tool=call.get("name", ""))
 
 
 def principal_thread_id(channel: str, principal: str) -> str:
@@ -86,7 +125,10 @@ def load(profile: str, thread: str) -> tuple[list[dict[str, Any]], str]:
     messages: list[dict[str, Any]] = []
     for (body,) in rows:
         try:
-            messages.append(json.loads(body))
+            message = json.loads(body)
+            if isinstance(message, dict):
+                _restore_signatures(message)
+            messages.append(message)
         except ValueError:
             # A row we cannot read is dropped, not fatal: the rest of the
             # thread is still better than none. The loop fixes pairing below.
@@ -126,7 +168,7 @@ def save(profile: str, thread: str, messages: list[dict[str, Any]], summary: str
     import time
 
     rows = [
-        (profile, thread, i, json.dumps(m, ensure_ascii=False, default=str))
+        (profile, thread, i, json.dumps(m, ensure_ascii=False, default=_encode))
         for i, m in enumerate(messages)
     ]
     with _write_lock, closing(_connect()) as conn:
