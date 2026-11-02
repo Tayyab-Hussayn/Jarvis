@@ -47,6 +47,20 @@ def main(argv: list[str]) -> int:
                     print(sel, el.get_attribute("aria-label"), (el.inner_text() or "")[:40].replace("\n", " "),
                           el.get_attribute("placeholder"))
             b.close()
+        elif cmd == "pane":
+            # pane NAME OUT.png [WIDTH] [BUTTON-TO-CLICK]
+            w = int(argv[3]) if len(argv) > 3 else 1440
+            b, pg = _page(p, w, 900 if w > 600 else 844)
+            pg.get_by_role("button", name=argv[1]).first.click()
+            pg.wait_for_timeout(1500)
+            pg.screenshot(path=argv[2])
+            print("PANE:", pg.inner_text("body")[:1200].replace("\n", " | "))
+            if len(argv) > 4:
+                pg.get_by_role("button", name=argv[4], exact=True).first.click()
+                pg.wait_for_timeout(1500)
+                pg.screenshot(path=argv[2].replace(".png", "-after.png"))
+                print("AFTER:", pg.inner_text("body")[:1200].replace("\n", " | "))
+            b.close()
         elif cmd == "ask":
             _ask(p, argv[1], argv[2], argv[3] if len(argv) > 3 else "", int(argv[4]) if len(argv) > 4 else 120)
         return 0
