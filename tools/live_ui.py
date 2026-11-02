@@ -45,7 +45,51 @@ def main(argv: list[str]) -> int:
                     print(sel, el.get_attribute("aria-label"), (el.inner_text() or "")[:40].replace("\n", " "),
                           el.get_attribute("placeholder"))
             b.close()
+        elif cmd == "ask":
+            _ask(p, argv[1], argv[2], argv[3] if len(argv) > 3 else "", int(argv[4]) if len(argv) > 4 else 120)
         return 0
+
+
+def _ask(p, text: str, prefix: str, decision: str, budget: int) -> None:
+    """Send ``text``; shoot every few seconds; answer confirmation cards.
+
+    ``decision`` is "approve" or "deny" (anything else leaves the card open and
+    stops). Prints the visible card/status text so a run is readable without
+    opening the screenshots.
+    """
+    b, pg = _page(p)
+    pg.get_by_placeholder("Ask Kravein...").fill(text)
+    pg.get_by_role("button", name="Send").click()
+    end, n, seen_card, last = time.time() + budget, 0, False, ""
+    while time.time() < end:
+        pg.wait_for_timeout(2500)
+        n += 1
+        pg.screenshot(path=f"{prefix}-{n:02d}.png")
+        body = pg.inner_text("body")
+        if body != last:
+            last = body
+        deny = pg.get_by_role("button", name="Deny")
+        if deny.count() and not seen_card:
+            seen_card = True
+            print("CARD:", pg.locator("body").inner_text()[-900:].replace("\n", " | "))
+            pg.screenshot(path=f"{prefix}-card.png")
+            if decision == "deny":
+                deny.first.click()
+            elif decision == "approve":
+                btn = pg.get_by_role("button", name="Approve…")
+                if btn.count():
+                    btn.first.click()
+                    pg.wait_for_timeout(500)
+                pg.get_by_role("button", name="Approve", exact=True).first.click()
+            else:
+                break
+            seen_card = False if decision else True
+        if n > 3 and "Standing by" in body and not deny.count():
+            break
+    pg.wait_for_timeout(1500)
+    pg.screenshot(path=f"{prefix}-final.png")
+    print("FINAL:", last[-1800:].replace("\n", " | "))
+    b.close()
 
 
 if __name__ == "__main__":
