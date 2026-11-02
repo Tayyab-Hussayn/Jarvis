@@ -47,6 +47,55 @@ def _agent_with(script, **kwargs):
     return agent, stub
 
 
+@pytest.fixture(autouse=True)
+def _no_real_zen_key(monkeypatch):
+    """Zen leads the default chain but `_agent_with` does not stub it.
+
+    On a machine holding a real Zen key an un-stubbed agent test would send its
+    prompts to the live API. A blank key keeps Zen unavailable; tests that need
+    it set their own.
+    """
+    from kravein import config
+
+    monkeypatch.setattr(config, "zen_api_key", lambda: "")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state_dir(tmp_path, monkeypatch):
+    """No test may write the owner's real ~/.local/state/kravein.
+
+    Web sessions persist their history (agents.db) under ``config.STATE_DIR``,
+    so a transport test that asks a question would otherwise write, and later
+    read back, the owner's real conversation. Tests that need their own state
+    dir still monkeypatch it afterwards.
+    """
+    from kravein import config
+
+    state = tmp_path / config.APP_NAME  # keeps the "…/kravein" shape tests assert
+    state.mkdir()
+    monkeypatch.setattr(config, "STATE_DIR", state)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_config_dir(tmp_path, monkeypatch):
+    """No test may read the owner's real ~/.config/kravein (settings, api keys).
+
+    The owner's settings.json leaked into the suite three times: with
+    ``agents.orchestrator`` on, web-transport tests built an Orchestrator and
+    waited forever for a frame the stub never produced. ``settings_path()`` and
+    the api-key file derive from ``CONFIG_DIR``, and ``load_settings`` memoises,
+    so both are reset; monkeypatch restores them (and drops anything a test
+    cached) afterwards. Tests that need their own settings still write into
+    ``config.CONFIG_DIR`` or monkeypatch ``load_settings``.
+    """
+    from kravein import config
+
+    cfg = tmp_path / "_xdg_config" / config.APP_NAME
+    cfg.mkdir(parents=True)
+    monkeypatch.setattr(config, "CONFIG_DIR", cfg)
+    monkeypatch.setattr(config, "_settings_cache", None)
+
+
 @pytest.fixture
 def habits(tmp_path, monkeypatch):
     """Point the routine store at a temp dir, and never deliver for real."""

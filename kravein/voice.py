@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from . import audit, config
-from .agent import Agent
+from .agent import Agent, make_agent
 from .platform import mic, stt, tts
 from .safety import Confirmer
 
@@ -227,7 +227,7 @@ class VoiceSession:
         self._stop = threading.Event()
         self._external_confirmer = confirmer
 
-        self.agent = agent or Agent(
+        self.agent = agent or make_agent(
             source="voice",
             confirmer=self._confirm,
         )

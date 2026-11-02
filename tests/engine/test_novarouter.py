@@ -177,10 +177,20 @@ def test_novarouter_fits_the_tool_list_to_the_gateway_cap():
     from kravein import registry
 
     registry.load_skills()
-    tools = registry.tool_declarations()
-    assert len(tools) > llm_mod.NovaRouterProvider.MAX_TOOLS, (
-        "this test is meaningless if the skill count drops below the cap"
-    )
+    tools = list(registry.tool_declarations())
+    # Consolidating skills (#133) took the real count under the cap, which made
+    # this test vacuous. Pad with uncategorised stand-ins so the trim path is
+    # always exercised; they rank last, so real tools are what survives.
+    cap = llm_mod.NovaRouterProvider.MAX_TOOLS
+    pad = 0
+    while len(tools) <= cap:
+        tools.append({
+            "name": f"zz_padding_{pad}",
+            "description": "test padding",
+            "parameters": {"type": "object", "properties": {}},
+        })
+        pad += 1
+    assert len(tools) > cap
 
     provider = llm_mod.NovaRouterProvider()
     fitted = provider._fit_tools(tools)

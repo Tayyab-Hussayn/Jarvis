@@ -20,8 +20,11 @@ agent turn every ten minutes, forever, on a timer, against a metered provider.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from .. import audit, routines
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, Verdict, describe_targets, enforce
 
 
@@ -32,7 +35,6 @@ def _routine_or_error(routine_id: str, snapshot: dict) -> dict | None:
     return None
 
 
-@skill(category="routines", danger=Danger.MODERATE)
 def add_routine(
     name: str,
     day_start: str = "04:00",
@@ -69,7 +71,6 @@ def add_routine(
     )
 
 
-@skill(category="routines", danger=Danger.MODERATE)
 def add_routine_step(
     routine_id: str,
     label: str,
@@ -151,13 +152,127 @@ def add_routine_step(
     )
 
 
-@skill(category="routines", danger=Danger.SAFE)
-def routine_status(routine_id: str = "") -> str:
-    """Show today's routines: what is done, what is next, and the score.
+@skill(
+    category="routines", danger=Danger.MODERATE,
+    aliases={
+        "add_routine_step": {"action": "add"},
+        "edit_routine_step": {"action": "edit"},
+        "delete_routine_step": {"action": "delete"},
+        "complete_step": {"action": "complete"},
+        "skip_step": {"action": "skip"},
+    },
+)
+def routine_step(
+    action: Literal["add", "edit", "delete", "complete", "skip"],
+    routine_id: str,
+    step_id: str | None = None,
+    label: str | None = None,
+    at: str | None = None,
+    after_step: str | None = None,
+    after_minutes: int | None = None,
+    requires: str | None = None,
+    window_minutes: int | None = None,
+    points: int | None = None,
+    insist: bool | None = None,
+    messages: str | None = None,
+    nag_every_minutes: int | None = None,
+    nag_max: int | None = None,
+) -> str:
+    """Work on one step (habit) of a routine: add, edit, delete, mark done, or skip it.
+
+
+    Args:
+        action: add (needs label, plus at, or after_step + after_minutes, never both); edit, delete, complete, skip (need step_id; edit changes only the fields given).
+        routine_id: Which routine, e.g. "r1".
+        step_id: Which step, e.g. "s2" (edit, delete, complete, skip).
+        label: For add: name of the habit; for edit: its new name.
+        at: Fixed time HH:MM local (add, edit).
+        after_step: For add: step this one follows.
+        after_minutes: For add: minutes after after_step was actually done.
+        requires: For add: step that must be confirmed done before this one unlocks.
+        window_minutes: How long the step stays open after it is due (add, edit).
+        points: Score value of the step (add, edit).
+        insist: For add: keep nagging until done.
+        messages: Reminder wording variants (add, edit).
+        nag_every_minutes: For add: minutes between nags.
+        nag_max: For add: most nags.
+    """
+    if action == "add":
+        if not label:
+            return "add needs a label."
+        return _merge.run(
+            add_routine_step, routine_id=routine_id, label=label, at=at,
+            after_step=after_step, after_minutes=after_minutes, requires=requires,
+            window_minutes=window_minutes, points=points, insist=insist,
+            messages=messages, nag_every_minutes=nag_every_minutes, nag_max=nag_max,
+        )
+    if action in ("edit", "delete", "complete", "skip") and not step_id:
+        return f"{action} needs step_id."
+    if action == "edit":
+        return _merge.run(
+            edit_routine_step, routine_id=routine_id, step_id=step_id, label=label,
+            at=at, window_minutes=window_minutes, points=points, messages=messages,
+        )
+    if action == "delete":
+        return delete_routine_step(routine_id, step_id)
+    if action == "complete":
+        return complete_step(routine_id, step_id)
+    if action == "skip":
+        return skip_step(routine_id, step_id)
+    return _merge.unknown(action, ["add", "edit", "delete", "complete", "skip"])
+
+
+@skill(
+    category="routines", danger=Danger.MODERATE,
+    aliases={"add_routine": {"action": "add"}, "pause_routine": {"action": "pause"}},
+)
+def routine(
+    action: Literal["add", "pause"],
+    name: str | None = None,
+    day_start: str | None = None,
+    days: str | None = None,
+    timezone: str | None = None,
+    routine_id: str | None = None,
+    resume: bool | None = None,
+) -> str:
+    """Create a daily routine, or pause/resume one. Steps are added with routine_step; deleting uses delete_routine.
+
+
+    Args:
+        action: add (needs name); pause (needs routine_id; resume=True resumes).
+        name: For add: what to call it, e.g. "Morning".
+        day_start: For add: when the routine's day rolls over, HH:MM local (default 04:00).
+        days: For add: which weekdays it runs; empty for every day.
+        timezone: For add: IANA timezone; empty for the machine's.
+        routine_id: For pause: which routine, e.g. "r1".
+        resume: For pause: True to resume a paused routine instead.
+    """
+    if action == "add":
+        if not name:
+            return "add needs a name."
+        return _merge.run(add_routine, name=name, day_start=day_start, days=days,
+                          timezone=timezone)
+    if action == "pause":
+        if not routine_id:
+            return "pause needs routine_id."
+        return _merge.run(pause_routine, routine_id=routine_id, resume=resume)
+    return _merge.unknown(action, ["add", "pause"])
+
+
+@skill(
+    category="routines", danger=Danger.SAFE,
+    aliases={"routine_history": {"history": True}},
+)
+def routine_status(routine_id: str = "", history: bool = False, limit: int | None = None) -> str:
+    """Show today's routines (what is done, what is next, the score), or how recent days went.
 
     Args:
         routine_id: Limit to one routine, e.g. "r1". Leave empty for all.
+        history: True to show past days instead: score, what was missed, streak.
+        limit: With history: how many days back (default 14).
     """
+    if history:
+        return _merge.run(routine_history, limit=limit, routine_id=routine_id or None)
     snapshot = routines.snapshot()
     wanted = [r for r in snapshot["routines"] if not routine_id or r["id"] == routine_id]
     if not wanted:
@@ -180,7 +295,6 @@ def routine_status(routine_id: str = "") -> str:
     return "\n".join(lines)
 
 
-@skill(category="routines", danger=Danger.SAFE)
 def complete_step(routine_id: str, step_id: str) -> str:
     """Confirm a habit is done, which unlocks whatever comes after it.
 
@@ -203,7 +317,6 @@ def complete_step(routine_id: str, step_id: str) -> str:
     )
 
 
-@skill(category="routines", danger=Danger.SAFE)
 def skip_step(routine_id: str, step_id: str) -> str:
     """Stand a habit down for today without it counting as missed.
 
@@ -222,7 +335,6 @@ def skip_step(routine_id: str, step_id: str) -> str:
     return f"Skipped {step_id} for today. Score {result['score']}/{result['available']}."
 
 
-@skill(category="routines", danger=Danger.MODERATE)
 def edit_routine_step(
     routine_id: str,
     step_id: str,
@@ -266,7 +378,6 @@ def edit_routine_step(
     return f"Updated {step['id']} — {step['label']}."
 
 
-@skill(category="routines", danger=Danger.MODERATE)
 def delete_routine_step(routine_id: str, step_id: str) -> str:
     """Remove one step from a routine.
 
@@ -288,7 +399,6 @@ def delete_routine_step(routine_id: str, step_id: str) -> str:
     return f"Removed {step_id} from {routine_id}."
 
 
-@skill(category="routines", danger=Danger.MODERATE)
 def pause_routine(routine_id: str, resume: bool = False) -> str:
     """Pause a routine so it stops nagging, or resume a paused one.
 
@@ -334,7 +444,6 @@ def delete_routine(routine_id: str, _source: str = "local", _confirm: bool = Fal
     return f"Deleted {routine_id} — {routine['name']}."
 
 
-@skill(category="routines", danger=Danger.SAFE)
 def routine_history(limit: int = 14, routine_id: str = "") -> str:
     """Show how recent days went: score, what was missed, streak.
 

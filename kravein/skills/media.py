@@ -10,6 +10,8 @@ browser at all — better than the original behaviour, not just equivalent.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import contextlib
 import time
 import os
@@ -22,6 +24,7 @@ from pathlib import Path
 from .. import config
 from ..platform import audio, apps, detect, shell
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, check_path, enforce
 
 _VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".flv"}
@@ -175,7 +178,6 @@ def _wallpaper_setter() -> str:
     return ""
 
 
-@skill(category="media", danger=Danger.MODERATE)
 def set_wallpaper(path: str, _source: str = "local", _confirm: bool = False) -> str:
     """Set the desktop wallpaper from an image file or URL.
 
@@ -260,7 +262,6 @@ def set_wallpaper(path: str, _source: str = "local", _confirm: bool = False) -> 
     return f"Wallpaper set via {tool}: {image.name}"
 
 
-@skill(category="media", danger=Danger.SAFE)
 def wallpaper_status() -> str:
     """Report which wallpaper tool is available on this session."""
     tool = _wallpaper_setter()
@@ -272,6 +273,31 @@ def wallpaper_status() -> str:
             f"Install one with:  sudo pacman -S {suggestion}"
         )
     return f"Wallpaper tool: {tool} (session: {env.session_type}, desktop: {env.desktop})"
+
+
+@skill(
+    category="media", danger=Danger.MODERATE,
+    aliases={"set_wallpaper": {"action": "set"}, "wallpaper_status": {"action": "status"}},
+)
+def wallpaper(
+    action: Literal["set", "status"] = "status",
+    path: str | None = None,
+    _source: str = "local",
+    _confirm: bool = False,
+) -> str:
+    """Set the desktop wallpaper, or report which wallpaper tool this session can use.
+
+    Args:
+        action: set (needs path) or status.
+        path: For set: an image file or URL.
+    """
+    if action == "set":
+        if not path:
+            return "set needs a path or URL."
+        return set_wallpaper(path, _source=_source, _confirm=_confirm)
+    if action == "status":
+        return wallpaper_status()
+    return _merge.unknown(action, ["set", "status"])
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +370,6 @@ def _wait_for_player(prefix: str, seconds: float = 15.0) -> str:
     return ""
 
 
-@skill(category="media", danger=Danger.MODERATE)
 def spotify_play(what: str = "liked songs") -> str:
     """Open something in Spotify and play it.
 
@@ -401,7 +426,6 @@ def spotify_play(what: str = "liked songs") -> str:
     return f"Opened {label} in Spotify."
 
 
-@skill(category="media", danger=Danger.SAFE)
 def spotify_status() -> str:
     """What Spotify is playing right now."""
     player = audio.find_player("spotify")
@@ -411,3 +435,21 @@ def spotify_status() -> str:
         player, "{{artist}} — {{title}} ({{album}}) [{{status}}]"
     )
     return line or "Spotify is running but nothing is playing."
+
+
+@skill(
+    category="media", danger=Danger.MODERATE,
+    aliases={"spotify_play": {"action": "play"}, "spotify_status": {"action": "status"}},
+)
+def spotify(action: Literal["play", "status"] = "play", what: str | None = None) -> str:
+    """Play something in Spotify, or show what Spotify is playing right now.
+
+    Args:
+        action: play or status.
+        what: For play: 'liked songs', a Spotify URI, or free text to search for.
+    """
+    if action == "play":
+        return _merge.run(spotify_play, what=what)
+    if action == "status":
+        return spotify_status()
+    return _merge.unknown(action, ["play", "status"])

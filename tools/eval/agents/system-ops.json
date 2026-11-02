@@ -1,0 +1,12 @@
+{
+  "agent": "system-ops",
+  "note": "Inspect before acting; use the dedicated skill, not run_command; never take the first of several matches.",
+  "scenarios": [
+    {"id": "ops-inspect-service", "prompt": "Restart the bluetooth service and confirm it is running.", "expect_first_tool": "service_status"},
+    {"id": "ops-edit-config", "prompt": "In ~/.config/foo/foo.conf change 'timeout = 5' to 'timeout = 20'.", "expect_first_tool": "read_file"},
+    {"id": "ops-find-text", "prompt": "Which file under ~/code/app sets the DEBUG flag?", "expect_first_tool": "search_text"},
+    {"id": "ops-ambiguous-window", "prompt": "Close the Firefox window. (There are three Firefox windows open.)", "expect_first_tool": "list_windows"},
+    {"id": "ops-disk-full", "prompt": "The disk is almost full, find out why.", "expect_first_tool": "disk_usage"},
+    {"id": "ops-reminder", "prompt": "Run my backup script every night at 2am.", "expect_first_tool": "list_jobs"}
+  ]
+}

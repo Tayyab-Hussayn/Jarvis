@@ -7,6 +7,8 @@ the file.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import json
 import threading
 import time
@@ -14,6 +16,7 @@ from typing import Any
 
 from .. import config
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, Verdict, enforce
 
 _lock = threading.RLock()
@@ -84,7 +87,6 @@ def context_for_prompt(max_items: int = 40) -> str:
     return "What you already know about this user:\n" + "\n".join(lines)
 
 
-@skill(category="memory", danger=Danger.MODERATE)
 def remember(key: str, value: str, category: str = "facts") -> str:
     """Store a fact about the user for future conversations.
 
@@ -110,9 +112,16 @@ def remember(key: str, value: str, category: str = "facts") -> str:
     return f"Remembered [{category}] {key} = {value}"
 
 
+# Its own SAFE skill, not just an action of `memory`: a profile that may read
+# the owner's memory but must not write it (research reads web pages, and a
+# prompt-injected page could otherwise persist text into the system prompt)
+# needs a tool whose canonical name grants nothing more. Granting an *alias*
+# of `memory` grants the whole `memory` skill, remember included. (A new
+# category would need an engine routing decision, so it stays in "memory";
+# the Orchestrator therefore also sees this read-only twin of memory/recall.)
 @skill(category="memory", danger=Danger.SAFE)
 def recall(query: str = "", category: str = "") -> str:
-    """Look up what has been remembered.
+    """Look up what has been remembered about the owner. Read-only; to store a fact use memory.
 
     Args:
         query: Text to search keys and values for. Omit to list everything.
@@ -140,6 +149,36 @@ def recall(query: str = "", category: str = "") -> str:
     if not lines:
         return f"Nothing remembered matching '{query}'." if needle else "Memory is empty."
     return "\n".join(lines)
+
+
+@skill(
+    category="memory", danger=Danger.MODERATE,
+    aliases={"remember": {"action": "remember"}},
+)
+def memory(
+    action: Literal["remember", "recall"] = "recall",
+    key: str | None = None,
+    value: str | None = None,
+    category: str | None = None,
+    query: str | None = None,
+) -> str:
+    """Store or look up facts about the user across conversations. To delete one use forget.
+
+
+    Args:
+        action: remember (needs key and value) or recall (query; empty lists everything).
+        key: For remember: short name of the fact.
+        value: For remember: the fact itself.
+        category: Group: for remember the group to file under (default facts); for recall limit to this group.
+        query: For recall: text to look for.
+    """
+    if action == "remember":
+        if not key or value is None:
+            return "remember needs key and value."
+        return _merge.run(remember, key=key, value=value, category=category)
+    if action == "recall":
+        return _merge.run(recall, query=query, category=category)
+    return _merge.unknown(action, ["remember", "recall"])
 
 
 @skill(category="memory", danger=Danger.DESTRUCTIVE)

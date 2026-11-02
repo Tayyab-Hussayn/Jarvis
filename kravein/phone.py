@@ -991,6 +991,26 @@ def _notify_frame(entry: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def notify_proposal(proposal: dict[str, Any]) -> int:
+    """Tell every connected phone a proposal is waiting (a plain ``notify`` frame).
+
+    The phone protocol has no proposal frame; the decision itself is made over
+    the REST endpoint the web UI uses. Returns how many phones were told.
+    """
+    entry = {
+        "id": str(proposal.get("id", "")),
+        "title": "Proposal: " + str(proposal.get("title", "")),
+        "body": "; ".join(str(r) for r in proposal.get("reasons", []))[:400],
+        "kind": "job",
+        "at": int(proposal.get("created_at", 0)),
+    }
+    frame = _notify_frame(entry)
+    links = _ready_links()
+    for link in links:
+        link._send(frame)
+    return len(links)
+
+
 class OutboxRelay:
     """Server side: deliver new outbox entries to every ready phone."""
 

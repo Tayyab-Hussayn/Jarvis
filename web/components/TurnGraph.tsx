@@ -30,12 +30,14 @@ import { DangerBadge } from "./ui";
 const COLLAPSE_AFTER = 12;
 const NARROW_PX = 900;
 
-type NodeKind = "request" | "tool" | "confirm" | "answer" | "error" | "stopped" | "lost";
+type NodeKind = "request" | "tool" | "agent" | "confirm" | "answer" | "error" | "stopped" | "lost";
 
 interface GraphNode {
   key: string;
   kind: NodeKind;
   tool?: ToolCallView;
+  /** A sub-agent's calls, collapsed under one label. */
+  group?: { agent: string; delegation: string; tools: ToolCallView[] };
   confirm?: ConfirmView;
   text?: string;
 }
@@ -44,7 +46,27 @@ function buildNodes(message: Message, request: string): GraphNode[] {
   const nodes: GraphNode[] = [];
   if (request) nodes.push({ key: "req", kind: "request", text: request });
 
+  // A delegate's tool calls arrive tagged with its name (engine #139). They
+  // fold into one expandable node per delegation so a long errand reads as a
+  // single labelled step, not as the Orchestrator's own calls.
+  const groups = new Map<string, GraphNode>();
   for (const tool of message.tools ?? []) {
+    if (tool.agent) {
+      const gkey = `${tool.agent}:${tool.delegation ?? ""}`;
+      const existing = groups.get(gkey);
+      if (existing) {
+        existing.group!.tools.push(tool);
+      } else {
+        const node: GraphNode = {
+          key: `ag-${gkey}`,
+          kind: "agent",
+          group: { agent: tool.agent, delegation: tool.delegation ?? "", tools: [tool] },
+        };
+        groups.set(gkey, node);
+        nodes.push(node);
+      }
+      continue;
+    }
     nodes.push({ key: `tool-${tool.callId}`, kind: "tool", tool });
   }
   for (const confirm of message.confirms ?? []) {
@@ -173,6 +195,64 @@ function ToolNode({ tool }: { tool: ToolCallView }) {
   );
 }
 
+/** One sub-agent's activity: a labelled, collapsed strip that expands to its calls. */
+function AgentGroupNode({ group }: { group: NonNullable<GraphNode["group"]> }) {
+  const [open, setOpen] = useState(false);
+  const running = group.tools.some((t) => !t.done && !t.lost);
+  const lost = group.tools.some((t) => t.lost);
+  const last = group.tools[group.tools.length - 1];
+  const status = running ? "working" : lost ? "unknown" : "done";
+  const steps = `${group.tools.length} ${group.tools.length === 1 ? "step" : "steps"}`;
+
+  return (
+    <div
+      className="w-[min(30rem,100%)] overflow-hidden rounded-[var(--radius)] border"
+      style={{
+        borderColor: running ? "var(--accent-line)" : "var(--border)",
+        background: "var(--surface)",
+        animation: "node-in var(--motion-base) var(--ease-out)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-label={`${group.agent} sub-agent, ${steps}, ${status}. ${open ? "Collapse" : "Expand"}`}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <span
+          aria-hidden
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{
+            background: running ? "var(--laser)" : "var(--steel)",
+            boxShadow: running ? "var(--glow-soft)" : undefined,
+            animation: running ? "pulse 1.2s ease-in-out infinite" : undefined,
+          }}
+        />
+        <span
+          className="shrink-0 text-[length:var(--text-xs)] font-semibold uppercase"
+          style={{ letterSpacing: "var(--tracking-label)" }}
+        >
+          {group.agent}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-[length:var(--text-xs)] text-[var(--text-muted)]">
+          {running ? last.name : steps}
+        </span>
+        <span className="shrink-0 text-[length:var(--text-xs)] text-[var(--text-faint)]">
+          {status} · {open ? "hide" : "show"}
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-[var(--border)] p-2">
+          {group.tools.map((tool) => (
+            <ToolNode key={tool.callId} tool={tool} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Node({
   node,
   onRespond,
@@ -184,11 +264,11 @@ function Node({
     case "request":
       return (
         <div
-          className="w-[min(30rem,100%)] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-sm)] border px-4 py-2.5 text-[length:var(--text-sm)] whitespace-pre-wrap"
+          className="line-clamp-4 w-[min(30rem,100%)] border-l-2 py-1 pl-3 text-[length:var(--text-base)] whitespace-pre-wrap"
+          title={node.text}
           style={{
-            background: "var(--accent-dim)",
-            borderColor: "var(--accent-line)",
-            color: "var(--text)",
+            borderColor: "var(--accent)",
+            color: "var(--text-strong)",
             animation: "node-in var(--motion-base) var(--ease-out)",
           }}
         >
@@ -198,6 +278,9 @@ function Node({
 
     case "tool":
       return <ToolNode tool={node.tool!} />;
+
+    case "agent":
+      return <AgentGroupNode group={node.group!} />;
 
     case "confirm":
       return (
@@ -385,8 +468,20 @@ export function TurnGraph({
             ref={(el) => {
               nodeRefs.current[index] = el;
             }}
+            // The owner's own message stays pinned at the top while its turn
+            // scrolls under it (it releases when the turn ends, since the
+            // sticky range is this turn's container).
             className={
-              asGraph && node.kind !== "request" ? "ml-9" : undefined
+              node.kind === "request"
+                ? "sticky top-0 z-[2] pb-2"
+                : asGraph
+                  ? "ml-9"
+                  : undefined
+            }
+            style={
+              node.kind === "request"
+                ? { background: "linear-gradient(var(--bg) 70%, transparent)" }
+                : undefined
             }
           >
             <Node node={node} onRespond={onRespond} />

@@ -45,6 +45,8 @@ class Skill:
     category: str
     requires: tuple[str, ...]
     aliases: tuple[str, ...]
+    # alias -> kwargs the alias name implies (e.g. pause_job -> action=pause).
+    alias_presets: dict[str, dict[str, Any]] = dataclasses.field(default_factory=dict)
 
     def available(self) -> tuple[bool, str]:
         """Check the skill's declared external requirements are present."""
@@ -61,6 +63,7 @@ class Skill:
 
 _registry: dict[str, Skill] = {}
 _aliases: dict[str, str] = {}
+_alias_presets: dict[str, dict[str, Any]] = {}
 _lock = threading.RLock()
 _loaded = False
 
@@ -221,7 +224,7 @@ def skill(
     danger: Danger = Danger.SAFE,
     category: str = "general",
     requires: tuple[str, ...] | list[str] = (),
-    aliases: tuple[str, ...] | list[str] = (),
+    aliases: "tuple[str, ...] | list[str] | typing.Mapping[str, dict[str, Any]]" = (),
 ) -> Callable:
     """Register a function as a skill.
 
@@ -231,13 +234,34 @@ def skill(
         danger: Baseline risk level; skills may escalate at runtime.
         category: Grouping used by ``kravein skills`` and the help output.
         requires: External binaries that must exist for the skill to work.
-        aliases: Extra names the CLI accepts for this skill.
+        aliases: Extra names the CLI accepts for this skill. A plain list is
+            just names. A mapping ``{alias: {kwarg: value}}`` also fixes
+            arguments: ``{"pause_job": {"action": "pause"}}``. Preset keys
+            always win over the caller's arguments, because the alias name
+            decides the action and a caller must not turn pause into cancel.
+            Aliases are never shown to the model.
     """
 
     def decorator(func: Callable) -> Callable:
         schema = build_schema(func, description)
         skill_name = name or func.__name__
         schema["name"] = skill_name
+
+        presets: dict[str, dict[str, Any]] = {}
+        if isinstance(aliases, typing.Mapping):
+            alias_names = tuple(aliases)
+            for alias, preset in aliases.items():
+                preset = dict(preset or {})
+                unknown = set(preset) - set(schema["parameters"]["properties"])
+                if unknown:
+                    raise ValueError(
+                        f"alias '{alias}' of {skill_name} presets unknown "
+                        f"parameter(s): {', '.join(sorted(unknown))}"
+                    )
+                if preset:
+                    presets[alias] = preset
+        else:
+            alias_names = tuple(aliases)
 
         entry = Skill(
             name=skill_name,
@@ -247,7 +271,8 @@ def skill(
             parameters=schema["parameters"],
             category=category,
             requires=tuple(requires),
-            aliases=tuple(aliases),
+            aliases=alias_names,
+            alias_presets=presets,
         )
 
         with _lock:
@@ -256,6 +281,12 @@ def skill(
             _registry[skill_name] = entry
             for alias in entry.aliases:
                 _aliases[alias] = skill_name
+                # Always reset: a plain alias registered over an old preset
+                # must not inherit the previous skill's forced arguments.
+                if alias in presets:
+                    _alias_presets[alias] = presets[alias]
+                else:
+                    _alias_presets.pop(alias, None)
 
         func.__skill__ = entry  # type: ignore[attr-defined]
         return func
@@ -304,8 +335,12 @@ def get_skill(name: str) -> Skill | None:
 
 
 def categories() -> dict[str, list[Skill]]:
+    """Skill groups the model and `more_tools` can name. The "agents" group
+    (``delegate``) is not one of them: it is reached by profile, by name."""
     out: dict[str, list[Skill]] = {}
     for entry in all_skills().values():
+        if entry.category == "agents":
+            continue
         out.setdefault(entry.category, []).append(entry)
     for group in out.values():
         group.sort(key=lambda s: s.name)
@@ -316,6 +351,7 @@ def tool_declarations(
     include_unavailable: bool = False,
     categories: set[str] | frozenset[str] | None = None,
     routing: bool = False,
+    names: set[str] | frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build the function-declaration list handed to the LLM.
 
@@ -323,12 +359,23 @@ def tool_declarations(
     says the caller is using tool routing, which is the only time the
     routing-only skills (``more_tools``) mean anything — everywhere else they
     stay out, so turning routing off reproduces the old list exactly.
+
+    ``names`` is an agent profile's exact tool set (see ``resolve_tools``); it
+    overrides ``categories`` and routing. Aliases are never listed: only real
+    skills have an entry here.
     """
     from .toolselect import ROUTING_ONLY_SKILLS
 
     decls = []
     for entry in sorted(all_skills().values(), key=lambda s: s.name):
-        if entry.name in ROUTING_ONLY_SKILLS:
+        if names is not None:
+            if entry.name not in names:
+                continue
+        elif entry.category == "agents":
+            # `delegate` is an Orchestrator-only tool: an agent with no
+            # profile never sees it (and `delegate` refuses such a caller too).
+            continue
+        elif entry.name in ROUTING_ONLY_SKILLS:
             if not routing:
                 continue
         elif categories is not None and entry.category not in categories:
@@ -342,6 +389,25 @@ def tool_declarations(
             "parameters": entry.parameters,
         })
     return decls
+
+
+def resolve_tools(spec: "typing.Iterable[str]") -> frozenset[str]:
+    """Turn a profile's ``tools`` (categories and/or skill names) into skill names.
+
+    An entry that is neither raises ``ValueError``: a typo must not quietly
+    give an agent a smaller tool set than its author wrote.
+    """
+    by_cat = categories()
+    out: set[str] = set()
+    for item in spec:
+        if item in by_cat:
+            out.update(s.name for s in by_cat[item])
+            continue
+        entry = get_skill(item)
+        if entry is None:
+            raise ValueError(f"unknown tool or category '{item}'")
+        out.add(entry.name)
+    return frozenset(out)
 
 
 # ---------------------------------------------------------------------------
@@ -376,14 +442,32 @@ def dispatch(
     source: str = "local",
     confirm: bool = False,
     context: Any = None,
+    allowed: "frozenset[str] | set[str] | None" = None,
 ) -> str:
-    """Run a skill by name. Always returns a string for the model to read."""
+    """Run a skill by name. Always returns a string for the model to read.
+
+    ``allowed`` is the calling agent profile's tool set (``None`` = every
+    skill, the behaviour of an agent with no profile). A call outside it is
+    refused and audited before anything runs: the restriction lives here, not
+    in the prompt, so a model that names a tool it was never shown gets
+    nothing.
+    """
     params = dict(params or {})
     entry = get_skill(name)
 
     if entry is None:
         known = ", ".join(sorted(all_skills())[:20])
         return f"Unknown skill '{name}'. Try one of: {known}…"
+
+    # Checked on the resolved skill, so an alias cannot dodge it.
+    if allowed is not None and entry.name not in allowed:
+        audit.record(
+            "skill.profile_refused", skill=entry.name, called_as=name, source=source,
+        )
+        return f"Skill '{entry.name}' is not available to this agent."
+
+    alias_key = (name or "").strip()
+    preset = _alias_presets.get(alias_key) if alias_key not in _registry else None
 
     ok, why = entry.available()
     if not ok:
@@ -411,6 +495,16 @@ def dispatch(
                     "skill.self_confirm_refused",
                     skill=entry.name, source=source, flag=flag,
                 )
+
+    if preset:
+        # The alias name decides these arguments; whatever the caller sent for
+        # the same keys is overwritten, never merged the other way round.
+        overridden = sorted(k for k in preset if k in params and params[k] != preset[k])
+        params.update(preset)
+        audit.record(
+            "skill.alias", alias=alias_key, skill=entry.name, source=source,
+            preset=preset, overridden=overridden,
+        )
 
     props = entry.parameters.get("properties", {})
     cleaned: dict[str, Any] = {}

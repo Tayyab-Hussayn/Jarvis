@@ -18,7 +18,7 @@
  * routes both without the server needing to care.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import type {
   ClientFrame,
@@ -30,7 +30,15 @@ import type {
   ToolCallView,
   VoicePhase,
 } from "./protocol";
+import {
+  initialModel,
+  isTransient,
+  reduce as reduceAgents,
+  type AgentEvent,
+  type AgentsModel,
+} from "./agents";
 import { settleConfirm } from "./confirm";
+import { applyFrame as applyProposalFrame, mergeList, type Proposal } from "./proposals";
 import { planRetry, settleOnClose } from "./connection";
 import { SESSION_LOST_NOTE, loadSessionId, maxTurnSeq, saveSessionId } from "./resume";
 import { isVoiceLive } from "./protocol";
@@ -82,6 +90,13 @@ export function useKravein() {
   // reaches the next check.
   const [cancelling, setCancelling] = useState(false);
   const [panelConfirms, setPanelConfirms] = useState<ConfirmView[]>([]);
+  // Live state of the Orchestrator and its sub-agents, derived from the same
+  // frames (and replaced by `agent_state` frames when the server sends them).
+  const [agents, dispatchAgents] = useReducer(
+    (model: AgentsModel, event: AgentEvent) => reduceAgents(model, event, Date.now()),
+    undefined,
+    initialModel,
+  );
   // A spoken exchange is a conversation, so it goes into `messages` alongside
   // the typed one and renders through the same template. It used to be held in
   // a parallel `voiceLines` array feeding a separate transcript panel, which
@@ -116,6 +131,9 @@ export function useKravein() {
   // process, no turn behind them. Kept apart from `messages` — a nag is not
   // something the assistant said in conversation.
   const [routineEvents, setRoutineEvents] = useState<RoutineEvent[]>([]);
+  // What the Orchestrator suggests; updated live by `proposal` frames and
+  // seeded from /api/proposals (see `mergeProposals`).
+  const [proposals, setProposals] = useState<Proposal[]>([]);
   // The spoken turn currently being built, if any. Ids are `s…` so they cannot
   // collide with typed turns (`t…`), panel runs (`p…`) or the server's own
   // voice turn ids (`v…`, used for confirmation routing).
@@ -170,6 +188,10 @@ export function useKravein() {
       // `error` frames carry an optional id, so narrow it once here rather
       // than re-asserting at each use.
       const turnId = "id" in frame && frame.id ? frame.id : "";
+
+      // Panel runs (a pane refreshing its list) are not agent work, so they
+      // must not light the Orchestrator. Everything else feeds the store.
+      if (!isPanelTurn(turnId)) dispatchAgents(frame as AgentEvent);
 
       // A confirmation resolved anywhere (phone notification, another tab,
       // cancel, timeout) closes its card here too, wherever the card lives —
@@ -283,6 +305,7 @@ export function useKravein() {
           setMessages([]);
           setPanelConfirms([]);
           setVoiceNotes([]);
+          dispatchAgents({ t: "replay_start" });
           liveTurns.current.clear();
           voiceTurn.current = null;
           for (const past of frame.frames) handleRef.current?.(past);
@@ -343,6 +366,8 @@ export function useKravein() {
                 args: frame.args,
                 display: frame.display,
                 done: false,
+                agent: frame.agent,
+                delegation: frame.delegation,
               } satisfies ToolCallView,
             ],
           }));
@@ -443,6 +468,10 @@ export function useKravein() {
             },
             ...current,
           ].slice(0, 20));
+          break;
+
+        case "proposal":
+          setProposals((current) => applyProposalFrame(current, frame));
           break;
 
         case "cancelled":
@@ -720,6 +749,15 @@ export function useKravein() {
 
   /* -- connection ----------------------------------------------------- */
 
+  // done / failed / declined are a brief statement of how it ended, then the
+  // node goes back to idle (the last report stays on the agent).
+  const hasTransient = Object.values(agents.agents).some((a) => isTransient(a.state));
+  useEffect(() => {
+    if (!hasTransient) return;
+    const timer = setTimeout(() => dispatchAgents({ t: "settle" }), 4500);
+    return () => clearTimeout(timer);
+  }, [hasTransient, agents.agents]);
+
   const connect = useCallback(() => {
     if (goneRef.current) return;
     if (!getToken()) {
@@ -803,6 +841,7 @@ export function useKravein() {
       // A result the dead socket swallowed would leave its card "running"
       // forever; a new socket is a new session and replays nothing.
       setMessages(settleOnClose);
+      dispatchAgents({ t: "disconnected" });
 
       if (goneRef.current) return;
 
@@ -893,6 +932,7 @@ export function useKravein() {
         ...current,
         { id: `${id}-user`, role: "user", text: trimmed },
       ]);
+      dispatchAgents({ t: "ask_sent", text: trimmed });
       if (!send({ t: "ask", id, text: trimmed })) {
         setMessages((current) => [
           ...current,
@@ -925,6 +965,11 @@ export function useKravein() {
     },
     [send],
   );
+
+  // A REST listing or a decide answer: merged, never rolling a card back.
+  const mergeProposals = useCallback((rows: unknown) => {
+    setProposals((current) => mergeList(current, rows));
+  }, []);
 
   const respondToConfirm = useCallback(
     (confirmId: string, approve: boolean) => {
@@ -1097,6 +1142,8 @@ export function useKravein() {
     messages,
     busy,
     panelConfirms,
+    agents,
+    dispatchAgents,
     ask,
     run,
     cancel,
@@ -1108,6 +1155,8 @@ export function useKravein() {
     cancelling: cancelling && busy,
     jobEvents,
     routineEvents,
+    proposals,
+    mergeProposals,
     respondToConfirm,
     dismissPanelConfirm,
     reset,

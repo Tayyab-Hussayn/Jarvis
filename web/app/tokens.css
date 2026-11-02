@@ -1,100 +1,152 @@
 /*
- * Design tokens — the single place the look and feel is defined.
+ * Design tokens: the single place the look and feel is defined.
  *
- * Direction: acid lime on near-black, after the Salesforce/Invoices reference.
- * Near-black shell, one high-chroma accent, big tabular numerals, and light
- * detail panels floating over the dark ground.
+ * Kravein v2, "Command Constellation" (brief: kb/design/kravein-v2-ui.md).
+ * Obsidian canvas, liquid-chrome text, laser red reserved for what is LIVE or
+ * an ACTION. Red is never decoration on an idle thing.
  *
- * No component anywhere hardcodes a colour, radius or duration. If you are
- * about to write a hex value or a px radius inside a component, add a token
- * here instead.
+ * No component hardcodes a colour, radius, duration or z-index. If you are
+ * about to write a hex value inside a component, add a token here instead.
+ * Dark only: the brief makes a light "chrome" theme optional, and shipping a
+ * second palette we do not verify would be worse than shipping one.
  */
 
 :root {
   color-scheme: dark;
 
-  /* -- surfaces, back to front ------------------------------------- */
-  --bg: #04060c;
-  --surface: #0b1019;
-  --surface-raised: #121a28;
-  --surface-sunken: #070b13;
-  --border: #1b2638;
-  --border-strong: #2b3a54;
+  /* -- brand palette (raw) ------------------------------------------ */
+  --obsidian: #080808;
+  --charcoal: #17171c;
+  --graphite: #22232a;
+  --steel: #929da7;
+  --chrome: #cdcbca;
+  --laser: #d41514;
+  --coral: #ff4b32;
+  /* Depth tint for gradients only, never a flat fill. */
+  --forest: #06110c;
 
-  /* Glass: translucent fill + hairline + blur, for the chrome and cards that
-     float over the aurora ground. Falls back to --surface where backdrop-filter
-     is missing (the fill is opaque enough to read on its own). */
-  --glass: rgba(14, 21, 34, 0.72);
-  --glass-strong: rgba(18, 27, 43, 0.88);
-  --glass-border: rgba(140, 180, 255, 0.14);
-  --glass-highlight: rgba(255, 255, 255, 0.05);
+  /* -- surfaces, back to front -------------------------------------- */
+  --bg: var(--obsidian);
+  --surface: #0e0e11;
+  --surface-raised: var(--charcoal);
+  --surface-sunken: #050506;
+  --border: var(--graphite);
+  --border-strong: #363843;
+
+  /* Smoked glass: translucent fill + chrome hairline + blur. The fill is
+     opaque enough to read without backdrop-filter (low-end phones). */
+  --glass: rgba(23, 23, 28, 0.74);
+  --glass-strong: rgba(18, 18, 22, 0.92);
+  --glass-border: rgba(205, 203, 202, 0.14);
+  --glass-highlight: rgba(255, 255, 255, 0.06);
   --blur: 18px;
-  --scrim: rgba(2, 5, 12, 0.62);
+  --scrim: rgba(3, 3, 4, 0.66);
 
-  /* Ambient background light behind everything. */
-  --aurora-1: rgba(56, 224, 255, 0.10);
-  --aurora-2: rgba(139, 123, 255, 0.12);
+  /* Ambient light behind everything. Volumetric red sits behind the active
+     agent (the constellation sets its own); these two are the room. */
+  --aurora-1: rgba(212, 21, 20, 0.10);
+  --aurora-2: rgba(6, 17, 12, 0.9);
+  --grain-opacity: 0.05;
 
-  /* The light panel that floats over the dark ground. Its own text scale,
-     because inverting inside a dark app is where contrast bugs breed. */
-  --panel: #eef3fb;
-  --panel-border: #d3deee;
-  --panel-text: #0b1220;
-  --panel-muted: #4a5870;
-  --panel-faint: #5d6b83;
+  /* The light panel that floats over the dark ground (SkillOutput cards). */
+  --panel: #e9e7e6;
+  --panel-border: #c9c6c4;
+  --panel-text: #0d0d0f;
+  --panel-muted: #4a4d55;
+  --panel-faint: #5c606a;
 
-  /* -- text --------------------------------------------------------- */
-  --text: #eaf0fb;
-  --text-muted: #a6b3c8;
-  --text-faint: #8493ab;
+  /* -- text ---------------------------------------------------------- */
+  --text-strong: #f3f1f0;
+  --text: var(--chrome);
+  --text-muted: var(--steel);
+  --text-faint: #88939d;
 
-  /* -- accent: electric cyan, with violet as the second light ------- */
-  --accent: #3de3ff;
-  --accent-hover: #7aeeff;
-  --accent-contrast: #031016;
-  --accent-dim: rgba(61, 227, 255, 0.12);
-  --accent-line: rgba(61, 227, 255, 0.38);
-  --accent-2: #9d8cff;
-  --accent-2-dim: rgba(157, 140, 255, 0.14);
-  --gradient-accent: linear-gradient(135deg, #3de3ff 0%, #7b8cff 100%);
-  --gradient-accent-contrast: #031016;
+  /* -- accent: laser. --accent is the text/line-capable tone (>= 4.5:1 on
+        every surface); --laser is the fill, with white text on it. ------ */
+  /* A red-pink, deliberately NOT the orange-red coral: coral means "waiting
+     for you" and nothing else. Selected chips, toggles and primary buttons
+     FILL with --laser and carry --accent-contrast (white) on it. */
+  --accent: #ff5c5c;
+  --accent-hover: #ff8585;
+  --accent-contrast: #ffffff;
+  --accent-dim: rgba(212, 21, 20, 0.16);
+  --accent-line: rgba(255, 92, 92, 0.45);
+  --accent-2: var(--chrome);
+  --accent-2-dim: rgba(205, 203, 202, 0.12);
+  --gradient-accent: linear-gradient(135deg, #e5201e 0%, #a30f10 100%);
+  --gradient-accent-contrast: #ffffff;
+  /* Liquid chrome, for the wordmark and the orb. */
+  --gradient-chrome: linear-gradient(180deg, #ffffff 0%, #cdcbca 38%, #6f757c 62%, #d8d6d5 100%);
 
-  /* Soft glow: a coloured halo, never a hard shadow. */
-  --glow: 0 0 0 1px var(--accent-line), 0 0 18px rgba(61, 227, 255, 0.28);
-  --glow-soft: 0 0 14px rgba(61, 227, 255, 0.18);
-  --glow-2: 0 0 18px rgba(157, 140, 255, 0.28);
+  --glow: 0 0 0 1px var(--accent-line), 0 0 22px rgba(212, 21, 20, 0.38);
+  --glow-soft: 0 0 14px rgba(212, 21, 20, 0.26);
+  --glow-2: 0 0 18px rgba(205, 203, 202, 0.2);
 
-  /* -- danger, mapped to safety.Danger ------------------------------ *
-   * Deliberately no green. Cyan already means "interactive"; SAFE is the
-   * default state and carries no colour, so the warm ramp reads purely as
-   * rising risk. */
+  /* -- danger, mapped to safety.Danger ------------------------------- */
   --safe: var(--text-muted);
   --moderate: #ffc94d;
-  --destructive: #ff8f4a;
-  --critical: #ff6b7a;
-  --safe-dim: rgba(166, 179, 200, 0.1);
+  --destructive: #ff9a4a;
+  --critical: #ff7b8b;
+  --safe-dim: rgba(146, 157, 167, 0.1);
   --moderate-dim: rgba(255, 201, 77, 0.13);
-  --destructive-dim: rgba(255, 143, 74, 0.14);
-  --critical-dim: rgba(255, 107, 122, 0.14);
-  /* Text on a solid --critical fill (the auto-approve banner). */
+  --destructive-dim: rgba(255, 154, 74, 0.14);
+  --critical-dim: rgba(255, 123, 139, 0.14);
   --critical-contrast: #1a0206;
 
-  /* -- status ------------------------------------------------------- */
+  /* -- constellation surfaces: gradients live here, not in components ----- */
+  --laser-rgb: 212 21 20;
+  --ink-on-coral: #1a0602;
+  --white: #ffffff;
+  --halo-hot: radial-gradient(circle, rgb(var(--laser-rgb) / 0.5) 0%, rgb(var(--laser-rgb) / 0.12) 45%, transparent 70%);
+  --halo-core: radial-gradient(circle, rgb(var(--laser-rgb) / 0.55) 0%, rgb(var(--laser-rgb) / 0.14) 42%, transparent 70%);
+  --halo-idle: radial-gradient(circle, rgb(205 203 202 / 0.16), transparent 70%);
+  --node-hot: radial-gradient(circle at 50% 40%, #6e0d0c 0%, #2a0505 62%, #120203 100%);
+  --node-cool: radial-gradient(circle at 35% 30%, #2a2b33 0%, #121217 70%);
+  --sphere-chrome: radial-gradient(circle at 34% 26%, #ffffff 0%, #cdcbca 22%, #7b8088 52%, #2a2c33 80%, #101114 100%);
+  --sphere-shadow: inset 0 -6px 14px rgb(0 0 0 / 0.55), inset 0 2px 3px rgb(255 255 255 / 0.7), 0 10px 30px rgb(0 0 0 / 0.6);
+  --sphere-lens: radial-gradient(circle, #ff6a5f 0%, #d41514 38%, #5a0707 78%, #1a0202 100%);
+  /* Orb layers, bottom to top: chrome body, reflected horizon, specular. */
+  --orb-horizon: linear-gradient(180deg, rgb(255 255 255 / 0.0) 0%, rgb(255 255 255 / 0.0) 45%, rgb(255 150 120 / 0.38) 49.5%, rgb(8 8 10 / 0.6) 52%, rgb(70 74 84 / 0.0) 100%);
+  --orb-specular: radial-gradient(ellipse 46% 30% at 31% 21%, rgb(255 255 255 / 0.95) 0%, rgb(255 255 255 / 0.0) 100%);
+  --orb-rim: inset 0 0 0 1px rgb(255 255 255 / 0.35), inset 0 -10px 18px rgb(0 0 0 / 0.55), inset 0 3px 5px rgb(255 255 255 / 0.65);
+  --floor-glow: radial-gradient(ellipse 50% 50% at 50% 50%, rgb(var(--laser-rgb) / 0.55) 0%, transparent 70%);
+  /* Node bezels: a chrome ring around a dark glass dome with a gloss arc. */
+  --bezel-chrome: conic-gradient(from 200deg, #f4f2f1, #7c828a, #d8d6d5, #3a3d44, #e9e7e6, #7c828a, #f4f2f1);
+  --bezel-hot: conic-gradient(from 200deg, #ffd9d4, #d41514, #ff7d70, #5a0707, #ffb3aa, #d41514, #ffd9d4);
+  --dome-glass: radial-gradient(circle at 50% 62%, #1d1e25 0%, #0b0b0f 78%);
+  --dome-hot: radial-gradient(circle at 50% 58%, #7a0f0e 0%, #2a0505 62%, #0f0102 100%);
+  --dome-gloss: linear-gradient(180deg, rgb(255 255 255 / 0.26), rgb(255 255 255 / 0.02));
+  --node-shadow: 0 8px 18px rgb(0 0 0 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.5);
+  /* Smoked glass for panes and cards: translucent enough that the blur reads. */
+  --pane-glass: linear-gradient(180deg, rgb(34 35 42 / 0.74), rgb(12 12 15 / 0.82));
+  --pane-hairline: 0 0 0 1px rgb(205 203 202 / 0.16), inset 0 1px 0 rgb(255 255 255 / 0.14);
+  /* Atmosphere behind the constellation. */
+  --stage-haze: radial-gradient(ellipse 60% 55% at 50% 58%, rgb(6 17 12 / 0.9) 0%, transparent 72%);
+
+  /* -- agent states (each also has a shape/badge; never colour alone) -- */
+  --state-idle: var(--steel);
+  --state-thinking: var(--chrome);
+  --state-working: var(--laser);
+  --state-working-text: var(--accent);
+  --state-waiting: var(--coral);
+  --state-done: #ffffff;
+  --state-failed: #ff7b8b;
+
+  /* -- status --------------------------------------------------------- */
   --ok: var(--accent);
   --warn: var(--moderate);
   --error: var(--critical);
 
-  /* -- type --------------------------------------------------------- */
-  /* NEVER put `system-ui` or `ui-sans-serif` in this stack.
-     Chrome on Linux does not resolve `ui-sans-serif` to a real face, so it
-     falls through — and on a stock Arch/fontconfig setup `system-ui` resolves
-     to a MONOSPACE face. The result was the entire application rendering in a
-     terminal typeface. Verified by measuring glyph advances: `i` and `W` came
-     back identical under `system-ui`, exactly as under `monospace`.
-     Lead with concrete installed families instead. */
-  --font-sans: Inter, "Noto Sans", Cantarell, Roboto, "Liberation Sans",
-    "DejaVu Sans", "Segoe UI", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", "DejaVu Sans Mono",
+  /* -- type ----------------------------------------------------------- */
+  /* NEVER put `system-ui` or `ui-sans-serif` in these stacks. On a stock
+     Arch/fontconfig setup `system-ui` resolves to a MONOSPACE face and the
+     whole application rendered as a terminal. The --nf-* variables are set by
+     next/font in layout.tsx (self-hosted at build time, nothing is fetched at
+     runtime); the var() fallbacks keep the stack valid if one is missing. */
+  --font-display: var(--nf-display, "Unbounded"), "Noto Sans", "DejaVu Sans", Arial, sans-serif;
+  --font-sans: var(--nf-ui, "Inter Tight"), Inter, "Noto Sans", Cantarell, Roboto,
+    "Liberation Sans", "DejaVu Sans", "Segoe UI", Arial, sans-serif;
+  --font-mono: var(--nf-mono, "JetBrains Mono"), "Fira Code", "DejaVu Sans Mono",
     "Liberation Mono", ui-monospace, monospace;
   --text-xs: 0.6875rem;
   --text-sm: 0.8125rem;
@@ -102,12 +154,13 @@
   --text-lg: 1.125rem;
   --text-xl: 1.5rem;
   --text-2xl: 2rem;
-  /* Hero numerals. */
   --text-stat: 2.125rem;
+  --text-display: clamp(1.5rem, 1.1rem + 1.6vw, 2.5rem);
   --tracking-stat: -0.03em;
-  --tracking-label: 0.1em;
+  --tracking-label: 0.12em;
+  --tracking-display: 0.04em;
 
-  /* -- space -------------------------------------------------------- */
+  /* -- space ---------------------------------------------------------- */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -116,7 +169,7 @@
   --space-6: 2rem;
   --space-8: 3rem;
 
-  /* -- shape -------------------------------------------------------- */
+  /* -- shape ---------------------------------------------------------- */
   --radius-sm: 8px;
   --radius: 12px;
   --radius-md: 14px;
@@ -124,24 +177,36 @@
   --radius-xl: 24px;
   --radius-full: 999px;
 
-  /* -- elevation ---------------------------------------------------- */
-  --shadow-card: 0 1px 0 var(--glass-highlight) inset, 0 6px 20px rgba(0, 0, 0, 0.35);
-  --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.6);
-  --shadow-dock: 0 12px 32px rgba(0, 0, 0, 0.6);
+  /* -- elevation -------------------------------------------------------- */
+  --shadow-card: 0 1px 0 var(--glass-highlight) inset, 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-panel: 0 24px 64px rgba(0, 0, 0, 0.7);
+  --shadow-dock: 0 14px 38px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--glass-border);
 
-  /* -- motion ------------------------------------------------------- */
-  /* Semantics, not decoration: `fast` is feedback on a click, `base` is a
-     panel changing, `slow` is something arriving on its own. */
+  /* -- motion ----------------------------------------------------------- */
+  /* `fast` is feedback on a click, `base` a panel changing, `slow` something
+     arriving on its own. The constellation's loops use the --loop-* tokens. */
   --motion-fast: 110ms;
   --motion-base: 200ms;
   --motion-slow: 360ms;
+  --loop-breathe: 4.2s;
+  --loop-orbit: 2.4s;
+  --loop-sweep: 1.6s;
+  --loop-pulse: 1.4s;
   --ease: cubic-bezier(0.2, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-  /* -- layout ------------------------------------------------------- */
-  --rail-width: 60px;
-  --rail-width-open: 208px;
+  /* -- layering: one scale, so "confirmations above panes" is a contract --- */
+  --z-hud: 20;
+  --z-dock: 30;
+  --z-pane: 40;
+  --z-palette: 60;
+  --z-confirm: 80;
+
+  /* -- layout ----------------------------------------------------------- */
+  --hud-height: 3.25rem;
+  --dock-height: 3.5rem;
   --content-max: 84rem;
+  --stream-max: 50rem;
 }
 
 /* Tailwind v4 reads its palette from these, so `bg-surface`, `text-muted`,
@@ -181,76 +246,10 @@
 
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
 
   --radius-sm: var(--radius-sm);
   --radius-DEFAULT: var(--radius);
   --radius-lg: var(--radius-lg);
   --radius-xl: var(--radius-xl);
-}
-
-/*
- * Light theme: cool paper ground, deep teal accent.
- *
- * Bright cyan fails contrast as text on a light ground, so the accent flips to
- * a deep teal that carries both fills and text (>= 4.5:1 on every surface).
- * Glass becomes frosted white; glows are dropped to hairlines because a halo on
- * a light ground reads as a smudge.
- */
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-
-    --bg: #eef2f9;
-    --surface: #f8faff;
-    --surface-raised: #ffffff;
-    --surface-sunken: #e4eaf4;
-    --border: #d5deec;
-    --border-strong: #b3c0d6;
-
-    --glass: rgba(255, 255, 255, 0.72);
-    --glass-strong: rgba(255, 255, 255, 0.92);
-    --glass-border: rgba(40, 70, 120, 0.14);
-    --glass-highlight: rgba(255, 255, 255, 0.9);
-    --scrim: rgba(16, 28, 52, 0.4);
-    --aurora-1: rgba(0, 150, 190, 0.10);
-    --aurora-2: rgba(110, 90, 230, 0.10);
-
-    --panel: #101828;
-    --panel-border: #26334a;
-    --panel-text: #eaf0fb;
-    --panel-muted: #a6b3c8;
-    --panel-faint: #8493ab;
-
-    --text: #0c1424;
-    --text-muted: #44536b;
-    --text-faint: #566580;
-
-    --accent: #006b82;
-    --accent-hover: #00566a;
-    --accent-contrast: #ffffff;
-    --accent-dim: rgba(0, 107, 130, 0.1);
-    --accent-line: rgba(0, 107, 130, 0.34);
-    --accent-2: #5a45d6;
-    --accent-2-dim: rgba(90, 69, 214, 0.1);
-    --gradient-accent: linear-gradient(135deg, #006b82 0%, #4a47d0 100%);
-    --gradient-accent-contrast: #ffffff;
-
-    --glow: 0 0 0 1px var(--accent-line);
-    --glow-soft: none;
-    --glow-2: 0 0 0 1px rgba(90, 69, 214, 0.3);
-
-    --safe: var(--text-muted);
-    --moderate: #8a5a00;
-    --destructive: #a63f06;
-    --critical: #b3182f;
-    --safe-dim: rgba(68, 83, 107, 0.1);
-    --moderate-dim: rgba(138, 90, 0, 0.1);
-    --destructive-dim: rgba(166, 63, 6, 0.1);
-    --critical-dim: rgba(179, 24, 47, 0.1);
-    --critical-contrast: #ffffff;
-
-    --shadow-card: 0 1px 0 var(--glass-highlight) inset, 0 4px 16px rgba(20, 40, 80, 0.08);
-    --shadow-panel: 0 18px 48px rgba(20, 40, 80, 0.18);
-    --shadow-dock: 0 12px 32px rgba(20, 40, 80, 0.2);
-  }
 }

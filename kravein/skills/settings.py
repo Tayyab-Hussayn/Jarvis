@@ -7,8 +7,11 @@ is now a native Linux control path.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ..platform import audio, display, power, shell
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, Verdict, enforce
 
 
@@ -16,14 +19,12 @@ from ..safety import Danger, Verdict, enforce
 # Audio
 # ---------------------------------------------------------------------------
 
-@skill(category="settings", danger=Danger.SAFE)
 def get_volume() -> str:
     """Report the current output volume and mute state."""
     volume, muted = audio.get_volume()
     return f"Volume is {volume}%{' (muted)' if muted else ''}."
 
 
-@skill(category="settings", danger=Danger.MODERATE)
 def set_volume(percent: int) -> str:
     """Set this computer's output volume. For the phone use phone_set_volume.
 
@@ -33,7 +34,6 @@ def set_volume(percent: int) -> str:
     return audio.set_volume(percent)
 
 
-@skill(category="settings", danger=Danger.MODERATE)
 def change_volume(delta: int = 10) -> str:
     """Turn the volume up or down.
 
@@ -43,7 +43,6 @@ def change_volume(delta: int = 10) -> str:
     return audio.change_volume(delta)
 
 
-@skill(category="settings", danger=Danger.MODERATE)
 def mute_audio(state: bool | None = None) -> str:
     """Mute, unmute, or toggle the speakers.
 
@@ -63,27 +62,85 @@ def mute_microphone(state: bool | None = None) -> str:
     return audio.set_mic_mute(state)
 
 
-@skill(category="settings", danger=Danger.SAFE)
 def list_audio_devices() -> str:
     """List audio outputs and inputs."""
     return audio.list_sinks()
+
+
+@skill(
+    category="settings", danger=Danger.MODERATE,
+    aliases={
+        "get_volume": {"action": "get"},
+        "set_volume": {"action": "set"},
+        "change_volume": {"action": "change"},
+        "mute_audio": {"action": "mute"},
+    },
+)
+def volume(
+    action: Literal["get", "set", "change", "mute"] = "get",
+    percent: int | None = None,
+    delta: int | None = None,
+    state: bool | None = None,
+) -> str:
+    """Read or control this computer's speaker volume. For the phone use phone_set_volume.
+
+
+    Args:
+        action: get; set (needs percent); change (needs delta, default +10); mute (state, omit to toggle).
+        percent: For set: target volume 0-100.
+        delta: For change: signed percentage change, e.g. 10 or -10.
+        state: For mute: True to mute, False to unmute, omit to toggle.
+    """
+    if action == "get":
+        return get_volume()
+    if action == "set":
+        if percent is None:
+            return "set needs percent (0-100)."
+        return set_volume(percent)
+    if action == "change":
+        return _merge.run(change_volume, delta=delta)
+    if action == "mute":
+        return mute_audio(state)
+    return _merge.unknown(action, ["get", "set", "change", "mute"])
+
+
+@skill(
+    category="settings", danger=Danger.SAFE,
+    aliases={"list_audio_devices": {"kind": "audio"}, "list_monitors": {"kind": "monitors"}},
+)
+def list_devices(kind: Literal["audio", "monitors"] = "audio") -> str:
+    """List audio outputs/inputs, or connected monitors with resolution and refresh rate.
+
+    Args:
+        kind: audio or monitors.
+    """
+    if kind == "audio":
+        return list_audio_devices()
+    if kind == "monitors":
+        return list_monitors()
+    return _merge.unknown(kind, ["audio", "monitors"])
 
 
 # ---------------------------------------------------------------------------
 # Media transport
 # ---------------------------------------------------------------------------
 
-@skill(category="settings", danger=Danger.MODERATE, requires=("playerctl",))
+@skill(
+    category="settings", danger=Danger.MODERATE, requires=("playerctl",),
+    aliases={"now_playing": {"command": "status"}},
+)
 def media_control(command: str = "play-pause") -> str:
-    """Control media playback in any MPRIS-aware player.
+    """Control media playback in any MPRIS-aware player, or show what is playing.
 
     Args:
-        command: play, pause, play-pause, next, previous or stop.
+        command: play, pause, play-pause, next, previous, stop, or status to
+            show what is currently playing.
     """
+    if (command or "").strip().lower() in ("status", "now_playing", "now-playing"):
+        return now_playing()
     return audio.media(command)
 
 
-@skill(category="settings", danger=Danger.SAFE, requires=("playerctl",))
 def now_playing() -> str:
     """Show what is currently playing."""
     return audio.now_playing()
@@ -93,7 +150,6 @@ def now_playing() -> str:
 # Display
 # ---------------------------------------------------------------------------
 
-@skill(category="settings", danger=Danger.SAFE)
 def get_brightness() -> str:
     """Report the current screen brightness."""
     level = display.get_brightness()
@@ -102,7 +158,6 @@ def get_brightness() -> str:
     return f"Brightness is {level}%."
 
 
-@skill(category="settings", danger=Danger.MODERATE)
 def set_brightness(percent: int) -> str:
     """Set the screen brightness.
 
@@ -112,7 +167,6 @@ def set_brightness(percent: int) -> str:
     return display.set_brightness(percent)
 
 
-@skill(category="settings", danger=Danger.MODERATE)
 def change_brightness(delta: int = 10) -> str:
     """Turn the screen brightness up or down.
 
@@ -121,6 +175,38 @@ def change_brightness(delta: int = 10) -> str:
     """
     return display.change_brightness(delta)
 
+@skill(
+    category="settings", danger=Danger.MODERATE,
+    aliases={
+        "get_brightness": {"action": "get"},
+        "set_brightness": {"action": "set"},
+        "change_brightness": {"action": "change"},
+    },
+)
+def brightness(
+    action: Literal["get", "set", "change"] = "get",
+    percent: int | None = None,
+    delta: int | None = None,
+) -> str:
+    """Read or control the screen brightness.
+
+
+    Args:
+        action: get; set (needs percent); change (needs delta, default +10).
+        percent: For set: target brightness 5-100.
+        delta: For change: signed percentage change, e.g. 10 or -10.
+    """
+    if action == "get":
+        return get_brightness()
+    if action == "set":
+        if percent is None:
+            return "set needs percent (5-100)."
+        return set_brightness(percent)
+    if action == "change":
+        return _merge.run(change_brightness, delta=delta)
+    return _merge.unknown(action, ["get", "set", "change"])
+
+
 
 @skill(category="settings", danger=Danger.MODERATE)
 def blank_screen() -> str:
@@ -128,7 +214,6 @@ def blank_screen() -> str:
     return display.blank_screen()
 
 
-@skill(category="settings", danger=Danger.SAFE)
 def list_monitors() -> str:
     """List connected monitors with their resolution and refresh rate."""
     return display.list_monitors()
@@ -148,14 +233,20 @@ def set_dark_mode(enabled: bool | None = None) -> str:
 # Network
 # ---------------------------------------------------------------------------
 
-@skill(category="settings", danger=Danger.MODERATE, requires=("nmcli",))
-def wifi_control(action: str = "status") -> str:
-    """Turn Wi-Fi on or off, or check its state.
+@skill(
+    category="settings", danger=Danger.MODERATE, requires=("nmcli",),
+    aliases={"list_wifi_networks": {"action": "list"}},
+)
+def wifi_control(action: str = "status", rescan: bool = False) -> str:
+    """Turn Wi-Fi on or off, check its state, or list visible networks.
 
     Args:
-        action: 'on', 'off', 'toggle' or 'status'.
+        action: 'on', 'off', 'toggle', 'status', or 'list' for visible networks.
+        rescan: For list: force a fresh scan first.
     """
     action = (action or "status").lower().strip()
+    if action == "list":
+        return list_wifi_networks(rescan)
 
     state = shell.run(["nmcli", "radio", "wifi"], timeout=8)
     enabled = "enabled" in state.stdout.lower()
@@ -176,7 +267,6 @@ def wifi_control(action: str = "status") -> str:
     return f"Wi-Fi turned {target}."
 
 
-@skill(category="settings", danger=Danger.SAFE, requires=("nmcli",))
 def list_wifi_networks(rescan: bool = False) -> str:
     """List visible Wi-Fi networks.
 
@@ -240,7 +330,6 @@ def battery_status() -> str:
     return power.battery()
 
 
-@skill(category="power", danger=Danger.CRITICAL)
 def suspend_system(_source: str = "local", _confirm: bool = False) -> str:
     """Suspend the machine to RAM."""
     enforce(
@@ -251,7 +340,6 @@ def suspend_system(_source: str = "local", _confirm: bool = False) -> str:
     return power.suspend()
 
 
-@skill(category="power", danger=Danger.CRITICAL)
 def reboot_system(delay_seconds: int = 0, _source: str = "local", _confirm: bool = False) -> str:
     """Reboot the machine.
 
@@ -269,7 +357,6 @@ def reboot_system(delay_seconds: int = 0, _source: str = "local", _confirm: bool
     return power.reboot(delay_seconds)
 
 
-@skill(category="power", danger=Danger.CRITICAL)
 def shutdown_system(delay_seconds: int = 0, _source: str = "local", _confirm: bool = False) -> str:
     """Power the machine off.
 
@@ -287,7 +374,6 @@ def shutdown_system(delay_seconds: int = 0, _source: str = "local", _confirm: bo
     return power.power_off(delay_seconds)
 
 
-@skill(category="power", danger=Danger.CRITICAL)
 def log_out(_source: str = "local", _confirm: bool = False) -> str:
     """End the graphical session."""
     enforce(
@@ -295,6 +381,40 @@ def log_out(_source: str = "local", _confirm: bool = False) -> str:
         "log out", skill="log_out", source=_source, pre_confirmed=_confirm,
     )
     return power.logout()
+
+
+@skill(
+    category="power", danger=Danger.CRITICAL,
+    aliases={
+        "suspend_system": {"action": "suspend"},
+        "reboot_system": {"action": "reboot"},
+        "shutdown_system": {"action": "shutdown"},
+        "log_out": {"action": "log_out"},
+    },
+)
+def power_session(
+    action: Literal["suspend", "reboot", "shutdown", "log_out"],
+    delay_seconds: int | None = None,
+    _source: str = "local",
+    _confirm: bool = False,
+) -> str:
+    """Suspend, reboot, shut down, or log out of this computer. Always asks first.
+
+    To cancel a pending shutdown or reboot use cancel_shutdown.
+
+    Args:
+        action: suspend, reboot, shutdown or log_out.
+        delay_seconds: For reboot/shutdown: wait this long first, giving you time to cancel.
+    """
+    if action == "suspend":
+        return _merge.run(suspend_system, _source, _confirm)
+    if action == "reboot":
+        return _merge.run(reboot_system, _source, _confirm, delay_seconds=delay_seconds)
+    if action == "shutdown":
+        return _merge.run(shutdown_system, _source, _confirm, delay_seconds=delay_seconds)
+    if action == "log_out":
+        return _merge.run(log_out, _source, _confirm)
+    return _merge.unknown(action, ["suspend", "reboot", "shutdown", "log_out"])
 
 
 @skill(category="power", danger=Danger.MODERATE)

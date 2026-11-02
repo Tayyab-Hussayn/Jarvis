@@ -181,6 +181,9 @@ def main() -> None:
     base = roster["base_branch"]
     own_branch = roster["agents"][me]["branch"] if me != "orchestrator" else None
 
+    def is_own(branch: str) -> bool:
+        return own_branch is not None and (branch == own_branch or branch.startswith(own_branch + "-"))
+
     for tokens in simple_commands(cmd):
         hit = frozen_write_target(tokens, cwd) if tokens else None
         if hit:
@@ -207,9 +210,11 @@ def main() -> None:
                     block(f"direct push to '{base}' is not allowed (orchestrator: only commits that change kb/ alone may go "
                           f"direct — commit first in a separate command). Everything else reaches {base} via a pull request.")
             if me != "orchestrator":
-                if any(d != own_branch for d in dest):
-                    block(f"you may push only to '{own_branch}'.")
-                if not dest and current_branch(cwd) != own_branch:
+                # A task branch `agent/<me>-<suffix>` is the agent's own too: it lets a second task
+                # ship while the first PR still holds agent/<me> (#133 waiting on #126).
+                if any(not is_own(d) for d in dest):
+                    block(f"you may push only to '{own_branch}' or '{own_branch}-<task>'.")
+                if not dest and not is_own(current_branch(cwd)):
                     block(f"current branch is not '{own_branch}'; push only from your own branch.")
 
         # No checkout/switch rule: git itself refuses to check out a branch used by another worktree
@@ -218,7 +223,7 @@ def main() -> None:
         elif sub == "branch" and me != "orchestrator":
             if any(a in ("-D", "-d", "--delete") for a in args):
                 names = [a for a in args if not a.startswith("-")]
-                protected = [n for n in names if n == base or (n.startswith("agent/") and n != own_branch)]
+                protected = [n for n in names if n == base or (n.startswith("agent/") and not is_own(n))]
                 if protected:
                     block(f"you may not delete {', '.join(protected)}; local helper branches of your own are fine.")
 

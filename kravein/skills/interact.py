@@ -7,11 +7,14 @@ instead.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import time
 
 from ..platform import clipboard as clip
 from ..platform import inputs, screen
 from ..registry import skill
+from . import _merge
 from ..safety import Danger, Verdict, enforce
 
 
@@ -40,7 +43,6 @@ def press_keys(keys: str) -> str:
     return inputs.press(keys)
 
 
-@skill(category="interact", danger=Danger.MODERATE)
 def click_mouse(button: str = "left", count: int = 1) -> str:
     """Click at the current pointer position.
 
@@ -51,7 +53,6 @@ def click_mouse(button: str = "left", count: int = 1) -> str:
     return inputs.click(button, count)
 
 
-@skill(category="interact", danger=Danger.MODERATE)
 def move_mouse(x: int, y: int, relative: bool = False) -> str:
     """Move the mouse pointer.
 
@@ -61,6 +62,38 @@ def move_mouse(x: int, y: int, relative: bool = False) -> str:
         relative: Move by this offset instead of to this position.
     """
     return inputs.move_mouse(x, y, absolute=not relative)
+
+
+@skill(
+    category="interact", danger=Danger.MODERATE,
+    aliases={"click_mouse": {"action": "click"}, "move_mouse": {"action": "move"}},
+)
+def mouse(
+    action: Literal["click", "move"] = "click",
+    x: int | None = None,
+    y: int | None = None,
+    relative: bool | None = None,
+    button: str | None = None,
+    count: int | None = None,
+) -> str:
+    """Click or move the mouse pointer.
+
+
+    Args:
+        action: click (at the pointer: button, count) or move (needs x and y).
+        x: For move: X coordinate in pixels.
+        y: For move: Y coordinate in pixels.
+        relative: For move: move by this offset instead of to this position.
+        button: For click: 'left', 'right' or 'middle'.
+        count: For click: number of clicks; 2 for a double-click.
+    """
+    if action == "click":
+        return _merge.run(click_mouse, button=button, count=count)
+    if action == "move":
+        if x is None or y is None:
+            return "move needs both x and y."
+        return _merge.run(move_mouse, x=x, y=y, relative=relative)
+    return _merge.unknown(action, ["click", "move"])
 
 
 @skill(category="interact", danger=Danger.MODERATE)
@@ -74,7 +107,6 @@ def scroll(direction: str = "down", amount: int = 3) -> str:
     return inputs.scroll(direction, amount)
 
 
-@skill(category="interact", danger=Danger.SAFE)
 def input_status() -> str:
     """Check whether the assistant can synthesise keyboard and mouse input."""
     return inputs.status()
@@ -84,7 +116,6 @@ def input_status() -> str:
 # Clipboard
 # ---------------------------------------------------------------------------
 
-@skill(category="interact", danger=Danger.SAFE)
 def read_clipboard() -> str:
     """Read the current clipboard contents."""
     text = clip.paste()
@@ -95,7 +126,6 @@ def read_clipboard() -> str:
     return text
 
 
-@skill(category="interact", danger=Danger.MODERATE)
 def write_clipboard(text: str) -> str:
     """Put text on the clipboard.
 
@@ -108,6 +138,26 @@ def write_clipboard(text: str) -> str:
 # ---------------------------------------------------------------------------
 # Screen
 # ---------------------------------------------------------------------------
+
+@skill(
+    category="interact", danger=Danger.MODERATE,
+    aliases={"read_clipboard": {"action": "read"}, "write_clipboard": {"action": "write"}},
+)
+def clipboard(action: Literal["read", "write"] = "read", text: str | None = None) -> str:
+    """Read the clipboard, or put text on it.
+
+    Args:
+        action: read or write.
+        text: For write: what to copy.
+    """
+    if action == "read":
+        return read_clipboard()
+    if action == "write":
+        if text is None:
+            return "write needs text."
+        return write_clipboard(text)
+    return _merge.unknown(action, ["read", "write"])
+
 
 @skill(category="interact", danger=Danger.MODERATE)
 def take_screenshot(save_path: str = "", region: bool = False, active_window: bool = False) -> str:
@@ -224,9 +274,18 @@ def click_on_screen(description: str, _source: str = "local", _confirm: bool = F
     return f"Clicked '{description}' at ({x}, {y})."
 
 
-@skill(category="interact", danger=Danger.SAFE)
-def screen_info() -> str:
-    """Report screen dimensions and capture capability."""
+@skill(
+    category="interact", danger=Danger.SAFE,
+    aliases={"input_status": {"topic": "input"}},
+)
+def screen_info(topic: Literal["screen", "input"] = "screen") -> str:
+    """Report screen dimensions and capture capability, or whether keyboard/mouse input can be synthesised.
+
+    Args:
+        topic: screen (default) for size and capture, or input for typing/mouse capability.
+    """
+    if topic == "input":
+        return input_status()
     width, height = screen.screen_size()
     lines = [screen.status()]
     if width and height:
