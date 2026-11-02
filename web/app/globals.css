@@ -115,7 +115,7 @@ h3 {
 
 /* Smoked glass for panes: darker and with an inner chrome highlight. */
 .glass-pane {
-  background: linear-gradient(180deg, rgba(30, 30, 36, 0.9), rgba(14, 14, 18, 0.96));
+  background: linear-gradient(180deg, rgba(28, 28, 33, 0.97), rgba(12, 12, 15, 0.985));
   border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-panel), inset 0 1px 0 var(--glass-highlight);
 }
@@ -291,15 +291,22 @@ h3 {
   }
 }
 
-@keyframes orbit-drift {
+/* A slow swing, not a full turn; nodes counter-rotate so labels stay upright. */
+@keyframes orbit-swing {
+  from {
+    transform: rotate(-9deg);
+  }
   to {
-    transform: rotate(360deg);
+    transform: rotate(9deg);
   }
 }
 
-@keyframes orbit-counter {
+@keyframes orbit-swing-back {
+  from {
+    transform: rotate(9deg);
+  }
   to {
-    transform: rotate(-360deg);
+    transform: rotate(-9deg);
   }
 }
 
@@ -359,6 +366,13 @@ h3 {
 }
 
 /* -- panes ------------------------------------------------------------ */
+
+/* The sheet takes focus when it opens so the keyboard is inside it; a ring
+   around the whole sheet is noise, the controls inside carry their own. */
+.pane-sheet:focus,
+.pane-sheet:focus-visible {
+  outline: none;
+}
 
 /* Desktop: a sheet beside the dock. Phone: a bottom sheet that stops above the
    dock bar, so the dock stays reachable and nothing scrolls sideways. */

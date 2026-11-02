@@ -171,7 +171,7 @@ test("an agent_state frame is authoritative and stops the derivation", () => {
   assert.equal(m.agents.orchestrator.steps.length, 1);
 
   m = run([{ t: "settle" }], m);
-  assert.equal(m.agents["system-ops"].state, "working", "settle is the server's job now");
+  assert.equal(m.agents["system-ops"].state, "working", "settle only ends outcomes, never live work");
 
   m = run([
     { t: "agent_state", agent: "system-ops", state: "done", report: { outcome: "done", summary: "Moved 4 files." }, since: 9 },
@@ -179,6 +179,19 @@ test("an agent_state frame is authoritative and stops the derivation", () => {
   assert.equal(m.agents["system-ops"].state, "done");
   assert.equal(m.agents["system-ops"].backSeq, 1);
   assert.equal(m.agents["system-ops"].report?.summary, "Moved 4 files.");
+});
+
+test("the server's done+idle pair still shows the outcome until settle", () => {
+  let m = run([
+    { t: "agent_state", agent: "system-ops", state: "working", since: 1 },
+    { t: "agent_state", agent: "system-ops", state: "done", report: { outcome: "done", summary: "ok" }, since: 2 },
+    { t: "agent_state", agent: "system-ops", state: "idle", since: 2 },
+  ]);
+  assert.equal(m.agents["system-ops"].state, "done", "outcome is held, not skipped");
+  assert.equal(m.agents["system-ops"].report?.summary, "ok", "idle keeps the report");
+  m = run([{ t: "settle" }], m);
+  assert.equal(m.agents["system-ops"].state, "idle");
+  assert.equal(m.agents["system-ops"].report?.summary, "ok");
 });
 
 test("malformed agent_state frames are ignored", () => {
@@ -228,6 +241,26 @@ test("a snapshot applies every state at once", () => {
   ]);
   assert.equal(m.agents.reviewer.state, "working");
   assert.equal(m.agents.orchestrator.state, "thinking");
+  assert.equal(m.authoritative, false, "only a live agent_state frame takes over");
+});
+
+test("a late snapshot never overwrites what the socket already said", () => {
+  const live = run([
+    { t: "turn_start", id: "t1" },
+    { t: "tool_call", id: "t1", call_id: "c1", name: "shell", args: {} },
+  ]);
+  // The snapshot was taken before the turn: everything idle.
+  const after = run([
+    { t: "snapshot", states: [
+      { agent: "orchestrator", state: "idle" },
+      { agent: "research", state: "idle" },
+    ] },
+  ], live);
+  assert.equal(after.agents.orchestrator.state, "working");
+  assert.equal(after.agents.orchestrator.tool, "shell");
+  // An idle, untouched agent is still raised by a snapshot (reconnect case).
+  const raised = run([{ t: "snapshot", states: [{ agent: "research", state: "working", tool: "web_search" }] }]);
+  assert.equal(raised.agents.research.state, "working");
 });
 
 test("task text is trimmed to 200 characters and steps are capped", () => {

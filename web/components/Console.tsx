@@ -378,7 +378,7 @@ export function Console({
                 ? "Not connected"
                 : voiceLive
                   ? "Voice is live — or type instead…"
-                  : "Ask, or describe a task…"
+                  : "Ask Kravein…"
             }
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
@@ -410,14 +410,18 @@ export function Console({
               Send
             </Button>
           )}
-          <Button
-            variant="ghost"
-            onClick={onReset}
-            disabled={busy || turns.length === 0}
-            title="Clear the conversation"
-          >
-            Clear
-          </Button>
+          {/* On a phone the capsule is too narrow for a third button; "Clear
+              conversation" is in the command palette there. */}
+          <span className="max-sm:hidden">
+            <Button
+              variant="ghost"
+              onClick={onReset}
+              disabled={busy || turns.length === 0}
+              title="Clear the conversation"
+            >
+              Clear
+            </Button>
+          </span>
         </div>
       </div>
     </div>

@@ -266,7 +266,20 @@ export function reduce(model: AgentsModel, event: AgentEvent, now: number): Agen
 
     case "snapshot": {
       const ev = event as Extract<AgentEvent, { t: "snapshot" }>;
-      return ev.states.reduce((m, s) => reduce(m, { t: "agent_state", ...s }, now), model);
+      // A snapshot corrects what we show now; it does not by itself prove the
+      // server will keep sending `agent_state` frames, so it does not switch
+      // the derivation off. The first live frame does.
+      // The REST answer can land after live frames (it is a round trip), so it
+      // may only RAISE an agent that is still idle and untouched; it never
+      // overwrites what the socket already told us.
+      const applied = ev.states.reduce((m, s) => {
+        const mine = m.agents[s.agent];
+        const untouched = !mine || (mine.state === "idle" && mine.steps.length === 0);
+        return untouched && s.state !== "idle"
+          ? reduce(m, { t: "agent_state", ...s }, now)
+          : m;
+      }, model);
+      return { ...applied, authoritative: model.authoritative };
     }
 
     case "agent_state": {
@@ -276,7 +289,10 @@ export function reduce(model: AgentsModel, event: AgentEvent, now: number): Agen
       const report = e.report as Report | undefined;
       const task = clip(e.task);
       return patch({ ...model, authoritative: true }, name, (v) => ({
-        state: state as AgentStateName,
+        // The server sends `done` and `idle` back to back, so honouring both
+        // would never show the outcome. Hold the outcome; `settle` (a timer in
+        // the hook) returns it to idle a few seconds later.
+        state: (state === "idle" && isTransient(v.state) ? v.state : state) as AgentStateName,
         task: state === "idle" ? v.task : task || v.task,
         tool: state === "working" ? clip(e.tool, 60) : "",
         delegation: typeof e.delegation === "string" ? e.delegation : "",
@@ -416,7 +432,6 @@ export function reduce(model: AgentsModel, event: AgentEvent, now: number): Agen
       return model;
 
     case "settle": {
-      if (model.authoritative) return model; // the server sends its own idle
       let next = model;
       for (const name of model.order) {
         const v = next.agents[name];

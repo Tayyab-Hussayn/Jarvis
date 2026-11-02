@@ -33,12 +33,21 @@ import {
   StateRing,
 } from "./agentVisual";
 
-const ORBIT_RADIUS = 34; // % of the stage side
-const DRIFT_SECONDS = 180;
+const ORBIT_RADIUS = 40; // % of the stage side
+/** The core sits below the middle: the arc of agents fills the space above it. */
+const CY = 58;
+const DRIFT_SECONDS = 46;
 
+/**
+ * Sub-agents sit on the upper arc (-160 deg .. -20 deg), so the core's own
+ * label has the lower half to itself. The drift is a slow swing of a few
+ * degrees each way, not a full turn: it reads as an orbit but a node never
+ * passes through the core's label.
+ */
 function polar(index: number, count: number): { x: number; y: number } {
-  const angle = (-90 + (360 / Math.max(count, 1)) * index) * (Math.PI / 180);
-  return { x: 50 + ORBIT_RADIUS * Math.cos(angle), y: 50 + ORBIT_RADIUS * Math.sin(angle) };
+  const deg = count <= 1 ? -90 : -160 + (140 * index) / (count - 1);
+  const angle = deg * (Math.PI / 180);
+  return { x: 50 + ORBIT_RADIUS * Math.cos(angle), y: CY + ORBIT_RADIUS * Math.sin(angle) };
 }
 
 function ariaFor(view: AgentView): string {
@@ -73,7 +82,7 @@ function AgentNode({
           className="pointer-events-none absolute -inset-8 rounded-full"
           style={{
             background:
-              "radial-gradient(circle, rgba(212,21,20,0.5) 0%, rgba(212,21,20,0.12) 45%, transparent 70%)",
+              "var(--halo-hot)",
             opacity: hot ? 1 : 0,
             transition: "opacity var(--motion-slow) var(--ease)",
           }}
@@ -83,7 +92,7 @@ function AgentNode({
             aria-hidden
             className="pointer-events-none absolute inset-2 rounded-full"
             style={{
-              background: "radial-gradient(circle, rgba(205,203,202,0.16), transparent 70%)",
+              background: "var(--halo-idle)",
               animation: "breathe var(--loop-breathe) ease-in-out infinite",
             }}
           />
@@ -104,8 +113,8 @@ function AgentNode({
           style={{
             color: STATE_TEXT[state],
             background: hot
-              ? "radial-gradient(circle at 50% 40%, #6e0d0c 0%, #2a0505 62%, #120203 100%)"
-              : "radial-gradient(circle at 35% 30%, #2a2b33 0%, #121217 70%)",
+              ? "var(--node-hot)"
+              : "var(--node-cool)",
             boxShadow: hot ? "var(--glow)" : "inset 0 1px 0 var(--glass-highlight)",
             transition: "background var(--motion-slow) var(--ease), box-shadow var(--motion-slow) var(--ease)",
           }}
@@ -121,7 +130,7 @@ function AgentNode({
             className="absolute -right-2 -top-2 flex h-7 w-7 items-center justify-center rounded-full text-[length:var(--text-sm)] font-bold"
             style={{
               background: "var(--coral)",
-              color: "#1a0602",
+              color: "var(--ink-on-coral)",
               animation: "halo 1.6s ease-in-out infinite",
               minWidth: 0,
               minHeight: 0,
@@ -167,14 +176,18 @@ function Core({
   const glow = state === "working" ? 1 : state === "thinking" ? 0.55 : state === "waiting" ? 0.7 : 0.18;
 
   return (
-    <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
+    <div
+      className="absolute left-1/2 flex -translate-x-1/2 flex-col items-center"
+      // Centre the orb (not orb + label) on the connector hub.
+      style={{ top: `${CY}%`, marginTop: "-56px" }}
+    >
       <div className="relative" style={{ width: size, height: size }}>
         <span
           aria-hidden
           className="pointer-events-none absolute -inset-10 rounded-full"
           style={{
             background:
-              "radial-gradient(circle, rgba(212,21,20,0.55) 0%, rgba(212,21,20,0.14) 42%, transparent 70%)",
+              "var(--halo-core)",
             opacity: state === "working" ? 1 : state === "thinking" ? 0.45 : 0.15,
             transition: "opacity var(--motion-slow) var(--ease)",
             animation: state === "idle" ? "breathe var(--loop-breathe) ease-in-out infinite" : undefined,
@@ -189,9 +202,9 @@ function Core({
           style={{
             // Liquid chrome sphere.
             background:
-              "radial-gradient(circle at 34% 26%, #ffffff 0%, #cdcbca 22%, #7b8088 52%, #2a2c33 80%, #101114 100%)",
+              "var(--sphere-chrome)",
             boxShadow:
-              "inset 0 -6px 14px rgba(0,0,0,0.55), inset 0 2px 3px rgba(255,255,255,0.7), 0 10px 30px rgba(0,0,0,0.6)",
+              "var(--sphere-shadow)",
             color: "var(--obsidian)",
           }}
         >
@@ -201,13 +214,13 @@ function Core({
             className="absolute left-1/2 top-1/2 h-[46%] w-[46%] -translate-x-1/2 -translate-y-1/2 rounded-full"
             style={{
               background:
-                "radial-gradient(circle, #ff6a5f 0%, #d41514 38%, #5a0707 78%, #1a0202 100%)",
+                "var(--sphere-lens)",
               opacity: 0.25 + glow * 0.75,
-              boxShadow: `0 0 ${10 + glow * 22}px rgba(212,21,20,${0.3 + glow * 0.6})`,
+              boxShadow: `0 0 ${10 + glow * 22}px rgb(var(--laser-rgb) / ${0.3 + glow * 0.6})`,
               transition: "opacity var(--motion-slow) var(--ease), box-shadow var(--motion-slow) var(--ease)",
             }}
           />
-          <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ color: "#fff" }}>
+          <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" style={{ color: "var(--white)" }}>
             <StateGlyph state={state} size={20} />
           </span>
           <StateRing state={state} size={size} />
@@ -220,7 +233,7 @@ function Core({
             className="absolute -right-1 top-0 flex h-8 w-8 items-center justify-center rounded-full text-[length:var(--text-base)] font-bold"
             style={{
               background: "var(--coral)",
-              color: "#1a0602",
+              color: "var(--ink-on-coral)",
               animation: "halo 1.6s ease-in-out infinite",
               minWidth: 0,
               minHeight: 0,
@@ -268,7 +281,7 @@ function connectorStyle(state: AgentStateName): {
 function Connector({ view, x, y }: { view: AgentView; x: number; y: number }) {
   const style = connectorStyle(view.state);
   const live = view.state === "working" || view.state === "thinking";
-  const line = { x1: 50, y1: 50, x2: x, y2: y };
+  const line = { x1: 50, y1: CY, x2: x, y2: y };
   return (
     <g>
       <line
@@ -297,7 +310,7 @@ function Connector({ view, x, y }: { view: AgentView; x: number; y: number }) {
           key={`out-${view.outSeq}`}
           {...line}
           pathLength={100}
-          stroke="#ffffff"
+          stroke="var(--white)"
           strokeWidth={1}
           strokeLinecap="round"
           strokeDasharray="14 200"
@@ -310,7 +323,7 @@ function Connector({ view, x, y }: { view: AgentView; x: number; y: number }) {
           key={`back-${view.backSeq}`}
           {...line}
           pathLength={100}
-          stroke={view.state === "failed" || view.state === "declined" ? "var(--state-failed)" : "#ffffff"}
+          stroke={view.state === "failed" || view.state === "declined" ? "var(--state-failed)" : "var(--white)"}
           strokeWidth={1}
           strokeLinecap="round"
           strokeDasharray="14 200"
@@ -366,8 +379,8 @@ export function Constellation({
   return (
     <section
       aria-label="Agents"
-      className="relative hidden shrink-0 items-center justify-center gap-6 px-6 sm:flex"
-      style={{ height: "clamp(15rem, 36dvh, 21rem)" }}
+      className="relative hidden shrink-0 items-center justify-center gap-10 px-6 sm:flex"
+      style={{ height: "clamp(17rem, 42dvh, 25rem)" }}
     >
       {/* Left readout: what the Orchestrator is doing right now. */}
       <div className="hidden min-w-0 flex-1 justify-end lg:flex">
@@ -396,7 +409,11 @@ export function Constellation({
       >
         <div
           className="drift absolute inset-0"
-          style={{ animation: `orbit-drift ${DRIFT_SECONDS}s linear infinite`, animationPlayState: play }}
+          style={{
+            transformOrigin: `50% ${CY}%`,
+            animation: `orbit-swing ${DRIFT_SECONDS}s ease-in-out infinite alternate`,
+            animationPlayState: play,
+          }}
         >
           <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full overflow-visible" aria-hidden>
             {subs.map((view, i) => {
@@ -409,13 +426,15 @@ export function Constellation({
             return (
               <div
                 key={view.name}
-                className="absolute -translate-x-1/2 -translate-y-[calc(50%+0.75rem)]"
-                style={{ left: `${x}%`, top: `${y}%` }}
+                className="absolute -translate-x-1/2"
+                // The point is the node circle's centre (half of its 64px), so
+                // the connector ends under the circle, not under its label.
+                style={{ left: `${x}%`, top: `${y}%`, marginTop: "-32px" }}
               >
                 <div
                   className="drift"
                   style={{
-                    animation: `orbit-counter ${DRIFT_SECONDS}s linear infinite`,
+                    animation: `orbit-swing-back ${DRIFT_SECONDS}s ease-in-out infinite alternate`,
                     animationPlayState: play,
                   }}
                 >
@@ -533,7 +552,7 @@ export function AgentStrip({
                 aria-label={`Review the confirmation ${view.name} is waiting on`}
                 onClick={onReview}
                 className="absolute right-1 top-0 flex h-6 w-6 items-center justify-center rounded-full text-[length:var(--text-xs)] font-bold"
-                style={{ background: "var(--coral)", color: "#1a0602", minWidth: 0, minHeight: 0 }}
+                style={{ background: "var(--coral)", color: "var(--ink-on-coral)", minWidth: 0, minHeight: 0 }}
               >
                 !
               </button>

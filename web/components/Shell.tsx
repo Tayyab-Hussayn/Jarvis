@@ -72,9 +72,13 @@ function Clock() {
   const [now, setNow] = useState<Date | null>(null);
   // Set after mount: a server-rendered clock would mismatch on hydration.
   useEffect(() => {
-    setNow(new Date());
-    const timer = setInterval(() => setNow(new Date()), 15_000);
-    return () => clearInterval(timer);
+    const tick = () => setNow(new Date());
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 15_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
   }, []);
   if (!now) return null;
   return (
@@ -312,7 +316,7 @@ export function Dock({
               {badge !== undefined && badge > 0 && (
                 <span
                   className="absolute right-0.5 top-0.5 min-w-4 rounded-[var(--radius-full)] px-1 text-center text-[length:var(--text-xs)] font-semibold leading-4"
-                  style={{ background: "var(--laser)", color: "var(--accent-contrast)" }}
+                  style={{ background: "var(--laser)", color: "var(--gradient-accent-contrast)" }}
                 >
                   {badge}
                 </span>
@@ -352,7 +356,11 @@ export function Pane({
 }) {
   const sheetRef = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  // Kept current after each render, so the Esc listener (installed once) never
+  // calls a stale close.
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
 
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
