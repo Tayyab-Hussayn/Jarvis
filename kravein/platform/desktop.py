@@ -517,7 +517,12 @@ class NiriBackend(WindowBackend):
 
     def _workspace_rows(self) -> list[dict]:
         rows = self._json("workspaces")
-        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        # niri lists workspaces by internal id (creation order), so the real
+        # 26.04 output reads 2,3,1; sort by position so callers see 1,2,3.
+        focused_output = next((r.get("output") for r in rows if r.get("is_focused")), None)
+        return sorted(rows, key=lambda r: (
+            r.get("output") != focused_output, str(r.get("output")), r.get("idx") or 0))
 
     @staticmethod
     def _labels(rows: list[dict]) -> dict[Any, str]:

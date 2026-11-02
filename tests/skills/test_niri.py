@@ -126,6 +126,13 @@ def test_workspaces_are_labelled_by_idx_or_name(niri):
     assert backend.list_windows()[1].workspace == "web"
 
 
+def test_workspaces_listed_by_position_not_by_niri_id_order(niri):
+    # Real 26.04 output on the laptop listed ids 3,4,1 (idx 2,3,1).
+    backend, fake = niri
+    fake.workspaces.reverse()
+    assert backend.list_workspaces() == ["1", "2"]
+
+
 def test_second_output_workspaces_cannot_collide_with_bare_numbers(niri):
     backend, fake = niri
     fake.workspaces.append({**fake.workspaces[0], "id": 9, "output": "HDMI-A-1",
