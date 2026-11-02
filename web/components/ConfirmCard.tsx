@@ -11,13 +11,16 @@
  *   not reboot the machine.
  * - The countdown is shown because the server denies on timeout. A card that
  *   silently stopped working would be worse than one that says so.
- * - Deny is the low-friction option; approve is the one you have to mean.
+ * - Decline is the low-friction option; approve is the one you have to mean.
+ * - "Always allow" only exists when the server offers it, and it names the
+ *   exact signature it would store. It is never shown for CRITICAL, whatever
+ *   a frame says: a rule must not be one click away from a reboot.
  */
 
 import { useEffect, useState } from "react";
 
-import { outcomeLabel } from "@/lib/confirm";
-import type { ConfirmView } from "@/lib/protocol";
+import { alwaysOffer, outcomeLabel } from "@/lib/confirm";
+import type { ConfirmView, Decision } from "@/lib/protocol";
 import { Button, DangerBadge, dangerColour } from "./ui";
 
 function useCountdown(expiresAt: number, active: boolean): number {
@@ -39,7 +42,7 @@ export function ConfirmCard({
   onRespond,
 }: {
   confirm: ConfirmView;
-  onRespond: (confirmId: string, approve: boolean) => void;
+  onRespond: (confirmId: string, decision: Decision) => void;
 }) {
   const [armed, setArmed] = useState(false);
   const pending = confirm.status === "pending";
@@ -52,8 +55,9 @@ export function ConfirmCard({
       setArmed(true);
       return;
     }
-    onRespond(confirm.confirmId, true);
+    onRespond(confirm.confirmId, "approve");
   };
+  const offer = needsDoubleClick ? null : alwaysOffer(confirm.always);
 
   return (
     <div
@@ -97,16 +101,28 @@ export function ConfirmCard({
       </div>
 
       {pending ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {/* Deny is focused first: Enter or Space on a card nobody has read
+        // Stacked on a phone so each target is full width; a row from `sm` up.
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center max-sm:[&>button]:w-full">
+          {/* Decline is focused first: Enter or Space on a card nobody has read
               must land on the safe answer. Approve is the primary style, so
               it is the obvious thing to reach for deliberately. */}
-          <Button autoFocus onClick={() => onRespond(confirm.confirmId, false)}>
-            Deny
+          <Button autoFocus onClick={() => onRespond(confirm.confirmId, "deny")}>
+            Decline
           </Button>
           <Button variant={armed ? "danger" : "primary"} onClick={approve}>
             {needsDoubleClick && !armed ? "Approve…" : "Approve"}
           </Button>
+          {offer && (
+            <Button
+              title={`Approve now and stop asking for: ${offer.signature}`}
+              onClick={() => onRespond(confirm.confirmId, "always")}
+            >
+              Always allow:{" "}
+              <code className="break-all font-[family-name:var(--font-mono)] text-[length:var(--text-xs)]">
+                {offer.signature}
+              </code>
+            </Button>
+          )}
           <span
             className="text-[length:var(--text-xs)]"
             style={{ color: armed ? "var(--critical)" : "var(--text-faint)" }}

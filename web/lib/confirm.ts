@@ -1,6 +1,32 @@
-import type { ConfirmView } from "./protocol";
+import type { AlwaysOffer, ConfirmView, Decision } from "./protocol";
 
 export type ConfirmOutcome = "approved" | "denied" | "expired";
+
+/** The reply frame for an answer. `approve` stays for servers older than #199. */
+export function replyFrame(confirmId: string, decision: Decision) {
+  return {
+    t: "confirm_reply" as const,
+    confirm_id: confirmId,
+    decision,
+    approve: decision !== "deny",
+  };
+}
+
+/** The status a card shows once answered locally. */
+export function localStatus(decision: Decision): "approved" | "denied" {
+  return decision === "deny" ? "denied" : "approved";
+}
+
+/**
+ * The offer to show, or null. Anything but a well-formed `allowed: true` with a
+ * signature means two buttons: a card must never advertise a rule it cannot
+ * name, since the signature is what the owner is agreeing to.
+ */
+export function alwaysOffer(offer: AlwaysOffer | undefined): AlwaysOffer | null {
+  if (!offer || offer.allowed !== true) return null;
+  const signature = typeof offer.signature === "string" ? offer.signature.trim() : "";
+  return signature ? { allowed: true, signature } : null;
+}
 
 /**
  * Close a card the server says was resolved, whoever answered. Only a pending
@@ -12,9 +38,15 @@ export function settleConfirm(
   confirmId: string,
   outcome: ConfirmOutcome,
   by: string,
+  decision?: string,
 ): ConfirmView {
   if (confirm.confirmId !== confirmId || confirm.status !== "pending") return confirm;
-  return { ...confirm, status: outcome, by };
+  return {
+    ...confirm,
+    status: outcome,
+    by,
+    ...(decision === "always" ? { decision: "always" as const } : {}),
+  };
 }
 
 /** The line a closed card shows: "Approved on phone", "Declined", "Timed out". */
@@ -22,7 +54,9 @@ export function outcomeLabel(confirm: ConfirmView): string {
   const where = confirm.by === "phone" ? " on phone" : "";
   switch (confirm.status) {
     case "approved":
-      return `Approved${where}`;
+      return confirm.decision === "always"
+        ? `Approved — always allowed: ${confirm.always?.signature ?? "this command"}`
+        : `Approved${where}`;
     case "denied":
       return confirm.by === "phone" ? "Declined on phone" : "Declined";
     case "expired":

@@ -21,7 +21,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import type { ConfirmView, SystemSnapshot } from "@/lib/protocol";
+import type { ConfirmView, Decision, SystemSnapshot } from "@/lib/protocol";
 import type { Connection } from "@/lib/useKravein";
 import {
   MODULES,
@@ -441,7 +441,7 @@ export function ConfirmOverlay({
   onDismiss,
 }: {
   confirms: ConfirmView[];
-  onRespond: (confirmId: string, approve: boolean) => void;
+  onRespond: (confirmId: string, decision: Decision) => void;
   onDismiss: (confirmId: string) => void;
 }) {
   if (confirms.length === 0) return null;

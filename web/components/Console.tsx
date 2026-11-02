@@ -20,7 +20,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { Message, VoicePhase } from "@/lib/protocol";
+import type { Decision, Message, VoicePhase } from "@/lib/protocol";
 import type { Connection } from "@/lib/useKravein";
 import { isVoiceLive } from "@/lib/protocol";
 import { captureAsk } from "@/lib/session";
@@ -120,7 +120,7 @@ export function Console({
   connection: Connection;
   skills?: number;
   onAsk: (text: string) => void;
-  onRespond: (confirmId: string, approve: boolean) => void;
+  onRespond: (confirmId: string, decision: Decision) => void;
   onReset: () => void;
   onCancel: () => void;
   cancelling: boolean;
