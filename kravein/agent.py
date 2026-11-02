@@ -845,6 +845,6 @@ def make_voice_agent(*, observer: Observer | None, thread_id: str | None) -> Age
     try:
         return Agent(source="voice-live", observer=observer, thread_id=thread_id,
                      profile=ORCHESTRATOR)
-    except ProfileError as exc:
+    except Exception as exc:                  # voice must still start, as before
         audit.record("agent.orchestrator_unavailable", error=str(exc), at="voice")
         return None

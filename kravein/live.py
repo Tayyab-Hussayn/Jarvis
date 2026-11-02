@@ -421,6 +421,7 @@ class LiveSession:
         # the announcement of one (then only `task_status` may be called: the
         # report is a sub-agent's output, i.e. untrusted).
         self._pending_reports: list[str] = []
+        self._report_notes: list[str] = []     # the reports this turn is announcing
         self._report_turn = False
 
     # -- helpers ---------------------------------------------------------
@@ -469,7 +470,8 @@ class LiveSession:
         self._agent_event("agent_state", phase="turn_end", agent=_orch_name(self._agent),
                           outcome=outcome, summary=summary)
 
-    def _record_turn(self, heard: str, said: str, actions: list[str]) -> None:
+    def _record_turn(self, heard: str, said: str, actions: list[str],
+                     notes: list[str] | None = None) -> None:
         """Append this spoken turn to the Orchestrator's persistent thread.
 
         Text only (what was heard, what was said, one `[voice actions: …]` line):
@@ -477,13 +479,15 @@ class LiveSession:
         text agent reloads the thread when it next runs (`Agent._refresh`).
         """
         a = self._agent
-        if a is None or not a.thread_id or not (heard or said or actions):
+        if a is None or not a.thread_id or not (heard or said or actions or notes):
             return
         reply = said
         if actions:
             line = "[voice actions: " + "; ".join(actions[:8]) + "]"
             reply = f"{said}\n{line}" if said else line
-        user = heard or self._typed or "[voice turn]"
+        # A report turn: the marked note(s) are what the "user" side said, so the
+        # thread keeps one user message followed by one assistant message.
+        user = "\n\n".join(notes) if notes else (heard or self._typed or "[voice turn]")
         try:
             _history.append(a._history_key, a.thread_id, [
                 {"role": "user", "content": user},
@@ -689,6 +693,7 @@ class LiveSession:
         self._typed = ""
         self._escalated = False
         self._report_turn = False
+        self._report_notes = []
 
     def _end_turn(self) -> bool:
         """Flush the transcripts, and say so when the model gave nothing back.
@@ -697,6 +702,15 @@ class LiveSession:
         (the model emitted only `<ctrl46>`) used to leave a broken reply bubble
         and silence. The user is told to repeat, and it is audited.
         """
+        if (
+            self._report_turn and not self._said and not self._heard
+            and self._audio_bytes == 0 and not self._tool_called
+        ):
+            # Every turn ends with two signals (generation_complete, then
+            # turn_complete). The second of the PREVIOUS turn can land after a
+            # report was sent; treating it as this turn's end would drop the
+            # task_status-only restriction before the model has read the report.
+            return False
         raw_said = "".join(self._said)
         raw_heard = "".join(self._heard)
         heard = clean_transcript(raw_heard)
@@ -709,6 +723,7 @@ class LiveSession:
         defer = bool(raw_heard.strip()) and self._can_translate()
         said_text = clean_transcript(raw_said)
         actions = list(self._actions)
+        notes = list(self._report_notes)
         if self._agent is not None and (engaged or actions or self._typed):
             self._close_state(
                 "failed" if empty else "done", said_text or EMPTY_REPLY_TEXT if empty else said_text)
@@ -721,8 +736,8 @@ class LiveSession:
             task.add_done_callback(self._finals.discard)
         else:
             self._flush_heard()
-            if self._agent is not None and (engaged or actions or self._typed):
-                self._record_turn(heard, said_text, actions)
+            if self._agent is not None and (engaged or actions or self._typed or notes):
+                self._record_turn(heard, said_text, actions, notes)
         self._flush_said()
         self._reset_turn()
         if self._pending_reports:
@@ -956,18 +971,32 @@ class LiveSession:
             and self._loop is not None and not self._stop.is_set()
         )
 
-    def announce(self, texts: list[str]) -> None:
+    def announce(self, texts: list[str]) -> bool:
         """Queue finished-task reports (marked notes) to be spoken. Any thread.
 
         They are read to the model as typed text the moment it is idle, or at the
         end of the turn in progress, and it tells the owner the result aloud.
+        Returns False when this session can no longer speak them; the caller then
+        keeps them (a note in the thread), because it has already claimed them.
         """
         loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        self._pending_reports.extend(texts)
-        with contextlib.suppress(RuntimeError):
-            loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._flush_reports()))
+        if not self.accepts_reports() or loop is None or loop.is_closed():
+            return False
+
+        def add() -> None:
+            # On the loop thread, so it is ordered against the shutdown drain: a
+            # report that arrives after the session ended is written as a note.
+            if self._session is None:
+                self._note_reports(texts)
+                return
+            self._pending_reports.extend(texts)
+            asyncio.ensure_future(self._flush_reports())
+
+        try:
+            loop.call_soon_threadsafe(add)
+        except RuntimeError:
+            return False
+        return True
 
     def _note_reports(self, texts: list[str]) -> None:
         """Put reports in the Orchestrator's thread as the marked notes they are."""
@@ -995,14 +1024,14 @@ class LiveSession:
         # refuses it too; the owner speaking (barge-in) or the turn ending
         # restores the normal set.
         self._report_turn = True
+        self._report_notes = list(texts)     # recorded with the turn once it ends
         self._open_state(message)
-        self._note_reports(texts)            # text turns know it was announced
-        self._typed = "[voice: a task report was announced]"
         audit.record("voice.live_report_announced", reports=len(texts))
         try:
             await session.send_realtime_input(text=message)
         except Exception as exc:
             self._report_turn = False
+            self._report_notes = []
             self._close_state("failed", "Could not announce a task report.")
             self._pending_reports = texts + self._pending_reports
             audit.record("voice.live_tool_send_failed", error=str(exc)[:300])
@@ -1058,7 +1087,8 @@ class LiveSession:
                         if self._agent is not None:
                             self._record_turn(
                                 clean_transcript("".join(self._heard)),
-                                clean_transcript("".join(self._said)), list(self._actions))
+                                clean_transcript("".join(self._said)), list(self._actions),
+                                list(self._report_notes))
                             self._close_state("failed", "Interrupted.")
                         self._flush_heard()
                         self._flush_said()
@@ -1159,6 +1189,7 @@ class LiveSession:
                     task.cancel()
                 await asyncio.gather(*everything, return_exceptions=True)
                 self._close_state("failed", "The voice session ended.")
+                self._session = None
                 # Reports claimed but never spoken still belong in the thread.
                 pending, self._pending_reports = self._pending_reports, []
                 self._note_reports(pending)
@@ -1166,13 +1197,13 @@ class LiveSession:
                     # A turn cut off by Stop is still part of the conversation.
                     self._record_turn(clean_transcript("".join(self._heard)),
                                       clean_transcript("".join(self._said)),
-                                      list(self._actions))
+                                      list(self._actions), list(self._report_notes))
                 for task in list(self._finals):
                     task.cancel()
                 await asyncio.gather(*self._finals, return_exceptions=True)
                 self._flush_heard()
                 self._flush_said()
-                self._session = None
+                await asyncio.sleep(0)       # let a late announce() note its report
 
     def run(self) -> int:
         """Run the session until stopped. Returns the number of tool calls.

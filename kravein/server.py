@@ -1309,8 +1309,8 @@ def _pickup_reports(held: Any) -> None:
         live = (getattr(held, "voice_box", None) or {}).get("session")
         if live is not None and getattr(live, "accepts_reports", lambda: False)():
             rows = tasks.manager.claim_reports(held.principal)
-            if rows:
-                live.announce([tasks.manager.note_text(r) for r in rows])
+            if rows and not live.announce([tasks.manager.note_text(r) for r in rows]):
+                tasks.manager.note_rows(rows)      # claimed, so it must land somewhere
             return
         if held.busy.is_set():
             return
