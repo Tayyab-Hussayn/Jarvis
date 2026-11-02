@@ -110,6 +110,8 @@ export function Console({
   onSelectVoice,
   onRestartVoice,
   onDismissVoiceError,
+  taskSlot,
+  noticeSlot,
   audioChoice,
   onAudioChoice,
   deviceAudioReason,
@@ -135,6 +137,9 @@ export function Console({
   onSelectVoice: () => void;
   onRestartVoice: (mode: "local" | "live") => void;
   onDismissVoiceError: () => void;
+  /** Background task chips (above the composer) and the post-Stop notice (above the composer). */
+  taskSlot?: React.ReactNode;
+  noticeSlot?: React.ReactNode;
   audioChoice: AudioChoice;
   onAudioChoice: (choice: AudioChoice) => void;
   /** Why "this device" cannot be used right now; empty when it can. */
@@ -293,6 +298,15 @@ export function Console({
         className="mx-auto w-full px-2 pb-2 pt-3 sm:px-6 lg:fixed lg:bottom-[4.9rem] lg:left-1/2 lg:z-[var(--z-hud)] lg:-translate-x-1/2 lg:px-0 lg:pb-0 lg:pt-0"
         style={{ maxWidth: "var(--stream-max)" }}
       >
+        {noticeSlot}
+        {/* Background tasks live with the composer, not in the scrolling
+            transcript: Cancel must stay reachable whatever the stream shows
+            (the hero, a long answer), and the list scrolls itself when long. */}
+        {taskSlot && (
+          <div className="mb-3 max-h-[28dvh] overflow-y-auto" data-task-dock>
+            {taskSlot}
+          </div>
+        )}
         {/* The session control strip. Present for as long as the microphone is
             open, so Stop is never more than one click away — the hero that
             used to carry it is gone once the first turn lands. */}

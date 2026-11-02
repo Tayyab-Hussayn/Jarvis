@@ -32,7 +32,10 @@ export type ServerFrame =
   | { t: "confirm_resolved"; id: string; confirm_id: string; outcome: "approved" | "denied" | "expired"; by: string }
   | { t: "answer"; id: string; text: string }
   | { t: "turn_end"; id: string; iterations: number; tool_calls?: string[]; error?: string; cancelled?: boolean }
-  | { t: "cancelled"; id?: string; pending_confirms?: number }
+  | { t: "cancelled"; id?: string; pending_confirms?: number; tasks_cancelled?: number; other_tasks?: string[] }
+  // A background sub-agent task was created, stepped or ended (engine #159).
+  // Parsed defensively by `lib/tasks.ts`.
+  | { t: "task"; id: string; agent: string; task: string; status: string; step?: number; tool?: string; created?: number; elapsed?: number; outcome?: string; summary?: string }
   // Pushed by the scheduled-jobs tick, which runs in its own process. Arrives
   // unsolicited, with no turn behind it.
   | { t: "job_event"; id: string; title: string; text: string; failed: boolean }
