@@ -19,6 +19,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ActivityView } from "@/components/ActivityView";
 import { AgentPane } from "@/components/AgentPane";
+import { TaskList, TaskTray } from "@/components/TaskChips";
+import { overlayAgents, tasksAll, tasksFor, type Task } from "@/lib/tasks";
 import { AppsView } from "@/components/AppsView";
 import { AutoBanner } from "@/components/AutoBanner";
 import { BrainView } from "@/components/BrainView";
@@ -93,6 +95,12 @@ export default function Page() {
     dispatchAgents,
     proposals,
     mergeProposals,
+    tasks,
+    loadTasks,
+    cancelTask,
+    cancellingTasks,
+    dismissTaskNotice,
+    markTaskSeen,
     ask,
     run,
     cancel,
@@ -173,6 +181,29 @@ export default function Page() {
   useEffect(() => {
     if (hello) loadProposals();
   }, [hello, loadProposals]);
+
+  // Background tasks: re-read on every hello, so a resume starts from the
+  // server's truth; live `task` frames then keep it current.
+  useEffect(() => {
+    if (hello) loadTasks();
+  }, [hello, loadTasks]);
+  // Background work shown on the agents (a sub-agent "working" while the
+  // Orchestrator is idle, pulses per task start/end).
+  const shown = useMemo(() => overlayAgents(agents, tasks), [agents, tasks]);
+  const cancelAllTasks = useCallback(
+    (ids: string[]) => ids.forEach((id) => void cancelTask(id)),
+    [cancelTask],
+  );
+  const taskListFor = (list: Task[]) =>
+    list.length ? (
+      <TaskList
+        tasks={tasks}
+        list={list}
+        cancelling={cancellingTasks}
+        onCancel={cancelTask}
+        onSeen={markTaskSeen}
+      />
+    ) : undefined;
 
   // There are two independent voice pipelines and either one is enough. The
   // on-device path needs both halves (hearing and answering) while Live needs
@@ -268,7 +299,16 @@ export default function Page() {
       return {
         title: route.name === ORCHESTRATOR ? "Orchestrator" : route.name,
         eyebrow: "Agent",
-        body: <AgentPane name={route.name} model={agents} onReview={focusConfirmation} />,
+        body: (
+          <AgentPane
+            name={route.name}
+            model={shown}
+            onReview={focusConfirmation}
+            taskList={taskListFor(
+              route.name === ORCHESTRATOR ? tasksAll(tasks) : tasksFor(tasks, route.name),
+            )}
+          />
+        ),
       };
     }
     if (route.kind !== "module") return null;
@@ -326,7 +366,7 @@ export default function Page() {
         )}
 
         <AgentStrip
-          model={agents}
+          model={shown}
           voiceThinking={voicePhase === "thinking"}
           onOpenAgent={openAgent}
           onReview={focusConfirmation}
@@ -337,7 +377,7 @@ export default function Page() {
         <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(0,1fr)]">
         <div className="hidden shrink-0 sm:block max-lg:h-[clamp(20rem,44dvh,28rem)] lg:min-h-0 lg:h-auto">
           <Constellation
-            model={agents}
+            model={shown}
             voiceThinking={voicePhase === "thinking"}
             onOpenAgent={openAgent}
             onReview={focusConfirmation}
@@ -374,6 +414,17 @@ export default function Page() {
             onSelectVoice={selectVoice}
             onRestartVoice={restartVoice}
             onDismissVoiceError={dismissVoiceError}
+            taskTray={(hero) => (
+              <TaskTray
+                tasks={tasks}
+                hero={hero}
+                cancelling={cancellingTasks}
+                onCancel={cancelTask}
+                onCancelAll={cancelAllTasks}
+                onKeep={dismissTaskNotice}
+                onSeen={markTaskSeen}
+              />
+            )}
           />
         </div>
         </div>

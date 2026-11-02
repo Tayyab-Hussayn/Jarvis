@@ -431,6 +431,13 @@ export function reduce(model: AgentsModel, event: AgentEvent, now: number): Agen
     case "cancelled":
       return model;
 
+    case "task": {
+      // A background task for an agent we have not met yet (a profile added
+      // since /api/agents was read) still needs a node to show up on.
+      const who = typeof e.agent === "string" ? e.agent : "";
+      return who ? ensure(model, who) : model;
+    }
+
     case "settle": {
       let next = model;
       for (const name of model.order) {
