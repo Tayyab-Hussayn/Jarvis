@@ -34,6 +34,7 @@ git ls-files -z --exclude-standard \
 
 rsync -a --delete --mkpath \
   --filter='P /.venv/' --filter='P /web/node_modules/' --filter='P /web/.next/' \
-  --filter='P /kravein/web-dist/' --filter='P __pycache__/' --filter='P .pytest_cache/' \
+  --filter='P /kravein/web-dist/' --filter='P /.pip-cache/' --filter='P /.npm-cache/' \
+  --filter='P /.install.log' --filter='P /.build.log'--filter='P __pycache__/' --filter='P .pytest_cache/' \
   "$STAGE/" "$HOST:$DEST/"
 echo "synced $(git rev-parse --short HEAD) -> $HOST:$DEST"
