@@ -123,6 +123,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "delegate_max_rounds": 6,
         "delegate_timeout_seconds": 300,
         "report_max_chars": 1500,
+        # Proposals queue (phase 4). Pending/approved ones expire after this.
+        "proposal_ttl_days": 7,
+        "proposal_max_pending": 20,
+        # The Orchestrator reviews state once a day and proposes next steps.
+        "daily_review": False,
+        "daily_review_time": "09:00",
     },
     "llm": {
         # cline | gemini | openrouter.

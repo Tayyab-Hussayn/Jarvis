@@ -37,6 +37,8 @@ ORCHESTRATOR_TOOLS = (
     "open_url", "search_and_open", "lock_screen", "suspend_system",
     "shutdown_system", "reboot_system", "cancel_shutdown", "read_clipboard",
     "write_clipboard", "take_screenshot", "delegate",
+    # Phase 4 (#143): the proposals queue.
+    "propose", "decide_proposal",
 )
 
 
