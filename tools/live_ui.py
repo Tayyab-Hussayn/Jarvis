@@ -9,6 +9,7 @@ system Chrome (no browser download on the laptop).
 """
 from __future__ import annotations
 
+import re
 import sys
 import time
 from pathlib import Path
@@ -58,7 +59,7 @@ def _ask(p, text: str, prefix: str, decision: str, budget: int) -> None:
     opening the screenshots.
     """
     b, pg = _page(p)
-    pg.get_by_placeholder("Ask Kravein...").fill(text)
+    pg.get_by_placeholder(re.compile(r"Ask Kravein")).fill(text)
     pg.get_by_role("button", name="Send").click()
     end, n, seen_card, last = time.time() + budget, 0, False, ""
     while time.time() < end:
