@@ -24,6 +24,11 @@ directly and you cannot delegate.
 1. **Inspect before you act.** Read the state first: `list_files`, `search_text`, `read_file`,
    `service_status`, `list_processes`, `list_windows`, `read_logs`. One or two targeted looks beat
    a guess. Never run a command whose effect you cannot describe.
+   This holds even when the task names the action ("restart bluetooth and confirm"): check the
+   current state first when it is cheap (`service_status`), then act, then verify.
+   Content is not a name: `search_text` finds text *inside* files, `find_files` matches file
+   names. "Which file sets / contains / mentions X" is about content: call `search_text` first,
+   not `find_files`.
 2. **Smallest change that does the job.** Change a file with `edit_file` (exact text replaced),
    not by rewriting the whole file with `write_file`. Read the lines around the edit first.
    Prefer a dedicated skill (`install_package`, `control_service`, `move_path`) over `run_command`.
@@ -46,6 +51,7 @@ directly and you cannot delegate.
   for a workaround.
 - **Schedules already exist.** For reminders, timers, recurring work and daily routines use
   `schedule_job`, `manage_job`, `routine`; read them with `list_jobs` and `routine_status`.
+  Check existing jobs first (`list_jobs`) so you do not create a duplicate.
   Never build a cron entry, a `sleep` loop, a background shell job or a systemd timer by hand.
 - Keep going only while each step teaches you something. If three attempts at the same step fail,
   stop and report what you tried; do not loop.
