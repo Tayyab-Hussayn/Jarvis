@@ -25,6 +25,8 @@ from .. import config
 ORCHESTRATOR = "orchestrator"
 TASK_MAX = 200
 SUMMARY_MAX = 200
+PLAN_MAX = 20
+PLAN_STATUSES = ("pending", "in_progress", "completed")
 
 # A delegation outcome -> the state the agent ends in. The report keeps the
 # real outcome, so "partial" and "needs-approval" are not lost.
@@ -66,6 +68,8 @@ class StateTracker:
                 # A sub-agent's turn ends inside a delegation; `delegate_end`
                 # carries the outcome the owner cares about.
                 self._finish(agent, str(data.get("outcome") or "done"), data.get("summary"), "")
+            elif phase == "plan":
+                self._set_plan(agent, data.get("plan"), delegation)
             elif phase == "delegate_end":
                 self._finish(agent, str(data.get("outcome") or "failed"),
                              data.get("summary"), delegation)
@@ -111,7 +115,8 @@ class StateTracker:
     # -- internals --------------------------------------------------------
 
     def _apply(self, name: str, state: str, *, tool: str = "", task: str | None = None,
-               delegation: str = "", report: dict | None = None, keep: bool = False) -> dict[str, Any]:
+               delegation: str = "", report: dict | None = None, keep: bool = False,
+               plan: list[dict[str, str]] | None = None) -> dict[str, Any]:
         """Update under the lock; returns the frame fields."""
         prev = self._states.get(name, {})
         new: dict[str, Any] = {"agent": name, "state": state, "since": time.time()}
@@ -129,6 +134,11 @@ class StateTracker:
             new["task"] = task
         if delegation and state != "idle":
             new["delegation"] = delegation
+        # The plan of a running task rides along with every active frame and is
+        # dropped when the agent finishes (the report keeps the final one).
+        plan = prev.get("plan") if plan is None else plan
+        if plan and state in ("thinking", "working", "waiting"):
+            new["plan"] = plan
         if report is not None:
             new["report"] = report
         elif prev.get("report") and state == "idle":
@@ -143,6 +153,24 @@ class StateTracker:
             if prev and prev["state"] == state and prev.get("tool", "") == tool and task is None:
                 return                                  # no change, no frame
             frame = self._apply(name, state, tool=tool, task=task, delegation=delegation)
+        self._send([frame])
+
+    def _set_plan(self, name: str, raw: Any, delegation: str) -> None:
+        """The agent's todo plan changed (`update_plan`). Shape on the wire:
+        ``plan: [{"content": str, "status": "pending|in_progress|completed"}]``,
+        at most PLAN_MAX items, each content cut to ``TASK_MAX``; an empty list
+        clears it."""
+        items = []
+        for it in (raw if isinstance(raw, list) else [])[:PLAN_MAX]:
+            if isinstance(it, dict) and it.get("status") in PLAN_STATUSES:
+                items.append({"content": clip(it.get("content")), "status": it["status"]})
+        with self._lock:
+            prev = self._states.get(name, {})
+            state = prev.get("state") if prev.get("state") in ("thinking", "working", "waiting") else "thinking"
+            frame = self._apply(name, state, delegation=delegation, keep=True, plan=items)
+            if not items:
+                frame.pop("plan", None)
+                self._states[name].pop("plan", None)
         self._send([frame])
 
     def _finish(self, name: str, outcome: str, summary: Any, delegation: str) -> None:
