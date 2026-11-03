@@ -72,6 +72,10 @@ class Verdict:
     # "Always allow" signature (#199). Set only by classify_command, only for a
     # command in an owner-approved family; "" means Always is never offered.
     signature: str = ""
+    # Set when the action would put a secret file's content into the model's
+    # context (#211). enforce() never lets auto-approve or an Always rule answer
+    # such a card: only a live owner click may.
+    secret_read: bool = False
 
     @property
     def needs_confirmation(self) -> bool:
@@ -358,6 +362,7 @@ def check_read(raw: str | os.PathLike) -> Verdict:
         return Verdict(
             danger=Danger.DESTRUCTIVE,
             reasons=[f"reads {target}: {why}; its content will be sent to the model"],
+            secret_read=True,
         )
     return Verdict(danger=Danger.SAFE)
 
@@ -637,6 +642,8 @@ def classify_command(
             return verdict
 
     # Never "Always" for anything that touches a startup surface or creates a unit.
+    if secret_reason:
+        verdict.secret_read = True
     if verdict.danger == Danger.DESTRUCTIVE and not startup_reason and not secret_reason:
         verdict.signature = command_signature(text, where)
     return verdict
@@ -2170,6 +2177,7 @@ def enforce(
     principal = _current_principal()
     rule_ok = bool(
         verdict.signature
+        and not verdict.secret_read
         and verdict.danger == Danger.DESTRUCTIVE
         and principal
         and source in AUTO_SOURCES
@@ -2193,6 +2201,7 @@ def enforce(
     # its source says, and unattended must keep refusing.
     if (
         policy["mode"] == "auto"
+        and not verdict.secret_read
         and verdict.danger == Danger.DESTRUCTIVE
         and source in AUTO_SOURCES
         and confirmer is not _deny
