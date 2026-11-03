@@ -98,3 +98,23 @@ Catalogue prices for the paid models, from Cline's own bundle
 Our requests carry ~10k prompt tokens because of the tool schema, so input
 price dominates. Editing the local catalogue does **not** change what you are
 charged — pricing is computed server-side and returned in the response.
+
+## eval_tasks.py
+
+Outcome-based eval: runs the `system-ops` sub-agent end to end (via
+`delegate.run_child`, the Orchestrator's path) on scenarios in
+`tools/eval/tasks/*.json` and checks the END STATE, not the first tool choice.
+
+```bash
+.venv/bin/python tools/eval_tasks.py --list
+.venv/bin/python tools/eval_tasks.py --label before-upgrade [--only a,b]
+```
+
+Each scenario gets a fresh temp HOME that is the fixture tree (XDG dirs, state
+and workspace inside it, environment rebuilt without display/dbus). The
+confirmer denies everything, or (`"policy": "inside"`) approves only cards whose
+named paths are all inside the sandbox. Checks: file contains/absent/unchanged/
+mode, reply regex, card requested, tool called, read-before-change, no tool
+path outside the fixture, no leak of fixture secrets or provider keys. Output:
+a table plus `tools/eval/results/<date>-<label>.json`. A provider outage is
+NOT RUN, not a failure. See the module docstring for the isolation rules.
