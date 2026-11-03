@@ -404,8 +404,14 @@ def test_shell_may_still_list_and_read_the_settings_directory():
     assert not safety.classify_command(f"cd {d} && ls").blocked
 
 
-def test_shell_glob_and_dir_spellings_with_home_and_env(monkeypatch):
+def test_shell_glob_and_dir_spellings_with_home_and_env(monkeypatch, tmp_path):
+    # A temporary HOME: the real one may hold the owner's settings.json, and
+    # since #211 reading Kravein's own config is refused (the old assertion here
+    # that `cat` may read it only held because the files did not exist).
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(config, "CONFIG_DIR", Path.home() / ".config" / "kravein")
+    (config.CONFIG_DIR).mkdir(parents=True)
+    (config.CONFIG_DIR / "settings.json").write_text("{}")
     for cmd in (
         "sed -i s/true/false/ ~/.config/kravein/*.json",
         "sed -i s/true/false/ ~/.config/kravein/settings.js*",
@@ -414,5 +420,5 @@ def test_shell_glob_and_dir_spellings_with_home_and_env(monkeypatch):
         "cp -r /tmp/evil/. $HOME/.config/kravein",
     ):
         assert safety.classify_command(cmd).blocked, cmd
-    assert not safety.classify_command("cat ~/.config/kravein/*.json").blocked
+    assert safety.classify_command("cat ~/.config/kravein/*.json").blocked   # reads: #211
     assert not safety.classify_command("ls ~/.config/kravein/").blocked
