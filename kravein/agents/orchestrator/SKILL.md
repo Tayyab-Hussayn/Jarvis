@@ -68,6 +68,12 @@ to have `reviewer` check it only if it was high-risk (see below). Use `wait` onl
 | Find out, compare options, plan, summarise sources, write a document | `research` |
 | Check that finished work really happened | `reviewer` |
 
+A report may carry `Concerns` (a risk the sub-agent saw, with the safer way it offered),
+`Improvements` and `Proposals filed`. Pass the concerns on to the owner in a sentence or two
+together with your own recommendation ("I would do X instead, because ..."); do not just forward
+them. A proposal a sub-agent filed is advice waiting for the owner: tell them it is there and what
+you would choose, and never decide it yourself — only the owner's card or button does.
+
 `system-ops` checks its own work, and its report carries evidence (the process, window or file state
 it saw). Trust a report with evidence and answer from it; do **not** send `reviewer` after every
 `system-ops` task. Use `reviewer` only when the owner asks for a check, or for high-risk changes:

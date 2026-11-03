@@ -59,6 +59,10 @@ PLAN:
 - [completed|in_progress|pending] each plan item (only if you kept a plan)
 LEFT:
 - what still has to be done (omit if nothing)
+CONCERNS:
+- a risk you saw or a request you pushed back on, with the safer way you offered (omit if none)
+IMPROVEMENTS:
+- a better approach or a missing capability worth the owner's attention (omit if none)
 
 Say "done" only if a tool result proves it. Do not paste raw tool output. \
 If your budget runs out you will be asked for this report with OUTCOME: partial.\
@@ -96,10 +100,16 @@ class Report:
     # what is not finished; both appear in a partial report.
     plan: list[dict[str, str]] = field(default_factory=list)
     left: list[str] = field(default_factory=list)
+    # Judgment (#220): risks the agent saw, better ways it would suggest, and
+    # the proposals it filed (taken from code, like the plan).
+    concerns: list[str] = field(default_factory=list)
+    improvements: list[str] = field(default_factory=list)
+    proposals: list[dict[str, str]] = field(default_factory=list)
 
 
 _HEAD = re.compile(
-    r"^\s*(OUTCOME|SUMMARY|CHANGED|EVIDENCE|QUESTIONS|PLAN|LEFT)\s*:\s*(.*)$", re.I)
+    r"^\s*(OUTCOME|SUMMARY|CHANGED|EVIDENCE|QUESTIONS|PLAN|LEFT|CONCERNS|IMPROVEMENTS)"
+    r"\s*:\s*(.*)$", re.I)
 
 
 def parse_report(text: str) -> Report | None:
@@ -135,6 +145,8 @@ def parse_report(text: str) -> Report | None:
         evidence=items("evidence"),
         questions=items("questions"),
         left=items("left"),
+        concerns=items("concerns"),
+        improvements=items("improvements"),
     )
 
 
@@ -148,8 +160,14 @@ def render(report: Report, *, agent: str, delegation: str, tools: list[str], lim
         from . import plan as _plan
 
         parts.append(_plan.render(report.plan))
-    for label, rows in (("Left to do", report.left), ("Changed", report.changed),
-                        ("Evidence", report.evidence), ("Open questions", report.questions)):
+    filed = [f"#{p['id']}: {p['title']}" for p in report.proposals]
+    # Concerns and ideas go before Changed/Evidence: the length cap cuts from
+    # the end, and these are what the Orchestrator must pass on to the owner.
+    for label, rows in (("Concerns", report.concerns), ("Left to do", report.left),
+                        ("Improvements", report.improvements),
+                        ("Proposals filed (waiting for the owner)", filed),
+                        ("Changed", report.changed), ("Evidence", report.evidence),
+                        ("Open questions", report.questions)):
         if rows:
             parts.append(f"{label}:\n" + "\n".join(f"- {r}" for r in rows))
     if tools:
@@ -316,6 +334,9 @@ def run_child(name: str, task: str, context: str, parent: Parent, did: str,
         # The plan in the report is the one code holds. What is left is the
         # model's list if it gave one, else whatever the plan says is unfinished.
         report.plan = plan
+        # Likewise the proposals it filed: code's list, so the Orchestrator can
+        # tell the owner exactly what is waiting for them.
+        report.proposals = [dict(p) for p in (child.tool_state.get("proposals") or [])]
         if not report.left and plan and (budget_hit or report.outcome != "done"):
             from . import plan as _plan
 
