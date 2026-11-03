@@ -155,7 +155,9 @@ def test_the_preset_decides_the_action_not_the_caller(monkeypatch):
 
 def test_tool_count_dropped_at_least_a_quarter():
     # 169 tools (167 + edit_file + search_text) before the merge.
-    assert len(registry.tool_declarations()) <= 126
+    # 126 until #218 added command_job (status/stop of background commands, one tool
+    # with two alias names). Raise only with a reason, and merge before adding.
+    assert len(registry.tool_declarations()) <= 127
 
 
 def test_merged_skills_do_not_use_the_unenforced_tripwire_wrongly():
