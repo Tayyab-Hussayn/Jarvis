@@ -9,9 +9,12 @@ instead of ``shell=True``. The Windows build sprinkled ``subprocess.run`` and
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
+import signal
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -174,6 +177,145 @@ def spawn(
         raise RuntimeError(f"command not found: {arg_list[0]}") from exc
 
     return proc.pid
+
+
+def start_group(
+    command: str,
+    *,
+    cwd: str | os.PathLike | None,
+    stdout_path: str | os.PathLike,
+    stderr_path: str | os.PathLike,
+    env: dict[str, str] | None = None,
+    audit_event: str = "shell.user_command",
+) -> subprocess.Popen:
+    """Start ``command`` through the shell as the leader of its own process group.
+
+    The environment carries a random ``KRAVEIN_GROUP_TAG``. After the leader is
+    reaped its pid (the group id) can be recycled, so a bare ``killpg`` could hit
+    a stranger; the tag is how ``kill_group`` proves a surviving process is ours.
+
+    * ``start_new_session``: the shell and everything it forks share one
+      process group, so a timeout or stop can kill the whole tree. Killing only
+      the direct child left grandchildren (``sh -c 'sleep 999 &'``) running
+      forever.
+    * Output goes to **files**, not pipes. With pipes a surviving grandchild
+      kept the write end open and ``communicate()`` hung past the timeout; with
+      files nothing waits on a descriptor, big output can be kept in full, and
+      a command that outlives its timeout can be adopted as a background job
+      without losing what it already printed.
+    * stdin is /dev/null so nothing can prompt for a password on the terminal.
+    """
+    audit.record(audit_event, command=command, cwd=str(cwd) if cwd else None, shell=True)
+    tag = secrets.token_hex(8)
+    fds = []
+    try:
+        for path in (stdout_path, stderr_path):
+            # 0600: the output of a command can hold anything the owner can read.
+            fds.append(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=str(cwd) if cwd else None,
+            env=_clean_env({**(env or {}), "KRAVEIN_GROUP_TAG": tag}),
+            stdin=subprocess.DEVNULL,
+            stdout=fds[0],
+            stderr=fds[1],
+            start_new_session=True,
+        )
+        proc.kravein_tag = tag
+        return proc
+    finally:
+        # The child has its own copies; keeping ours open would leak two
+        # descriptors per command.
+        for fd in fds:
+            os.close(fd)
+
+
+def wait(proc: subprocess.Popen, timeout: float | None) -> int | None:
+    """Return the exit code, or None if ``proc`` is still running after ``timeout``."""
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _survivors(proc: subprocess.Popen) -> list[int]:
+    """Pids still in ``proc``'s group that carry its tag (leader excluded).
+
+    /proc is the only way to see children that outlived their shell
+    (``server &``): they are reparented to init, so no Popen knows them.
+    """
+    tag = getattr(proc, "kravein_tag", "")
+    if not tag:
+        return []
+    needle = b"KRAVEIN_GROUP_TAG=" + tag.encode()
+    found = []
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.isdigit() or int(entry) == proc.pid:
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", "rb") as handle:
+                fields = handle.read().rsplit(b")", 1)[1].split()
+            # fields: state ppid pgrp ...; zombies are already dead.
+            if fields[0] == b"Z" or int(fields[2]) != proc.pid:
+                continue
+            with open(f"/proc/{entry}/environ", "rb") as handle:
+                if needle in handle.read():
+                    found.append(int(entry))
+        except (OSError, IndexError, ValueError):
+            continue
+    return found
+
+
+def group_alive(proc: subprocess.Popen) -> bool:
+    """True while the leader runs or any tagged member of its group does."""
+    return proc.poll() is None or bool(_survivors(proc))
+
+
+def kill_group(proc: subprocess.Popen, grace: float = 2.0) -> bool:
+    """TERM the whole process group of ``proc``, then KILL what is left.
+
+    While the leader is unreaped its pid is still the group id, so ``killpg``
+    is safe. Once the leader is gone the pgid may have been recycled for a
+    stranger, so survivors are found by their tag and signalled one by one.
+    Returns whether a signal was sent.
+    """
+    pgid = proc.pid  # start_new_session makes the leader's pid the group id
+
+    def signal_all(sig: int) -> bool:
+        sent = False
+        if proc.poll() is None:
+            try:
+                os.killpg(pgid, sig)
+                sent = True
+            except ProcessLookupError:
+                pass
+        for pid in _survivors(proc):
+            try:
+                os.kill(pid, sig)
+                sent = True
+            except ProcessLookupError:
+                pass
+        return sent
+
+    if not signal_all(signal.SIGTERM):
+        return False
+    audit.record("shell.kill_group", pgid=pgid)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not group_alive(proc):
+            return True
+        time.sleep(0.05)
+    signal_all(signal.SIGKILL)
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    return True
 
 
 def first_available(*binaries: str) -> str | None:
