@@ -53,7 +53,7 @@ def test_read_enforces_check_read(tmp_path, monkeypatch, enforced):
     f.write_text("secret\n")
     monkeypatch.setattr(safety, "check_read",
                         lambda p: Verdict(danger=Danger.CRITICAL, blocked=True,
-                                          block_reason="no"), raising=False)
+                                          block_reason="no"))
     files.read_file(str(f))
     assert enforced and enforced[0][2]["skill"] == "read_file"
     assert enforced[0][0].blocked
@@ -240,7 +240,7 @@ def test_search_skips_and_counts_check_read_blocked(tree, monkeypatch):
         if p.name == "b.txt":
             return Verdict(danger=Danger.DESTRUCTIVE)
         return Verdict(danger=Danger.SAFE)
-    monkeypatch.setattr(safety, "check_read", check, raising=False)
+    monkeypatch.setattr(safety, "check_read", check)
     out = files.search_text("foo", str(tree))
     assert "b.txt" not in out and "a.py:2:" in out
     assert "1 file(s) skipped" in out

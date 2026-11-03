@@ -185,7 +185,7 @@ def _tool_state(context) -> dict | None:
     """The calling agent's per-run scratch dict, or None outside an agent.
 
     CLI ``kravein run`` has no agent, so the read-before-edit guard must not
-    apply there; an agent without ``tool_state`` (older engine) is treated the
+    apply there; an agent without ``tool_state`` is treated the
     same way rather than blocking every edit.
     """
     state = getattr(context, "tool_state", None)
@@ -225,12 +225,6 @@ def _require_fresh_read(context, target: Path) -> str | None:
     return None
 
 
-def _check_read(target: Path) -> Verdict | None:
-    """safety.check_read verdict (engine #211); None until that exists."""
-    fn = getattr(safety, "check_read", None)
-    return fn(target) if fn else None
-
-
 @skill(category="files", danger=Danger.SAFE)
 def read_file(path: str, max_lines: int = 200, start_line: int = 1,
               _source: str = "local", _confirm: bool = False, _context=None) -> str:
@@ -251,10 +245,12 @@ def read_file(path: str, max_lines: int = 200, start_line: int = 1,
     if target.is_dir():
         return f"{target} is a directory. Use list_files instead."
 
-    verdict = _check_read(target)
-    if verdict is not None:
-        enforce(verdict, f"read {target}", skill="read_file", source=_source,
-                pre_confirmed=_confirm, targets=describe_targets(f"file:{target}"))
+    # Called directly, never through getattr: a guard that silently vanishes
+    # when the function is missing would fail open. A secret read asks every
+    # time; Kravein's own config/state/data is refused outright.
+    enforce(safety.check_read(target), f"read {target}", skill="read_file",
+            source=_source, pre_confirmed=_confirm,
+            targets=describe_targets(f"file:{target}"))
 
     try:
         if target.stat().st_size > 20 * 1024 * 1024:
@@ -587,8 +583,8 @@ def _search_file_state(path: Path) -> str:
             return "skip"
     except OSError:
         return "skip"
-    verdict = _check_read(path)
-    if verdict is not None and (verdict.blocked or verdict.danger > Danger.SAFE):
+    verdict = safety.check_read(path)
+    if verdict.blocked or verdict.danger > Danger.SAFE:
         return "blocked"
     return "ok"
 
