@@ -120,6 +120,9 @@ class Turn:
     iterations: int = 0
     error: str = ""
     cancelled: bool = False
+    # Why a delegated run ran out of rounds or tokens ("" = it did not). Set only
+    # when `Agent.partial_on_budget` is on; the top-level loop still sets `error`.
+    budget_exhausted: str = ""
 
     @property
     def ok(self) -> bool:
@@ -172,6 +175,8 @@ class Agent:
     _memory: "TurnMemory | None" = None  # shared denial memory (a sub-agent shares its parent's)
     _stamp: float = 0.0                 # store stamp at our last load/save (see _refresh)
     principal: str = ""                 # who owns this conversation (set by the web server)
+    partial_on_budget: bool = False     # delegated run: out of rounds/tokens = a partial report, not an error (#217)
+    token_budget: int = 0               # 0 = none; else the estimated tokens a run may add to its transcript
     delegate_wait: bool = False         # force blocking delegate (an approved proposal's turn needs the real outcome)
     _turn_allowed: "frozenset[str] | None" = None  # this ask()'s own tool narrowing (report follow-up)
 
@@ -378,7 +383,12 @@ class Agent:
         except Exception:
             note = ""
 
-        tail = [{"role": "user", "content": n} for n in (note, extra) if n]
+        # The plan (update_plan) rides in the tail for the same reason the clock
+        # does: history trimming cannot lose it, and it is never stored.
+        from .agents import plan as _plan
+
+        plan_note = _plan.context_note(getattr(self, "tool_state", {}).get("plan") or [])
+        tail = [{"role": "user", "content": n} for n in (note, plan_note, extra) if n]
         return [*self._history_messages(), *tail]
 
     def _history_messages(self) -> list[dict[str, Any]]:
@@ -633,10 +643,15 @@ class Agent:
             return turn
 
         audit.record("agent.request", source=self.source, text=text)
+        # A plan belongs to one request: a stale one from the last ask would
+        # be shown to the model as if it were current.
+        getattr(self, "tool_state", {}).pop("plan", None)
 
         with self._lock:
             self.messages.append({"role": "user", "content": text})
             self._trim_history()
+            run_start = len(self.messages) - 1
+            exhausted = ""
 
             tools = self._tools_for_turn(text)
             if self._turn_allowed is not None:
@@ -650,6 +665,15 @@ class Agent:
                     turn.iterations = iteration
                     if cancelled():
                         return give_up("before_model")
+
+                    # Token ceiling (delegated runs): what this run has added to
+                    # its transcript, by the same chars/4 estimate as trimming.
+                    if self.token_budget and iteration > 1:
+                        used = sum(estimate_tokens(m) for m in self.messages[run_start:])
+                        if used > self.token_budget:
+                            exhausted = (f"reached its token budget (about {used} of "
+                                         f"{self.token_budget} tokens) after {iteration - 1} tool rounds")
+                            break
 
                     # Escalation, in code: after N tool rounds without an
                     # answer the Orchestrator's next round can only delegate
@@ -776,6 +800,11 @@ class Agent:
                         return give_up("after_tools")
 
                 # Budget exhausted.
+                if self.partial_on_budget:
+                    return self._wrap_up(
+                        turn, system,
+                        exhausted or f"used all {max_iterations} tool rounds",
+                    )
                 turn.error = (
                     f"Stopped after {max_iterations} tool rounds without a final "
                     "answer. The request may be too broad — try narrowing it."
@@ -783,6 +812,37 @@ class Agent:
                 self._emit("error", turn.error)
                 audit.record("agent.budget_exhausted", source=self.source)
                 return turn
+
+    def _wrap_up(self, turn: Turn, system: str, reason: str) -> Turn:
+        """A delegated run out of budget: one tool-less call for a partial report.
+
+        No error is raised: the caller gets whatever was done. If this call
+        fails or says nothing, `turn.reply` stays empty and `run_child` builds
+        the report from the plan and the tool log instead.
+        """
+        turn.budget_exhausted = reason
+        audit.record("agent.budget_exhausted", source=self.source, reason=reason,
+                     iterations=turn.iterations, wrap_up=True)
+        note = (
+            f"[context] You have {reason}. Do not call any tool. Write your final "
+            "report now, in the Reporting format, with OUTCOME: partial. Say what "
+            "you did (with the evidence a tool result gave), keep your PLAN with "
+            "each item's real status, and list under LEFT what still has to be done."
+        )
+        try:
+            kwargs = {"prefer": self.profile.model} if (
+                self.profile is not None and self.profile.model) else {}
+            reply = self._llm.complete(self._with_context(note), system=system,
+                                       tools=None, **kwargs)
+            text = (reply.text or "").strip()
+        except Exception as exc:                      # LLMError or anything else
+            audit.record("agent.wrap_up_failed", source=self.source, error=str(exc))
+            text = ""
+        if text:
+            turn.reply = text
+            self.messages.append({"role": "assistant", "content": text})
+            self._emit("answer", text)
+        return turn
 
     def _run_tool(self, call: ToolCall) -> str:
         """Execute one tool call and return its textual result."""

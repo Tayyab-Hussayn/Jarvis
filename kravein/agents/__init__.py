@@ -13,3 +13,4 @@ from .profile import (  # noqa: F401
 from . import delegate  # noqa: E402,F401
 from . import proposals  # noqa: E402,F401  (registers propose / decide_proposal)
 from . import tasks as tasks  # noqa: E402  (registers task_status / cancel_task)
+from . import plan as plan  # noqa: E402  (registers update_plan)
