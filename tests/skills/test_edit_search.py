@@ -188,7 +188,7 @@ def test_confirmation_text_previews_the_change(tmp_path, enforced):
     f.write_text("a\nb\nTARGET value\nc\n" * 3 + "unique line\n")
     files.edit_file(str(f), "unique line", "changed " * 30)
     desc = enforced[0][1]
-    assert "line 13" in desc and "- 'unique line'" in desc and "+ 'changed" in desc
+    assert "line 13" in desc and "-unique line" in desc and "+changed" in desc
     assert "…" in desc  # long new text is clipped
 
 
