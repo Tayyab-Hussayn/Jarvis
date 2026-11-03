@@ -214,6 +214,10 @@ class Agent:
                     "(only the Orchestrator, and never as a sub-agent)"
                 )
         self.depth = depth
+        # Per-agent-run scratch for skills (read tracking, shell cwd). One dict
+        # per Agent instance, so a delegated child starts empty and cannot see
+        # or forge its parent's state. Never persisted, never shown to the model.
+        self.tool_state: dict[str, Any] = {}
         self.max_rounds = max_rounds
         self._memory = memory
         self.thread_id = thread_id
