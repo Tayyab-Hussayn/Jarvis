@@ -45,7 +45,14 @@ ORCHESTRATOR = "orchestrator"
 # safety.AUTO_SOURCES plus the phone's UI. NOT jobs, daemon or WhatsApp.
 OWNER_SOURCES = frozenset({"web", "web-panel", "phone", "voice", "voice-live", "cli", "cli-ask"})
 
-KINDS = ("delegate", "note")
+KINDS = ("delegate", "note", "capability")
+# Advice only: approving closes it, nothing starts. `capability` is a sub-agent
+# telling the owner about a missing tool or weakness.
+ADVICE_KINDS = ("note", "capability")
+# What a sub-agent may file, and how many per delegated run (#220). Enforced in
+# `propose`, not in a prompt.
+SUBAGENT_KINDS = ADVICE_KINDS
+SUBAGENT_MAX_PER_RUN = 2
 RISKS = ("low", "major")
 STATUSES = ("pending", "approved", "declined", "expired", "running", "done", "failed")
 
@@ -82,7 +89,8 @@ CREATE TABLE IF NOT EXISTS proposals (
     created_at REAL NOT NULL,
     decided_at REAL,
     decided_by TEXT,
-    result     TEXT
+    result     TEXT,
+    origin     TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -94,6 +102,13 @@ class NotAllowed(PermissionError):
 def _connect() -> sqlite3.Connection:
     conn = history._connect()
     conn.executescript(_SCHEMA)
+    # A table made before #220 has no `origin`: add it once.
+    if "origin" not in {r[1] for r in conn.execute("PRAGMA table_info(proposals)")}:
+        try:
+            conn.execute("ALTER TABLE proposals ADD COLUMN origin TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except sqlite3.OperationalError:       # another connection added it first
+            pass
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -107,6 +122,9 @@ def _public(row: sqlite3.Row) -> dict[str, Any]:
     out["created_at"] = int(out["created_at"])
     if "decided_at" in out:
         out["decided_at"] = int(out["decided_at"])
+    # `origin` = the sub-agent that filed it; absent for the Orchestrator's own.
+    if not out.get("origin"):
+        out.pop("origin", None)
     if not out["agent"]:
         out.pop("agent")
     if not out["task"]:
@@ -174,7 +192,7 @@ def _transition(pid: str, frm: tuple[str, ...], to: str, **fields: Any) -> bool:
 
 def create(
     title: str, reasons: list[str], kind: str = "delegate", agent: str = "",
-    task: str = "", risk: str = "low", created_by: str = "",
+    task: str = "", risk: str = "low", created_by: str = "", origin: str = "",
 ) -> dict[str, Any]:
     """Store a pending proposal and announce it. Raises ``ValueError`` on bad input."""
     title = (title or "").strip()[:200]
@@ -212,12 +230,14 @@ def create(
             raise ValueError("too many proposals are waiting for the owner")
         pid = "p" + secrets.token_hex(3)
         conn.execute(
-            "INSERT INTO proposals (id,title,reasons,kind,agent,task,risk,status,created_by,created_at)"
-            " VALUES (?,?,?,?,?,?,?,'pending',?,?)",
-            (pid, title, json.dumps(reasons), kind, agent, task, risk, created_by, time.time()),
+            "INSERT INTO proposals (id,title,reasons,kind,agent,task,risk,status,created_by,created_at,origin)"
+            " VALUES (?,?,?,?,?,?,?,'pending',?,?,?)",
+            (pid, title, json.dumps(reasons), kind, agent, task, risk, created_by, time.time(),
+             (origin or "").strip()[:40]),
         )
         conn.commit()
-    audit.record("proposal.created", id=pid, kind=kind, risk=risk, agent=agent, by=created_by)
+    audit.record("proposal.created", id=pid, kind=kind, risk=risk, agent=agent, by=created_by,
+                 origin=origin)
     announce(pid)
     return get(pid) or {}
 
@@ -243,7 +263,7 @@ def decide(pid: str, decision: str, *, source: str, by: str = "") -> tuple[dict[
     p = get(pid) or {}
     if changed:
         audit.record("proposal.decided", id=pid, decision=new, by=by or source)
-        if new == "approved" and p.get("kind") == "note":
+        if new == "approved" and p.get("kind") in ADVICE_KINDS:
             # Advice only: nothing to run, so approving it just closes it.
             _transition(pid, ("approved",), "done", result="Acknowledged.")
             p = get(pid) or p
@@ -352,6 +372,19 @@ def _is_orchestrator(parent: Any, tool: str) -> bool:
     )
 
 
+def _subagent_name(parent: Any, tool: str) -> str:
+    """The sub-agent's name if ``parent`` is a delegated child whose profile
+    lists ``tool``; "" otherwise. The Orchestrator is never a sub-agent."""
+    profile = getattr(parent, "profile", None)
+    allowed = getattr(parent, "_allowed", None)
+    if (
+        profile is None or profile.name == ORCHESTRATOR or allowed is None
+        or tool not in allowed or getattr(parent, "depth", 0) < 1
+    ):
+        return ""
+    return profile.name
+
+
 @skill(name="propose", category="agents", danger=Danger.SAFE)
 def propose(
     title: str, reasons: list[str], kind: str = "delegate", agent: str = "",
@@ -365,18 +398,41 @@ def propose(
     Args:
         title: One short line, what you suggest.
         reasons: Two or three concrete reasons ("do this, not that, because ...").
-        kind: delegate (a sub-agent does it after approval) or note (advice only).
+        kind: delegate (a sub-agent does it after approval), note (advice only) or capability (a missing tool or weakness you noticed; advice only). A sub-agent may use only note or capability.
         agent: For delegate: the sub-agent that does it, for example system-ops.
         task: For delegate: the whole task, self-contained.
         risk: low or major. Use major for deleting, installing, spending or sending.
     """
+    origin = ""
     if not _is_orchestrator(_context, "propose"):
-        audit.record("propose.refused", reason="caller is not the Orchestrator", source=_source)
-        return "propose is only available to the Orchestrator."
+        origin = _subagent_name(_context, "propose")
+        if not origin:
+            audit.record("propose.refused", reason="caller may not propose", source=_source)
+            return "propose is only available to the Orchestrator and to sub-agents that list it."
+        # A sub-agent may only leave advice for the owner. Work it wants done
+        # goes back to the Orchestrator in its report. Code, not prompt: a
+        # delegate proposal is how a task would get started on the owner's
+        # approval, and no sub-agent may line up its own next job.
+        if (kind or "").strip().lower() not in SUBAGENT_KINDS:
+            audit.record("propose.refused", reason="sub-agent kind", agent=origin, kind=kind)
+            return ("Not proposed: a sub-agent may only file kind 'note' or 'capability'. "
+                    "Put work you think should be done under IMPROVEMENTS in your report; "
+                    "the Orchestrator decides whether to propose it.")
+        state = getattr(_context, "tool_state", None)
+        if not isinstance(state, dict):
+            return "Not proposed: no agent run to count proposals against."
+        if len(state.get("proposals") or []) >= SUBAGENT_MAX_PER_RUN:
+            audit.record("propose.refused", reason="per-run cap", agent=origin)
+            return (f"Not proposed: at most {SUBAGENT_MAX_PER_RUN} proposals per task. "
+                    "Put the rest under IMPROVEMENTS in your report.")
     try:
-        p = create(title, reasons, kind, agent, task, risk, created_by=_source or "orchestrator")
+        p = create(title, reasons, kind, agent, task, risk,
+                   created_by=_source or "orchestrator", origin=origin)
     except ValueError as exc:
         return f"Not proposed: {exc}"
+    if origin:
+        _context.tool_state.setdefault("proposals", []).append(
+            {"id": p["id"], "title": p.get("title", "")})
     try:
         # Remember which turn made it: the model must not approve its own
         # proposal in the same breath (see decide_proposal).
