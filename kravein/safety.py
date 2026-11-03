@@ -264,6 +264,104 @@ def check_delete(raw: str | os.PathLike) -> Verdict:
     return verdict
 
 
+# -- reading secrets (#211) ------------------------------------------------------
+#
+# Everything a skill or a shell command reads goes back into the model's
+# context, which is a cloud provider. `read_file` had no guard and
+# `run_command cat ~/.config/kravein/api_keys.json` was SAFE, so a prompt
+# injection (or a plain curious model) could ship the owner's keys off the
+# machine without a card. `sensitive_kind` already covered the *write* side;
+# this is the read side: Kravein's own dirs are refused, a curated list of
+# secret locations asks, and the card says the content goes to the model.
+
+_SSH_PUBLIC = frozenset({"known_hosts", "config"})
+# Template files hold names, not values; asking on them every time trains the
+# owner to click through the cards that matter.
+_ENV_TEMPLATE_SUFFIXES = frozenset({"example", "sample", "template", "dist", "tmpl"})
+
+
+def _secret_locations() -> list[Path]:
+    home = Path.home()
+    return [home / ".ssh", home / ".gnupg", home / ".password-store", home / ".netrc",
+            home / ".aws" / "credentials", home / ".config" / "gh" / "hosts.yml",
+            home / ".docker" / "config.json", home / ".kube" / "config"]
+
+
+def _either_inside(candidates: Sequence[Path], root: Path) -> bool:
+    """`root` is checked as written and resolved, so a symlinked home dir or a
+    symlinked secret location is matched whichever side the link is on."""
+    roots = {root, resolve_target(root)}
+    return any(_inside(c, r) for c in candidates for r in roots)
+
+
+def _read_candidates(raw: str | os.PathLike) -> list[Path]:
+    """The path as written (normalised) and where its symlinks lead. Matching
+    only the resolved side misses `~/.ssh/id -> /tmp/x`; only the lexical side
+    misses `/tmp/innocent -> ~/.ssh/id`."""
+    lexical = Path(os.path.expandvars(str(raw))).expanduser()
+    if not lexical.is_absolute():
+        lexical = Path.cwd() / lexical
+    lexical = Path(os.path.normpath(lexical))
+    resolved = resolve_target(raw)
+    return [lexical] if lexical == resolved else [lexical, resolved]
+
+
+def _blocked_private(cands: Sequence[Path]) -> bool:
+    workspace = resolve_target(config.WORKSPACE_DIR)
+    if any(_inside(c, workspace) for c in cands):
+        return False
+    return any(_either_inside(cands, root) for root in _kravein_private_roots())
+
+
+def _secret_reason(cands: Sequence[Path]) -> str:
+    """Why reading this would hand a secret to the model, or ""."""
+    for p in cands:
+        if p.name.endswith(".pub"):
+            return ""                       # public keys are public
+    ssh = Path.home() / ".ssh"
+    for p in cands:
+        if p.parent in (ssh, resolve_target(ssh)) and p.name in _SSH_PUBLIC:
+            return ""
+    for root in _secret_locations():
+        if _either_inside(cands, root):
+            return f"{root} holds credentials or private keys"
+    for p in cands:
+        name = p.name
+        if name == ".env" or (name.startswith(".env.")
+                              and name.rsplit(".", 1)[-1] not in _ENV_TEMPLATE_SUFFIXES):
+            return f"{name} is an environment file that usually holds secrets"
+        if name.endswith((".pem", ".key")) or name.startswith("id_"):
+            return f"{name} looks like a private key"
+    return ""
+
+
+def check_read(raw: str | os.PathLike) -> Verdict:
+    """Classify reading a file into the model's context.
+
+    Blocked: Kravein's own config/state/data. DESTRUCTIVE (a card): a curated
+    list of secret locations, ``.env`` files and private-key files. SAFE:
+    everything else. Symlinks are followed before matching. The verdict never
+    carries an "Always" signature - a secret read is asked every time.
+    """
+    cands = _read_candidates(raw)
+    target = cands[-1]
+    if _blocked_private(cands):
+        return Verdict(
+            danger=Danger.CRITICAL, blocked=True,
+            block_reason=(
+                f"{target} is inside Kravein's own config/state/data, which holds "
+                "keys, pairings and its safety policy; the assistant may not read it"
+            ),
+        )
+    why = _secret_reason(cands)
+    if why:
+        return Verdict(
+            danger=Danger.DESTRUCTIVE,
+            reasons=[f"reads {target}: {why}; its content will be sent to the model"],
+        )
+    return Verdict(danger=Danger.SAFE)
+
+
 # ---------------------------------------------------------------------------
 # Shell command classification
 # ---------------------------------------------------------------------------
@@ -475,9 +573,20 @@ def classify_command(
         )
         return verdict
 
+    # A secret read is refused (Kravein's own dirs) or asks (ssh keys, .env, ...)
+    # whatever the program: `cat` is in the safe set, which is exactly why this
+    # runs before it. A secret read never gets an "Always" signature.
+    read_blocked, secret_reason = _read_findings(text, where)
+    if read_blocked:
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = read_blocked
+        return verdict
+
     # Provably read-only (or creating only new files): no card. Runs after the
     # hard refusals above, and never lowers a CRITICAL pattern hit.
-    if _classify_level(text) < Danger.CRITICAL and _argv_safe(text, where):
+    if (not secret_reason and _classify_level(text) < Danger.CRITICAL
+            and _argv_safe(text, where)):
         return verdict
 
     matched: list[tuple[Danger, str]] = []
@@ -507,6 +616,8 @@ def classify_command(
         return verdict
     if startup_reason:
         matched.append((Danger.DESTRUCTIVE, startup_reason))
+    if secret_reason:
+        matched.append((Danger.DESTRUCTIVE, secret_reason))
 
     if matched:
         verdict.danger = max(level for level, _ in matched)
@@ -526,7 +637,7 @@ def classify_command(
             return verdict
 
     # Never "Always" for anything that touches a startup surface or creates a unit.
-    if verdict.danger == Danger.DESTRUCTIVE and not startup_reason:
+    if verdict.danger == Danger.DESTRUCTIVE and not startup_reason and not secret_reason:
         verdict.signature = command_signature(text, where)
     return verdict
 
@@ -933,6 +1044,164 @@ def _write_findings(text: str, cwd: Path | None) -> tuple[str, str]:
             if verdict.danger >= Danger.DESTRUCTIVE:
                 return "", "; ".join(verdict.reasons) or "writes to a login/startup location"
     return "", ""
+
+
+# -- secret reads in shell commands (#211) -------------------------------------
+#
+# `cat`, `head`, `base64`, `grep -r`, `cp ~/.ssh/id /tmp/x && cat /tmp/x`,
+# `< secret`: any program that is handed a secret path can put its content in
+# the output the model sees, so every argv token of every program is checked,
+# not only the verbs we think of as readers. Programs that only list or stat
+# (ls, find without -exec, ...) and `rm`-style programs never print content.
+
+_NAME_ONLY = frozenset({
+    "ls", "stat", "du", "df", "tree", "realpath", "basename", "dirname", "wc",
+    "pwd", "cd", "test", "[", "which", "whereis", "type", "echo", "printf", "find",
+    "touch", "mkdir", "rmdir", "rm", "unlink", "chmod", "chown", "chgrp",
+})
+# Recursive readers: handed a directory that *contains* a secret location they
+# read it too, so `grep -r token ~/.config` is the same read as `cat` of the key.
+_RECURSIVE_READERS = frozenset({
+    "grep", "egrep", "fgrep", "rg", "ag", "ack", "tar", "zip", "rsync", "cp", "scp",
+})
+_SECRET_FRAGMENTS = (".ssh", ".gnupg", ".password-store", ".netrc", ".aws/credentials",
+                     "gh/hosts.yml", ".docker/config.json", ".kube/config")
+_MAX_READ_CANDIDATES = 200
+
+
+def _brace_expand(s: str, limit: int = 64) -> list[str]:
+    """Minimal `a{b,c}d` expansion (no nesting); a bad pattern comes back whole."""
+    m = re.search(r"\{([^{}]*,[^{}]*)\}", s)
+    if not m:
+        return [s]
+    out: list[str] = []
+    for alt in m.group(1).split(","):
+        out.extend(_brace_expand(s[:m.start()] + alt + s[m.end():], limit))
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
+def _read_paths(tok: str, cwd: Path | None) -> list[Path]:
+    """Existing paths this argument can name (globs and braces expanded), plus
+    - when the working directory is unknown - the bare relative name, so a
+    `.env` or `id_rsa` is still recognised by its name."""
+    strings = [tok]
+    if tok[:1] == "@":                      # curl -d @FILE reads FILE
+        strings = [tok[1:]]
+    if "=" in tok:                          # --file=PATH, if=PATH, of=PATH
+        strings.append(tok.split("=", 1)[1])
+    elif tok.startswith("-"):
+        return []
+    found: list[Path] = []
+    for s in strings:
+        for variant in _brace_expand(s):
+            if variant.startswith("@"):
+                variant = variant[1:]
+            if not variant or variant.startswith("-"):
+                continue
+            expanded = os.path.expanduser(variant) if variant.startswith("~") else variant
+            if expanded.startswith("~"):
+                continue
+            path = Path(expanded)
+            if not path.is_absolute():
+                if cwd is None:
+                    # A word with spaces is a command string, not a file name
+                    # (`sh -c 'cat x'`): its inner string is scanned on its own.
+                    if not any(c.isspace() for c in variant):
+                        found.append(path)
+                    continue
+                path = cwd / path
+            path = Path(os.path.normpath(path))
+            if any(c in _GLOB_CHARS for c in str(path)):
+                import glob
+                try:
+                    hits = glob.glob(str(path))[:_MAX_READ_CANDIDATES]
+                except OSError:
+                    hits = []
+                found.extend(Path(h) for h in hits)
+            elif os.path.lexists(path):
+                found.append(path)
+    return found
+
+
+def _read_finding(path: Path, recursive: bool) -> tuple[str, str]:
+    """(blocked reason, confirm reason) for one path an argv token names."""
+    if path.is_absolute():
+        v = check_read(path)
+        if v.blocked:
+            return v.block_reason, ""
+        if v.reasons:
+            return "", "; ".join(v.reasons)
+        if recursive and path.is_dir():
+            cands = _read_candidates(path)
+            roots = [*_kravein_private_roots(), *_secret_locations()]
+            for root in roots:
+                for r in {root, resolve_target(root)}:
+                    if os.path.lexists(r) and any(r != c and r.is_relative_to(c) for c in cands):
+                        return "", (f"{path} contains {root}, whose content would be "
+                                    "sent to the model")
+        return "", ""
+    # Relative name with no known directory: only the name patterns can apply.
+    why = _secret_reason([path])
+    return "", (f"reads {path}: {why}; its content will be sent to the model" if why else "")
+
+
+def _read_findings(text: str, cwd: Path | None, _depth: int = 0) -> tuple[str, str]:
+    """(blocked reason, confirm reason) for secrets a command would read."""
+    segments = _segments(text)
+    confirm = ""
+    if segments is None:
+        # Substitution, a variable or a heredoc hides the argv: check the
+        # tokens we can see (with $VAR expanded), then the bare fragments.
+        try:
+            words = shlex.split(text)
+        except ValueError:
+            words = text.split()
+        for word in words:
+            word = os.path.expandvars(word).strip("<>|&;()`")
+            for path in _read_paths(word, cwd):
+                blocked, why = _read_finding(path, True)
+                if blocked:
+                    return blocked, ""
+                confirm = confirm or why
+        if confirm:
+            return "", confirm
+        for frag in _surface_fragments()[1]:
+            if frag and frag in text:
+                return "", f"mentions {frag}, which holds Kravein's keys and pairings"
+        for frag in _SECRET_FRAGMENTS:
+            if frag in text:
+                return "", f"mentions {frag}; reading it would send secrets to the model"
+        return "", ""
+    # `echo ~/.netrc | xargs cat`: the name-only program hands its output to a
+    # reader, so nothing in a pipeline with xargs/parallel is name-only.
+    feeds_reader = any(
+        os.path.basename(a[0]) in ("xargs", "parallel") for a, _ in segments)
+    for argv, redirects in segments:
+        if os.path.basename(argv[0]) == "cd":
+            where = argv[1] if len(argv) > 1 else "~"
+            cwd = _literal_path(where, cwd)
+        rest, _ = _strip_wrappers(list(argv))
+        prog = os.path.basename(rest[0]) if rest else ""
+        if prog in _SHELLS:
+            kind, inner = _shell_inline(rest[1:])
+            if kind == "c" and inner is not None and _depth < _MAX_DEPTH:
+                blocked, why = _read_findings(inner, cwd, _depth + 1)
+                if blocked:
+                    return blocked, ""
+                confirm = confirm or why
+        names_only = (prog in _NAME_ONLY and not feeds_reader and not (
+            prog == "find" and any(a in _FIND_UNSAFE for a in rest[1:])))
+        tokens = [] if names_only else list(argv)
+        tokens += [t for op, t in redirects if op == "<"]
+        for tok in tokens:
+            for path in _read_paths(tok, cwd):
+                blocked, why = _read_finding(path, prog in _RECURSIVE_READERS)
+                if blocked:
+                    return blocked, ""
+                confirm = confirm or why
+    return "", confirm
 
 
 # -- inline interpreter code (#206) -------------------------------------------
