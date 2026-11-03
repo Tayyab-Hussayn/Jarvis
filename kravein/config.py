@@ -121,7 +121,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # Tool rounds the Orchestrator may spend on one request before its next
         # round can only `delegate`.
         "escalate_after_rounds": 3,
-        "delegate_max_rounds": 6,
+        # A sub-agent task is long (plan, edit, verify); 6 rounds cut the baseline
+        # eval off mid-task. Out of rounds or tokens it returns a partial report.
+        "delegate_max_rounds": 25,
+        # Estimated tokens (chars/4) one delegated run may add to its transcript.
+        "delegate_token_budget": 60000,
         "delegate_timeout_seconds": 300,
         "report_max_chars": 1500,
         # Proposals queue (phase 4). Pending/approved ones expire after this.

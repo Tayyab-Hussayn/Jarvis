@@ -364,7 +364,11 @@ def test_round_cap_is_configurable(monkeypatch, _zz_skills):
     )
     agent.ask("go")
     report = [m for m in agent.messages if m["role"] == "tool"][0]["content"]
-    assert "outcome: failed" in report and router.calls["system-ops"] == 2
+    # #217: running out of rounds is a partial report, not a "Stopped after N
+    # rounds" failure; the third call is the tool-less wrap-up (here it says nothing,
+    # so the report is built from the tool log).
+    assert "outcome: partial" in report and "Stopped after" not in report
+    assert "used all 2 tool rounds" in report and router.calls["system-ops"] == 3
 
 
 # -- escalation ------------------------------------------------------------------------

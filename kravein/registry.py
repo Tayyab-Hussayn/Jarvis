@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import inspect
+import json
 import pkgutil
 import threading
 import types
@@ -91,6 +92,20 @@ def _json_schema_for(annotation: Any) -> dict[str, Any]:
         args = get_args(annotation)
         item = _json_schema_for(args[0]) if args else {"type": "string"}
         return {"type": "array", "items": item}
+
+    # A TypedDict becomes a real object schema (properties, required, enums).
+    # A bare `dict` has none, and providers such as Gemini reject an array of
+    # property-less objects, so a list of records must be declared as one.
+    if typing.is_typeddict(annotation):
+        hints = typing.get_type_hints(annotation)
+        schema: dict[str, Any] = {
+            "type": "object",
+            "properties": {k: _json_schema_for(v) for k, v in hints.items()},
+        }
+        required = sorted(getattr(annotation, "__required_keys__", ()))
+        if required:
+            schema["required"] = required
+        return schema
 
     if origin in (dict, typing.Dict):
         return {"type": "object"}
@@ -427,6 +442,15 @@ def _coerce(value: Any, schema: dict[str, Any]) -> Any:
                 return value.strip().lower() in ("1", "true", "yes", "y", "on")
             return bool(value)
         if kind == "array" and isinstance(value, str):
+            # A list of records sent as one JSON string must not be split on
+            # commas (that would shred the objects).
+            if value.lstrip().startswith("["):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        return parsed
+                except ValueError:
+                    pass
             return [v.strip() for v in value.split(",") if v.strip()]
         if kind == "string" and not isinstance(value, str):
             return str(value)

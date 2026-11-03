@@ -55,8 +55,13 @@ EVIDENCE:
 - what a tool result confirmed (a verified effect, not an acknowledgement)
 QUESTIONS:
 - anything you could not decide without the owner (omit if none)
+PLAN:
+- [completed|in_progress|pending] each plan item (only if you kept a plan)
+LEFT:
+- what still has to be done (omit if nothing)
 
-Say "done" only if a tool result proves it. Do not paste raw tool output.\
+Say "done" only if a tool result proves it. Do not paste raw tool output. \
+If your budget runs out you will be asked for this report with OUTCOME: partial.\
 """
 
 
@@ -87,9 +92,14 @@ class Report:
     changed: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
     questions: list[str] = field(default_factory=list)
+    # The plan as the child's code holds it (never the model's own claim) and
+    # what is not finished; both appear in a partial report.
+    plan: list[dict[str, str]] = field(default_factory=list)
+    left: list[str] = field(default_factory=list)
 
 
-_HEAD = re.compile(r"^\s*(OUTCOME|SUMMARY|CHANGED|EVIDENCE|QUESTIONS)\s*:\s*(.*)$", re.I)
+_HEAD = re.compile(
+    r"^\s*(OUTCOME|SUMMARY|CHANGED|EVIDENCE|QUESTIONS|PLAN|LEFT)\s*:\s*(.*)$", re.I)
 
 
 def parse_report(text: str) -> Report | None:
@@ -124,6 +134,7 @@ def parse_report(text: str) -> Report | None:
         changed=items("changed"),
         evidence=items("evidence"),
         questions=items("questions"),
+        left=items("left"),
     )
 
 
@@ -131,8 +142,14 @@ def render(report: Report, *, agent: str, delegation: str, tools: list[str], lim
     """The text the caller sees, capped at ``limit`` characters."""
     head = f"[{agent} report #{delegation}] outcome: {report.outcome}"
     parts = [f"Summary: {report.summary or '(none given)'}"]
-    for label, rows in (("Changed", report.changed), ("Evidence", report.evidence),
-                        ("Open questions", report.questions)):
+    # Right after the summary: the length cap below cuts from the end, and the
+    # plan is the part of a partial report the caller can least rebuild.
+    if report.plan:
+        from . import plan as _plan
+
+        parts.append(_plan.render(report.plan))
+    for label, rows in (("Left to do", report.left), ("Changed", report.changed),
+                        ("Evidence", report.evidence), ("Open questions", report.questions)):
         if rows:
             parts.append(f"{label}:\n" + "\n".join(f"- {r}" for r in rows))
     if tools:
@@ -153,6 +170,32 @@ def _fallback(turn: Any) -> Report:
         + " (No structured report was given; this is its last message.)",
         evidence=[f"tool calls made: {', '.join(tools)}"] if tools else [],
     )
+
+
+def _budget_report(turn: Any, plan: list[dict[str, str]]) -> Report:
+    """The report for a run that ran out of budget and could not write one.
+
+    Built from what code knows: the plan and the tool log. Nothing in it is a
+    claim by the model.
+    """
+    from collections import Counter
+
+    from . import plan as _plan
+
+    tools = list(getattr(turn, "tool_calls", []) or [])
+    counts = Counter(tools)
+    done = [i["content"] for i in plan if i["status"] == "completed"]
+    why = getattr(turn, "budget_exhausted", "")
+    if plan:
+        summary = f"Stopped before finishing: {why}. {len(done)} of {len(plan)} plan items are completed."
+    else:
+        summary = f"Stopped before finishing: {why}. No plan was kept, so the tool log is all there is."
+    evidence = [f"completed: {c}" for c in done]
+    if tools:
+        evidence.append("tool calls made: " + ", ".join(
+            f"{n} x{c}" if c > 1 else n for n, c in counts.most_common(12)))
+    return Report(outcome="partial", summary=summary, evidence=evidence,
+                  left=_plan.remaining(plan))
 
 
 @dataclass
@@ -232,9 +275,11 @@ def run_child(name: str, task: str, context: str, parent: Parent, did: str,
             observer=observer,
             confirmer=None if unattended else confirm,
             depth=1,
-            max_rounds=int(config.get("agents.delegate_max_rounds", 6)),
+            max_rounds=int(config.get("agents.delegate_max_rounds", 25)),
             memory=memory,
         )
+        child.partial_on_budget = True
+        child.token_budget = int(config.get("agents.delegate_token_budget", 60000))
     except ProfileError as exc:
         audit.record("delegate.refused", reason=str(exc), agent=name)
         text = f"Could not start sub-agent '{name}': {exc}"
@@ -260,10 +305,21 @@ def run_child(name: str, task: str, context: str, parent: Parent, did: str,
 
         report = (parse_report(turn.reply) if turn is not None else None) or None
         tools = list(turn.tool_calls) if turn is not None else []
+        plan = [dict(i) for i in (child.tool_state.get("plan") or [])]
+        budget_hit = bool(turn is not None and turn.budget_exhausted)
         if report is None or not report.summary:
-            fb = _fallback(turn) if turn is not None else Report(
-                outcome="failed", summary=f"The sub-agent crashed: {crashed}")
-            report = fb
+            if budget_hit:
+                report = _budget_report(turn, plan)
+            else:
+                report = _fallback(turn) if turn is not None else Report(
+                    outcome="failed", summary=f"The sub-agent crashed: {crashed}")
+        # The plan in the report is the one code holds. What is left is the
+        # model's list if it gave one, else whatever the plan says is unfinished.
+        report.plan = plan
+        if not report.left and plan and (budget_hit or report.outcome != "done"):
+            from . import plan as _plan
+
+            report.left = _plan.remaining(plan)
 
         # The outcome is decided here, from what actually happened.
         if state["declined"] or (memory.retried_declined and not base_retried):
@@ -285,6 +341,11 @@ def run_child(name: str, task: str, context: str, parent: Parent, did: str,
             why = "ran out of time" if stop.timed_out() and not stop.stopped_by_owner() \
                 else "was stopped by the owner"
             report.summary = f"{name} {why}. " + report.summary
+        elif budget_hit:
+            # Rounds or tokens ran out: whatever was done is reported, not lost.
+            report.outcome = "partial"
+            if "stopped before finishing" not in report.summary.lower():
+                report.summary = f"{name} {turn.budget_exhausted}. " + report.summary
         elif turn is not None and turn.error:
             report.outcome = "failed"
             report.summary = f"{turn.error} " + report.summary
