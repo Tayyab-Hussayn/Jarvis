@@ -36,3 +36,8 @@ Never run tests that act on the live desktop (close/kill/type); mock `platform/`
 - Phone skills resolve the phone *before* `enforce()` (so the confirmation names it) and pass its `device_id` to `call()`. Targets: `phone:<id>`, `phone:<id>:<command>`, `phone:implicit` when unnamed. Args and capability are checked before asking.
 - A phone timeout/disconnect after sending means "outcome unknown" — never report success; success text comes only from the phone's returned data.
 - Desktop `set_volume`/`open_url` and the phone tools name each other in their docstrings; keep it that way.
+
+## File tools (#212)
+- `files.py`: `read_file` is `cat -n`-style, clips lines at 2000 chars and ends with `continue with start_line=K`; it stores `(mtime_ns, size)` in `_context.tool_state["files_read"]` (key = resolved path). `edit_file`/`write_file`(overwrite) from an agent refuse without a fresh read; without `tool_state` (CLI) they behave as before. `edit_file`: `replace_all`, `edits=[{old_text,new_text,replace_all}]` all-or-nothing, diff in the result and in the confirm card; the diff is built with `SequenceMatcher(autojunk=False)` because `unified_diff` turns repeated lines into whole-file diffs.
+- `search_text`: rg through `shell.py` (`--json`), Python fallback; both go through the same eligibility filter and a stable sort so output is identical. rg rc 2 falls back. `find_files` sorts newest first and notes the cut.
+- `safety.check_read` (engine #211) is called directly (no getattr: the guard must not fail open) by `read_file` (enforced) and `search_text` (blocked/confirm-level files skipped and counted). `tool_state` lives on `Agent`; `tests/skills/test_file_tools_agent.py` drives it through `registry.dispatch`.

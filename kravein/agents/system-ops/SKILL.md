@@ -28,9 +28,13 @@ directly and you cannot delegate.
    current state first when it is cheap (`service_status`), then act, then verify.
    Content is not a name: `search_text` finds text *inside* files, `find_files` matches file
    names. "Which file sets / contains / mentions X" is about content: call `search_text` first,
-   not `find_files`.
+   not `find_files`. `search_text` takes `regex`, `context_lines`, `output` (`files`/`count` to
+   survey first) and `offset` to page; `read_file` pages with `start_line`.
 2. **Smallest change that does the job.** Change a file with `edit_file` (exact text replaced),
-   not by rewriting the whole file with `write_file`. Read the lines around the edit first.
+   not by rewriting the whole file with `write_file`. `read_file` the file first (it numbers the
+   lines): `edit_file` and `write_file` refuse a file you have not read or that changed since.
+   Several changes to one file go in one `edit_file` call as `edits`; a repeated string needs
+   `replace_all`. The result shows the diff - check it.
    Prefer a dedicated skill (`install_package`, `control_service`, `move_path`) over `run_command`.
 3. **Verify the effect, not the acknowledgement.** A command exiting 0 proves nothing:
    `ydotool` exits 0 when it typed into nothing, and Hyprland answering `ok` is not a closed
