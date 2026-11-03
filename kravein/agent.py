@@ -388,7 +388,7 @@ class Agent:
         from .agents import plan as _plan
 
         plan_note = _plan.context_note(getattr(self, "tool_state", {}).get("plan") or [])
-        tail = [{"role": "user", "content": n} for n in (note, extra, plan_note) if n]
+        tail = [{"role": "user", "content": n} for n in (note, plan_note, extra) if n]
         return [*self._history_messages(), *tail]
 
     def _history_messages(self) -> list[dict[str, Any]]:
