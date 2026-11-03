@@ -49,6 +49,9 @@ updated: 2026-10-23
 Everything in the owner queue is merged: Live voice as the Orchestrator #162, settings/TTS #168, evals #169 → SKILL fixes #171 (22-23/23), final niri release pass #173 (owner guide in README-LINUX.md), task_status cap + voice self-test #176, typing delegation #177. Niri laptop synced 87dc750, 1312 pass there, web-dist present.
 Owner-blocked: run `./install-linux.sh` on the niri laptop (kravein CLI), a working second provider there (Zen credit or `cline auth`), owner voice test, #120 overlap hunt, 2 old phone pairings. On hold: growth agent, Android redesign.
 
+## Status 2026-11-03
+Merged since: #197–#210 (Live 3.1 default, safe-command Always rules + 3-button card, kitty/app registry, inline interpreter code asks). **System-ops harness upgrade** (plan `kb/plans/system-ops-harness.md`, owner-approved): in flight engine #211 (secret-read guard + Agent.tool_state), skills #212 (file tools; grant system-ops/SKILL.md 48h), qa #213 (outcome eval + baseline before upgrade). Next: skills 1b shell, then engine phase 2.
+
 ## Blockers
 - None.
 
