@@ -30,5 +30,15 @@ Agent evals (live, one call per scenario, nothing executed — first tool choice
 `.venv/bin/python tools/eval_models.py --scenarios tools/eval/agents gemini:gemini-3.5-flash-lite`.
 Calls that error after retries are listed as NOT RUN and left out of the denominator.
 
+Outcome evals (live, full task, #213): `.venv/bin/python tools/eval_tasks.py --label NAME [--only id,id] [--list]`.
+Runs `delegate.run_child("system-ops", ...)` per scenario in `tools/eval/tasks/*.json` inside a throwaway HOME
+(the HOME is the fixture; env rebuilt from scratch, no display/dbus; only `llm` settings + provider keys-as-env
+reach the child). Confirmer is `deny_all` or `inside` (approves only cards wholly inside the sandbox, never CRITICAL).
+Checks are end-state (files, reply regex, cards, tools, outside paths, leak of secrets/keys). Writes
+`tools/eval/results/<date>-<label>.json`. Provider outage (429/5xx, "No LLM provider") = NOT RUN, retried after 35 s.
+Single samples at temperature 0.4 vary: two baseline runs differ by 1-2 scenarios, so compare before/after on the
+same scenarios and read the failed checks, not only the total. Baselines: `2026-11-03-baseline-pre-harness*.json` (commit 0b2921a).
+`.venv/bin/python -m pytest tools/test_eval_tasks.py -q   # 24 (scorer, fixture, confirmer, isolation; no provider)`
+
 ## Gotchas
 - Expected failures: `test_screen_processor.py`, `test_gesture_utils.py` (no cv2/mediapipe on 3.14), `test_kravein_connect*.py` (Windows tree).
