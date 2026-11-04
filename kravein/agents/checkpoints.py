@@ -651,6 +651,10 @@ def undo_changes(task: str = "", force: bool = False, _source: str = "local",
             danger=Danger.DESTRUCTIVE,
             reasons=_lines(changed, _VERB) + ["these files were changed after the run; "
                                               "their newer content will be lost"],
+            # Only the prompt keeps the model from passing force=True, so only a
+            # live owner click may answer this card: never auto-approve, never
+            # an Always rule, and no confirmer means denied.
+            owner_only=True,
         )
         enforce(
             verdict,

@@ -170,3 +170,69 @@ def test_ordinary_copies_and_moves_are_unaffected(env):
     use(ag, cards, "move_path", source=str(env / "b.txt"), destination=str(env / "c.txt"))
     assert text(env / "c.txt") == "A" and not (env / "b.txt").exists()
     assert not [c for c in cards.cards if "sent to the model" in c[1]]
+
+
+# -- undo_changes(force=True) is an owner-only card (orchestrator review) ----------------
+
+@pytest.fixture
+def auto_on(monkeypatch):
+    # Register the restore BEFORE enabling auto, so teardown puts back "off".
+    monkeypatch.setattr(safety, "_auto_until", None)
+    safety.set_confirmation_mode("auto", by="test")
+    yield
+    safety._auto_until = None
+
+
+def _run_with_newer_edit(env, only_changed=False):
+    """A run that changed a.txt (then the owner edited it again) and b.txt."""
+    ag, cards = agent(), Cards()
+    a, b = env / "a.txt", env / "b.txt"
+    a.write_text("a0")
+    read(ag, cards, a)
+    use(ag, cards, "write_file", path=str(a), content="a1")
+    if not only_changed:
+        b.write_text("b0")
+        read(ag, cards, b)
+        use(ag, cards, "write_file", path=str(b), content="b1")
+    a.write_text("owner's newer work")
+    return ag, a, b
+
+
+def test_the_verdict_flags():
+    assert not safety.Verdict(safety.Danger.DESTRUCTIVE).no_auto
+    assert safety.Verdict(safety.Danger.DESTRUCTIVE, secret_read=True).no_auto
+    assert safety.Verdict(safety.Danger.DESTRUCTIVE, owner_only=True).no_auto
+
+
+def test_auto_mode_answers_the_normal_undo_card_but_never_the_force_card(env, auto_on):
+    ag, a, b = _run_with_newer_edit(env)
+    asked = Cards()
+    out = use(ag, asked, "undo_changes", force=True)
+    assert text(a) == "a0" and text(b) == "b0"
+    assert [c[0] for c in asked.cards] == [asked.cards[0][0]]        # exactly one card reached the owner
+    assert "over newer changes" in asked.cards[0][0] and str(a) in asked.cards[0][1]
+    assert "restored 2 file(s)" in out
+
+
+def test_a_declined_force_card_keeps_the_newer_work_in_auto_mode(env, auto_on):
+    ag, a, b = _run_with_newer_edit(env)
+    out = use(ag, Cards(answer=False), "undo_changes", force=True)
+    assert text(a) == "owner's newer work" and "Cancelled" in out
+    assert text(b) == "b0"                                           # the ordinary part was auto-approved
+
+
+def test_the_force_card_is_denied_with_no_confirmer_even_in_auto_mode(env, auto_on):
+    ag, a, b = _run_with_newer_edit(env, only_changed=True)
+    with safety.confirmer_scope(None, principal="owner-a"):
+        out = registry.dispatch("undo_changes", {"force": True}, context=ag, source="web")
+    assert text(a) == "owner's newer work" and "needs confirmation" in out
+
+
+def test_an_always_rule_cannot_answer_an_owner_only_card(env):
+    safety.add_always_rule("some signature", "owner-a")
+    v = safety.Verdict(safety.Danger.DESTRUCTIVE, reasons=["overwrites newer work"],
+                       owner_only=True, signature="some signature")
+    asked = Cards()
+    with safety.confirmer_scope(asked, principal="owner-a"):
+        safety.enforce(v, "overwrite", skill="undo_changes", source="web")
+    assert asked.cards and safety.always_offer() == {"allowed": False, "signature": ""}
