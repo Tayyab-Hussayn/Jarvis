@@ -24,6 +24,7 @@ from typing import Literal
 from pathlib import Path
 
 from .. import config
+from ..agents import checkpoints
 from ..platform import shell
 from ..registry import skill
 from . import _merge
@@ -176,7 +177,8 @@ def show_in_file_manager(path: str) -> str:
 
 
 @skill(category="files", danger=Danger.MODERATE)
-def rename_path(path: str, new_name: str, _source: str = "local", _confirm: bool = False) -> str:
+def rename_path(path: str, new_name: str, _source: str = "local", _confirm: bool = False,
+                _context=None) -> str:
     """Rename a file or folder, keeping it in the same directory.
 
     This changes the file on disk; an open file manager will reflect it.
@@ -210,10 +212,11 @@ def rename_path(path: str, new_name: str, _source: str = "local", _confirm: bool
     )
 
     try:
-        target.rename(destination)
+        with checkpoints.track(_context, target, destination, kind="rename") as ck:
+            target.rename(destination)
     except OSError as exc:
         return f"Could not rename {target.name}: {exc}"
-    return f"Renamed {target.name} to {clean} in {target.parent}."
+    return f"Renamed {target.name} to {clean} in {target.parent}." + ck.notice
 
 
 def file_manager_status() -> str:

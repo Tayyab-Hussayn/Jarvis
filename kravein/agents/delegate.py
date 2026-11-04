@@ -105,6 +105,8 @@ class Report:
     concerns: list[str] = field(default_factory=list)
     improvements: list[str] = field(default_factory=list)
     proposals: list[dict[str, str]] = field(default_factory=list)
+    # "<run id> (N file(s))" when file changes of this run can be undone (#223).
+    undo: str = ""
 
 
 _HEAD = re.compile(
@@ -160,6 +162,9 @@ def render(report: Report, *, agent: str, delegation: str, tools: list[str], lim
         from . import plan as _plan
 
         parts.append(_plan.render(report.plan))
+    if report.undo:
+        parts.append(f"Undo available: {report.undo} - undo_changes(task=\"{report.undo.split()[0]}\") "
+                     "restores the file changes only (not packages or services).")
     filed = [f"#{p['id']}: {p['title']}" for p in report.proposals]
     # Concerns and ideas go before Changed/Evidence: the length cap cuts from
     # the end, and these are what the Orchestrator must pass on to the owner.
@@ -296,6 +301,11 @@ def run_child(name: str, task: str, context: str, parent: Parent, did: str,
             max_rounds=int(config.get("agents.delegate_max_rounds", 25)),
             memory=memory,
         )
+        # File checkpoints are keyed by this run and by the delegating owner.
+        # `run_principal`, not `principal`: setting that would make the child
+        # eligible for "Always" rules, which sub-agents must not be.
+        child.run_id = did
+        child.run_principal = parent.principal
         child.partial_on_budget = True
         child.token_budget = int(config.get("agents.delegate_token_budget", 60000))
     except ProfileError as exc:
@@ -337,6 +347,14 @@ def run_child(name: str, task: str, context: str, parent: Parent, did: str,
         # Likewise the proposals it filed: code's list, so the Orchestrator can
         # tell the owner exactly what is waiting for them.
         report.proposals = [dict(p) for p in (child.tool_state.get("proposals") or [])]
+        try:
+            from . import checkpoints as _ck
+
+            n = _ck.change_count(_ck.principal_of(child), did)
+        except Exception:
+            n = 0
+        if n:
+            report.undo = f"{did} ({n} file(s))"
         if not report.left and plan and (budget_hit or report.outcome != "done"):
             from . import plan as _plan
 

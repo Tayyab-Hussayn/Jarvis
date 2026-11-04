@@ -704,6 +704,15 @@ def _shell_tokens(command: str) -> list[str] | None:
         return None
 
 
+def shell_tokens(command: str) -> list[str] | None:
+    """Public form of the classifier's tokenizer, for skills that must read a
+    command the same way ``classify_command`` does (``cd`` tracking in
+    ``run_command``). Words and operators (``;`` ``&&`` ``|`` ``>`` ...), or None
+    when the command is not plainly parseable (``$VAR``, backticks, newlines,
+    unbalanced quotes) - treat None as "cannot tell", never as "safe"."""
+    return _shell_tokens(command)
+
+
 def _segments(command: str) -> list[tuple[list[str], list[tuple[str, str]]]] | None:
     """`[(argv, [(redirect_op, target), ...]), ...]`, one per simple command."""
     tokens = _shell_tokens(command)

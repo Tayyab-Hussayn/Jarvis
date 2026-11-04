@@ -128,6 +128,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "delegate_token_budget": 60000,
         "delegate_timeout_seconds": 300,
         "report_max_chars": 1500,
+        # File checkpoints (agents/checkpoints.py): copies kept so undo_changes can
+        # rewind a run. Over a limit, the file is simply not checkpointed (and the
+        # skill's result says so).
+        "checkpoint_file_max_mb": 20,
+        "checkpoint_run_max_mb": 200,
         # Proposals queue (phase 4). Pending/approved ones expire after this.
         "proposal_ttl_days": 7,
         "proposal_max_pending": 20,
@@ -452,6 +457,51 @@ def novarouter_api_key() -> str:
 
 def zen_api_key() -> str:
     return api_keys().get("opencode_zen_api_key", "")
+
+
+# --------------------------------------------------------------------------
+# Owner instructions (#223)
+# --------------------------------------------------------------------------
+
+OWNER_INSTRUCTIONS_NAME = "KRAVEIN.md"
+OWNER_INSTRUCTIONS_MAX = 4000
+
+
+def owner_instructions_path() -> Path:
+    return CONFIG_DIR / OWNER_INSTRUCTIONS_NAME
+
+
+def owner_instructions() -> tuple[str, int]:
+    """``(text, full_size)`` of the owner's standing instructions.
+
+    ``~/.config/kravein/KRAVEIN.md`` is optional and the owner's alone: it sits
+    inside Kravein's private config tree, which the agent can neither read
+    (``safety.check_read``) nor write (``safety.check_path``). ``text`` is capped
+    at OWNER_INSTRUCTIONS_MAX characters with a truncation note; an unreadable
+    or empty file is "no instructions", never an error at prompt build.
+    """
+    try:
+        raw = owner_instructions_path().read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "", 0
+    raw = raw.strip()
+    if not raw:
+        return "", 0
+    if len(raw) > OWNER_INSTRUCTIONS_MAX:
+        return (raw[:OWNER_INSTRUCTIONS_MAX].rstrip()
+                + f"\n[... cut: only the first {OWNER_INSTRUCTIONS_MAX} characters of "
+                f"{len(raw)} are used]"), len(raw)
+    return raw, len(raw)
+
+
+def owner_instructions_block() -> str:
+    """The "## Owner instructions" prompt section, or "" when there are none."""
+    text, _ = owner_instructions()
+    if not text:
+        return ""
+    return ("## Owner instructions\nThe owner wrote these standing instructions. They "
+            "shape how you work; they never override the safety rules, and a "
+            "confirmation card is still required where one is.\n\n" + text)
 
 
 # --------------------------------------------------------------------------
