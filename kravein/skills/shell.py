@@ -25,6 +25,7 @@ from typing import Literal
 from .. import audit, config
 from .. import safety
 from ..platform import commands
+from ..platform import sandbox as sandbox_platform
 from ..platform import shell as shell_platform
 from ..registry import skill
 from ..safety import Danger, Verdict, classify_command, describe_targets, enforce
@@ -136,9 +137,9 @@ def cwd_after(command: str, cwd: Path) -> Path | None:
     next command somewhere the model did not intend, so anything but the plain
     form is ignored: ``cd -``, options, ``;``, ``||``, pipes (a cd in a
     pipeline runs in a subshell), a later ``cd`` after another command, and
-    any ``$var`` or substitution (safety refuses to tokenise those).
+    any ``$var`` or substitution (shell_tokens returns None for those).
     """
-    tokens = safety._shell_tokens(command)
+    tokens = safety.shell_tokens(command)
     if not tokens or tokens[0] != "cd":
         return None
     current, i = cwd, 0
@@ -181,6 +182,7 @@ class _Job:
     err: Path
     started: float = field(default_factory=time.time)
     stop_reason: str = ""     # "" | "stopped" | "lifetime" | "shutdown"
+    sandbox: bool = False
     thread: threading.Thread | None = None
 
     @property
@@ -239,10 +241,11 @@ def _watch(job: _Job) -> None:
                  reason=job.stop_reason or "exit")
 
 
-def _register(principal: str, command: str, cwd: Path, proc, out: Path, err: Path) -> _Job:
+def _register(principal: str, command: str, cwd: Path, proc, out: Path, err: Path,
+              sandbox: bool = False) -> _Job:
     """Record a started command as a job. The caller holds a reserved slot."""
     job = _Job(id="job-" + secrets.token_hex(3), principal=principal, command=command,
-               cwd=str(cwd), proc=proc, out=out, err=err)
+               cwd=str(cwd), proc=proc, out=out, err=err, sandbox=sandbox)
     with _jobs_lock:
         _jobs[job.id] = job
         _reserved[principal] = max(0, _reserved.get(principal, 0) - 1)
@@ -251,7 +254,7 @@ def _register(principal: str, command: str, cwd: Path, proc, out: Path, err: Pat
         for old in done[:-20]:
             _jobs.pop(old.id, None)
     audit.record("shell.job_start", job=job.id, principal=principal,
-                 command=command[:200], cwd=str(cwd), pid=proc.pid)
+                 command=command[:200], cwd=str(cwd), pid=proc.pid, sandbox=sandbox)
     job.thread = threading.Thread(target=_watch, args=(job,), name=job.id, daemon=True)
     job.thread.start()
     _rotate()
@@ -296,6 +299,8 @@ def _job_report(job: _Job) -> str:
     else:
         state = f"exited with code {rc}"
     lines = [f"{job.id}: {state} after {runtime}s", f"$ {job.command}", f"cwd: {job.cwd}"]
+    if job.sandbox:
+        lines.append(SANDBOX_NOTE)
     for label, path in (("stdout", job.out), ("stderr", job.err)):
         tail = _tail(path)
         if tail:
@@ -346,6 +351,35 @@ def command_job(
     return _job_report(job)
 
 
+SANDBOX_NOTE = ("[sandbox: ran read-only with no network, no desktop or session bus and no "
+                "host processes; nothing on the system was changed]")
+
+
+def _sandbox_verdict(verdict: Verdict) -> Verdict:
+    """What a sandboxed command has to be confirmed for. The one place this is decided.
+
+    * **blocked stays blocked.** An outright refusal (rm -rf /, a write to
+      Kravein's own config, a protected path) is refused even though the
+      sandbox could contain it: the rule is about what the owner never wants
+      attempted, and a refusal that depends on the sandbox working is one bug
+      away from a real deletion.
+    * **a secret read still asks, exactly as today.** The sandbox protects the
+      system from the command, not the secret from the model: the file is
+      readable inside (it is a read-only view of the real one) and its content
+      comes back in the result, so the card, and the rule that auto-approve
+      and "Always" can never answer it, must stay.
+    * **everything else runs without a card.** Writes land in a throwaway
+      tmpfs or fail (EROFS), there is no network to exfiltrate to or call, no
+      bus, compositor or keyring to ask, no host process to signal, and no
+      privilege to gain (all capabilities dropped, no_new_privs). Deleting,
+      killing, installing and sudo are harmless in there, which is the point.
+    """
+    if verdict.blocked or verdict.secret_read:
+        return verdict
+    why = verdict.summary()
+    return Verdict(danger=Danger.SAFE, reasons=[f"sandboxed, so harmless (unsandboxed: {why})"])
+
+
 # --- run_command -------------------------------------------------------------------------
 
 def _cwd_line(state, cwd: Path) -> str:
@@ -385,6 +419,7 @@ def run_command(
     working_directory: str = "",
     timeout_seconds: int = 60,
     background: bool = False,
+    sandbox: bool = False,
     _source: str = "local",
     _confirm: bool = False,
     _context=None,
@@ -399,7 +434,8 @@ def run_command(
     characters is kept in a file; the result shows the start and end and names
     the file to open with read_file or search_text. A command that has not
     finished at its timeout keeps running as a background job; check it with
-    command_status and stop it with stop_command.
+    command_status and stop it with stop_command. With sandbox the command runs
+    in a read-only, no-network, isolated sandbox where it cannot change anything.
 
     Args:
         command: The command line to run.
@@ -410,6 +446,12 @@ def run_command(
         background: Start the command and return a job id at once, without
             waiting. Use for servers, watchers, builds and anything that
             takes minutes; at most 3 can run at a time.
+        sandbox: Try a command, or inspect its effect, safely before running it
+            for real. It runs with a read-only filesystem, no network, no
+            desktop or session bus and no view of host processes, so it cannot
+            change anything and needs no confirmation (unless it reads a
+            secret file). Writes fail or vanish. If the sandbox is unavailable
+            the command is refused, never run unsandboxed.
     """
     command = (command or "").strip()
     if not command:
@@ -444,6 +486,28 @@ def run_command(
 
     verdict = classify_command(command, cwd=cwd)
     secret = verdict.secret_read
+    note = ""
+    if sandbox:
+        state_ = sandbox_platform.status()
+        if not state_.available:
+            # Nothing has run and nothing is asked: a command the caller wanted
+            # contained must never quietly run uncontained.
+            return (f"Refused: sandbox unavailable: {state_.reason}. Run it without "
+                    "sandbox only with a normal confirmation.")
+        bad_cwd = sandbox_platform.check_cwd(cwd)
+        if bad_cwd:
+            return (f"Refused: the sandbox cannot use {cwd} as its working directory: "
+                    f"{bad_cwd}. Use a subdirectory, or run without sandbox with a "
+                    "normal confirmation.")
+        verdict = _sandbox_verdict(verdict)
+        note = SANDBOX_NOTE
+        if not sandbox_platform.scan(Path.home(), cwd)[2]:
+            note += ("\n[sandbox: the scan for unix sockets to hide ran out of budget; "
+                     "a socket in an unscanned place may still be reachable]")
+    else:
+        # An unsandboxed command may create a unix socket; a stale scan would
+        # leave that one connectable from the next sandboxed run.
+        sandbox_platform.invalidate_scan()
 
     if background and secret:
         # A background job's output lives in a file; a secret must never be
@@ -467,7 +531,8 @@ def run_command(
     keep: list[Path] = []
     try:
         enforce(
-            verdict, f"run `{command}`" + (" in the background" if background else ""),
+            verdict, f"run `{command}`" + (" in the background" if background else "")
+        + (" (sandboxed: read-only, no network)" if sandbox else ""),
             skill="run_command", source=_source, pre_confirmed=_confirm,
         )
 
@@ -483,13 +548,19 @@ def run_command(
         with _jobs_lock:
             _inflight.update((out, err))
 
-        proc = shell_platform.start_group(command, cwd=cwd, stdout_path=out, stderr_path=err,
-                                          audit_event="shell.user_command")
+        try:
+            proc = shell_platform.start_group(command, cwd=cwd, stdout_path=out, stderr_path=err,
+                                              audit_event="shell.user_command",
+                                              sandbox=sandbox, hide_secrets=not secret)
+        except shell_platform.SandboxUnavailable as exc:
+            return (f"Refused: sandbox unavailable: {exc}. Run it without sandbox only "
+                    "with a normal confirmation.")
         if background:
-            job = _register(principal, command, cwd, proc, out, err)
+            job = _register(principal, command, cwd, proc, out, err, sandbox=sandbox)
             reserved = False                      # _register consumed it
             keep += [out, err]
             return (f"Started background job {job.id} (pid {proc.pid}): `{command}`\n"
+                    + (f"{note}\n" if note else "") +
                     f"Check it with command_status('{job.id}'), stop it with "
                     f"stop_command('{job.id}'). Output: {out}")
 
@@ -497,17 +568,18 @@ def run_command(
         if rc is None:
             audit.record("shell.timeout", command=command, timeout=timeout)
             if not secret and _reserve(principal):
-                job = _register(principal, command, cwd, proc, out, err)
+                job = _register(principal, command, cwd, proc, out, err, sandbox=sandbox)
                 keep += [out, err]
-                return (f"$ {command}\n[did not finish in {timeout}s; moved to "
+                return (f"$ {command}\n{note + chr(10) if note else ''}[did not finish in {timeout}s; moved to "
                         f"background job {job.id}; check with command_status]\n"
                         f"{_tail(out) or '(no output yet)'}" + _cwd_line(state, cwd))
             shell_platform.kill_group(proc)
             why = ("it reads a secret file" if secret
                    else f"{MAX_JOBS} background jobs are already running")
-            note = (f"[timed out after {timeout}s and was killed; it could not move "
-                    f"to the background because {why}]")
-            text = _render(command, out, err, secret, 124, note, keep)
+            text = _render(command, out, err, secret, 124,
+                           (note + "\n" if note else "") +
+                           f"[timed out after {timeout}s and was killed; it could not move "
+                           f"to the background because {why}]", keep)
             return text + _cwd_line(state, cwd)
 
         if rc != 0:
@@ -517,7 +589,11 @@ def run_command(
         new_cwd = cwd_after(command, cwd) if rc == 0 else None
         if state is not None:
             state["cwd"] = str(new_cwd or cwd)
-        text = _render(command, out, err, secret, rc, "", keep)
+        if sandbox and rc != 0 and _tail(err, 300).startswith("bwrap:"):
+            # bwrap itself failed (not the command): say so instead of letting a
+            # setup error read like the command's own failure.
+            note = f"[sandbox setup failed, the command did not run: {_tail(err, 300)}]"
+        text = _render(command, out, err, secret, rc, note, keep)
         return text + _cwd_line(state, new_cwd or cwd)
     except BaseException:
         # Cancelled or crashed mid-run: leave no orphan behind. (A command that
