@@ -769,6 +769,9 @@ class LiveSession:
                 environment=detect.environment().summary(),
                 home=config.HOME,
             )
+            owner = config.owner_instructions_block()
+            if owner:
+                prompt += "\n\n" + owner
             memory = context_for_prompt()
             if memory:
                 prompt += "\n\n" + memory

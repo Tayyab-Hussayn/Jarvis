@@ -885,6 +885,16 @@ def doctor() -> int:
             colour = red if ("NOT FOUND" in line or "NOT SET" in line) else dim
             print(colour(f"  {line}"))
 
+    print(bold("\nOwner instructions"))
+    path = config.owner_instructions_path()
+    _, size = config.owner_instructions()
+    if size:
+        cut = " (cut: only the first %d are used)" % config.OWNER_INSTRUCTIONS_MAX \
+            if size > config.OWNER_INSTRUCTIONS_MAX else ""
+        print(green(f"  {path}: {size} characters{cut}"))
+    else:
+        print(dim(f"  none ({path} does not exist or is empty; optional)"))
+
     print(bold("\nSkills"))
     skills = registry.all_skills()
     unavailable = []

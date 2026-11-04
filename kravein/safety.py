@@ -76,6 +76,15 @@ class Verdict:
     # context (#211). enforce() never lets auto-approve or an Always rule answer
     # such a card: only a live owner click may.
     secret_read: bool = False
+    # Generalised (#223): a card only a live owner click may answer, whatever the
+    # reason - e.g. undo_changes(force=True), which overwrites the owner's newer
+    # work and is otherwise stopped only by its prompt. Same rule as secret_read.
+    owner_only: bool = False
+
+    @property
+    def no_auto(self) -> bool:
+        """True when neither auto-approve nor an "Always" rule may answer this."""
+        return self.secret_read or self.owner_only
 
     @property
     def needs_confirmation(self) -> bool:
@@ -702,6 +711,15 @@ def _shell_tokens(command: str) -> list[str] | None:
         return list(lex)
     except ValueError:
         return None
+
+
+def shell_tokens(command: str) -> list[str] | None:
+    """Public form of the classifier's tokenizer, for skills that must read a
+    command the same way ``classify_command`` does (``cd`` tracking in
+    ``run_command``). Words and operators (``;`` ``&&`` ``|`` ``>`` ...), or None
+    when the command is not plainly parseable (``$VAR``, backticks, newlines,
+    unbalanced quotes) - treat None as "cannot tell", never as "safe"."""
+    return _shell_tokens(command)
 
 
 def _segments(command: str) -> list[tuple[list[str], list[tuple[str, str]]]] | None:
@@ -2177,7 +2195,7 @@ def enforce(
     principal = _current_principal()
     rule_ok = bool(
         verdict.signature
-        and not verdict.secret_read
+        and not verdict.no_auto
         and verdict.danger == Danger.DESTRUCTIVE
         and principal
         and source in AUTO_SOURCES
@@ -2201,7 +2219,7 @@ def enforce(
     # its source says, and unattended must keep refusing.
     if (
         policy["mode"] == "auto"
-        and not verdict.secret_read
+        and not verdict.no_auto
         and verdict.danger == Danger.DESTRUCTIVE
         and source in AUTO_SOURCES
         and confirmer is not _deny

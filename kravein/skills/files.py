@@ -17,6 +17,7 @@ from typing import Literal
 from .. import config
 from ..platform import apps, shell
 from .. import safety
+from ..agents import checkpoints
 from ..registry import skill
 from ..safety import (Danger, Verdict, check_delete, check_path,
                       describe_targets, enforce)
@@ -200,6 +201,28 @@ def _stamp(target: Path) -> tuple[int, int] | None:
     return (st.st_mtime_ns, st.st_size)
 
 
+def _fold_source(verdict: Verdict, src: Path, *, moves: bool) -> None:
+    """Hold the *source* of a copy or move to the read rules too (#223 review).
+
+    `read_file` refuses Kravein's own config and asks for secrets, but
+    `copy_path` only looked at its destination: copying `api_keys.json` into the
+    workspace and reading the copy got around it, and `move_path` could carry
+    the owner's `KRAVEIN.md` out of the private tree. A copy reads the source's
+    content and a move also removes it, so both go through `check_read`, and a
+    move through `check_path(write=True)` as well.
+    """
+    extra = [safety.check_read(src)]
+    if moves:
+        extra.append(check_path(src, write=True))
+    for other in extra:
+        if other.blocked and not verdict.blocked:
+            verdict.blocked, verdict.block_reason = True, other.block_reason
+            verdict.danger = Danger.CRITICAL
+        verdict.danger = max(verdict.danger, other.danger)
+        verdict.reasons += [r for r in other.reasons if r not in verdict.reasons]
+        verdict.secret_read = verdict.secret_read or other.secret_read
+
+
 def _record_read(context, target: Path) -> None:
     state = _tool_state(context)
     stamp = _stamp(target)
@@ -329,9 +352,12 @@ def write_file(
     )
 
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("a" if append else "w", encoding="utf-8") as handle:
-            handle.write(content)
+        # Snapshot first, so undo_changes can put the old content (or "no such
+        # file") back; a checkpoint problem is reported, never a blocker.
+        with checkpoints.track(_context, target, kind="write") as ck:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("a" if append else "w", encoding="utf-8") as handle:
+                handle.write(content)
     except PermissionError:
         return f"Permission denied: {target}"
     except OSError as exc:
@@ -340,7 +366,7 @@ def write_file(
     if not append:
         _record_read(_context, safety.resolve_target(target))
     action = "Appended to" if append else "Wrote"
-    return f"{action} {target} ({len(content):,} chars)."
+    return f"{action} {target} ({len(content):,} chars)." + ck.notice
 
 
 _EDIT_MAX_BYTES = 5 * 1024 * 1024
@@ -519,11 +545,12 @@ def edit_file(
 
     tmp = target.with_name(f".{target.name}.kravein-edit")
     try:
-        with tmp.open("w", encoding="utf-8", newline="") as handle:
-            handle.write(updated)
-        shutil.copymode(target, tmp)
-        # Atomic swap: a crash mid-write must not leave a half-written file.
-        os.replace(tmp, target)
+        with checkpoints.track(_context, target, kind="edit") as ck:
+            with tmp.open("w", encoding="utf-8", newline="") as handle:
+                handle.write(updated)
+            shutil.copymode(target, tmp)
+            # Atomic swap: a crash mid-write must not leave a half-written file.
+            os.replace(tmp, target)
     except PermissionError:
         tmp.unlink(missing_ok=True)
         return f"Permission denied: {target}"
@@ -533,7 +560,7 @@ def edit_file(
     # Our own write changed mtime; refresh so a follow-up edit needs no re-read.
     _record_read(_context, target)
     return (f"Edited {target} at line {first_line} ({replacements} replacement(s), "
-            f"{len(updated) - len(text):+,} chars).\n{diff}")
+            f"{len(updated) - len(text):+,} chars).\n{diff}" + ck.notice)
 
 
 _SEARCH_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -814,6 +841,7 @@ def delete_path(
     permanent: bool = False,
     _source: str = "local",
     _confirm: bool = False,
+    _context=None,
 ) -> str:
     """Delete a file or directory. Moves it to the trash unless told otherwise.
 
@@ -840,8 +868,9 @@ def delete_path(
         try:
             import send2trash
 
-            send2trash.send2trash(str(target))
-            return f"Moved to trash: {target}"
+            with checkpoints.track(_context, target, kind="delete") as ck:
+                send2trash.send2trash(str(target))
+            return f"Moved to trash: {target}" + ck.notice
         except ImportError:
             return (
                 f"send2trash is not installed, so {target} cannot be trashed safely.\n"
@@ -858,16 +887,17 @@ def delete_path(
             )
 
     try:
-        if target.is_dir() and not target.is_symlink():
-            shutil.rmtree(target)
-        else:
-            target.unlink()
+        with checkpoints.track(_context, target, kind="delete") as ck:
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
     except PermissionError:
         return f"Permission denied: {target}"
     except OSError as exc:
         return f"Could not delete {target}: {exc}"
 
-    return f"Permanently deleted: {target}"
+    return f"Permanently deleted: {target}" + ck.notice
 
 
 @skill(category="files", danger=Danger.DESTRUCTIVE)
@@ -876,6 +906,7 @@ def move_path(
     destination: str,
     _source: str = "local",
     _confirm: bool = False,
+    _context=None,
 ) -> str:
     """Move or rename a file or directory.
 
@@ -895,6 +926,7 @@ def move_path(
     verdict = check_path(dst, write=True)
     verdict.danger = max(verdict.danger, Danger.DESTRUCTIVE)
     verdict.reasons.append(f"moves {src} to {dst}")
+    _fold_source(verdict, src, moves=True)
     if dst.exists():
         verdict.danger = Danger.CRITICAL
         verdict.reasons.append(f"{dst} already exists and would be replaced")
@@ -903,17 +935,21 @@ def move_path(
             skill="move_path", source=_source, pre_confirmed=_confirm)
 
     try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dst))
+        # Both ends: the source (restored on undo) and the destination (removed,
+        # or put back if the move replaced something).
+        with checkpoints.track(_context, src, dst, kind="move") as ck:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
     except PermissionError:
         return f"Permission denied moving {src}"
     except OSError as exc:
         return f"Could not move {src}: {exc}"
-    return f"Moved {src} → {dst}"
+    return f"Moved {src} → {dst}" + ck.notice
 
 
 @skill(category="files", danger=Danger.MODERATE)
-def copy_path(source: str, destination: str, _source: str = "local", _confirm: bool = False) -> str:
+def copy_path(source: str, destination: str, _source: str = "local", _confirm: bool = False,
+              _context=None) -> str:
     """Copy a file or directory.
 
     Args:
@@ -929,6 +965,7 @@ def copy_path(source: str, destination: str, _source: str = "local", _confirm: b
         dst = dst / src.name
 
     verdict = check_path(dst, write=True)
+    _fold_source(verdict, src, moves=False)
     if dst.exists():
         verdict.danger = max(verdict.danger, Danger.DESTRUCTIVE)
         verdict.reasons.append(f"{dst} already exists and would be overwritten")
@@ -937,14 +974,17 @@ def copy_path(source: str, destination: str, _source: str = "local", _confirm: b
             skill="copy_path", source=_source, pre_confirmed=_confirm)
 
     try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.is_dir():
-            shutil.copytree(src, dst, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src, dst)
+        # The destination is what changes: absent (removed on undo) or
+        # overwritten (restored on undo).
+        with checkpoints.track(_context, dst, kind="copy") as ck:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
     except OSError as exc:
         return f"Could not copy {src}: {exc}"
-    return f"Copied {src} → {dst}"
+    return f"Copied {src} → {dst}" + ck.notice
 
 
 _FIND_SCAN_CAP = 5000
@@ -1086,6 +1126,7 @@ def organize_directory(
     mode: str = "by_type",
     _source: str = "local",
     _confirm: bool = False,
+    _context=None,
 ) -> str:
     """Sort loose files in a directory into subfolders.
 
@@ -1116,29 +1157,37 @@ def organize_directory(
             skill="organize_directory", source=_source, pre_confirmed=_confirm)
 
     moved, skipped = [], []
-    for item in loose:
-        if mode == "by_date":
-            folder = datetime.fromtimestamp(item.stat().st_mtime).strftime("%Y-%m")
-        else:
-            suffix = item.suffix.lower()
-            folder = "Others"
-            for category, extensions in FILE_TYPE_MAP.items():
-                if suffix in extensions:
-                    folder = category
-                    break
+    # Only the loose files are snapshotted (not the whole directory tree); the
+    # folders and moved files the run creates are recorded one by one so that
+    # undo_changes can remove them and put every file back.
+    with checkpoints.track(_context, *loose, kind="organize") as ck:
+        for item in loose:
+            if mode == "by_date":
+                folder = datetime.fromtimestamp(item.stat().st_mtime).strftime("%Y-%m")
+            else:
+                suffix = item.suffix.lower()
+                folder = "Others"
+                for category, extensions in FILE_TYPE_MAP.items():
+                    if suffix in extensions:
+                        folder = category
+                        break
 
-        destination = root / folder
-        destination.mkdir(exist_ok=True)
-        new_path = destination / item.name
+            destination = root / folder
+            fresh = not destination.exists()
+            destination.mkdir(exist_ok=True)
+            if fresh:
+                ck.created(destination)
+            new_path = destination / item.name
 
-        if new_path.exists():
-            skipped.append(item.name)
-            continue
-        try:
-            shutil.move(str(item), str(new_path))
-            moved.append(f"{item.name} → {folder}/")
-        except OSError as exc:
-            skipped.append(f"{item.name} ({exc})")
+            if new_path.exists():
+                skipped.append(item.name)
+                continue
+            try:
+                shutil.move(str(item), str(new_path))
+                ck.created(new_path)
+                moved.append(f"{item.name} → {folder}/")
+            except OSError as exc:
+                skipped.append(f"{item.name} ({exc})")
 
     out = [f"Organised {root} ({mode}): {len(moved)} file(s) moved."]
     out += [f"  {m}" for m in moved[:15]]
@@ -1146,7 +1195,7 @@ def organize_directory(
         out.append(f"  … and {len(moved) - 15} more")
     if skipped:
         out.append(f"{len(skipped)} skipped (name conflict or error).")
-    return "\n".join(out)
+    return "\n".join(out) + ck.notice
 
 
 def open_path(path: str) -> str:

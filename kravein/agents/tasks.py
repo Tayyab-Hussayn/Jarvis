@@ -552,7 +552,15 @@ class TaskManager:
                                  f"{_elapsed(now - (t.started or t.created))} · {quoted}")
                 else:
                     took = _elapsed((t.ended or now) - (t.started or t.created))
-                    lines.append(f"{head} {t.status} · {took} · {_clip(t.summary, 90)}")
+                    line = f"{head} {t.status} · {took} · {_clip(t.summary, 90)}"
+                    try:
+                        from . import checkpoints
+
+                        if checkpoints.change_count(principal, t.id):
+                            line += f" · undo available: {t.id}"
+                    except Exception:
+                        pass
+                    lines.append(line)
         if not lines:
             return f"No task {task_id!r}." if task_id else "No background tasks."
         out, used = [], 0

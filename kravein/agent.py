@@ -178,7 +178,9 @@ class Agent:
     _memory: "TurnMemory | None" = None  # shared denial memory (a sub-agent shares its parent's)
     _stamp: float = 0.0                 # store stamp at our last load/save (see _refresh)
     principal: str = ""                 # who owns this conversation (set by the web server)
-    partial_on_budget: bool = False     # delegated run: out of rounds/tokens = a partial report, not an error (#217)
+    run_id: str = ""                    # delegated child: its delegation/task id (checkpoints are keyed by it)
+    run_principal: str = ""             # delegated child: the delegating owner's principal (NOT `principal`)
+    partial_on_budget: bool = False    # delegated run: out of rounds/tokens = a partial report, not an error (#217)
     token_budget: int = 0               # 0 = none; else the estimated tokens a run may add to its transcript
     delegate_wait: bool = False         # force blocking delegate (an approved proposal's turn needs the real outcome)
     _turn_allowed: "frozenset[str] | None" = None  # this ask()'s own tool narrowing (report follow-up)
@@ -346,6 +348,10 @@ class Agent:
             )
             if self.profile.instructions:
                 prompt += "\n\n" + self.profile.instructions
+
+        owner = config.owner_instructions_block()
+        if owner:
+            prompt += "\n\n" + owner
 
         if self.extra_instructions:
             prompt += "\n\n" + self.extra_instructions

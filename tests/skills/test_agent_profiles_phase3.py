@@ -41,6 +41,8 @@ ORCHESTRATOR_TOOLS = (
     "propose", "decide_proposal",
     # Background tasks (#158): progress and cancel for `delegate`.
     "task_status", "cancel_task",
+    # File checkpoints (#223): rewind a task's file changes, on the owner's card.
+    "undo_changes",
 )
 
 
