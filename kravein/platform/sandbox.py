@@ -249,6 +249,15 @@ def build_argv(command: str, cwd: Path, tag: str, binary: str | None = None,
     """
     binary = binary or status().path or "bwrap"
     home = Path(os.environ.get("HOME") or Path.home())
+    # Kravein's own dirs are hidden BEFORE the cwd is bound back, so a cwd inside
+    # them (the default workspace lives under DATA_DIR) is bound on top of the
+    # tmpfs and only that subtree shows. Skipping the mask for such a cwd (the
+    # earlier string-prefix test) left memory.json etc. readable to opaque code.
+    kdirs: list[str] = []
+    if hide_secrets:
+        for d in (config.CONFIG_DIR, config.STATE_DIR, config.DATA_DIR):
+            if d.is_dir() and not d.is_symlink():
+                kdirs += ["--size", str(_RUN_BYTES), "--tmpfs", str(d)]
     argv = [
         binary,
         # net, ipc, pid, uts, user and cgroup (where the kernel has them): the
@@ -270,6 +279,7 @@ def build_argv(command: str, cwd: Path, tag: str, binary: str | None = None,
         # Throwaway writable space, size-capped. /tmp covers X11, tmux and
         # ssh-agent sockets.
         "--size", str(_TMP_BYTES), "--tmpfs", "/tmp",
+        *kdirs,
         "--ro-bind", str(cwd), str(cwd),
         "--chdir", str(cwd),
         # /run covers /run/user/<uid> (Wayland, the session bus, the keyring and
@@ -286,15 +296,16 @@ def build_argv(command: str, cwd: Path, tag: str, binary: str | None = None,
         # goes to the model. Known secret locations simply are not there.
         for rel in _SECRET_DIRS:
             d = home / rel
-            if d.is_dir() and not d.is_symlink():
+            # A dotfile manager (stow, chezmoi) makes ~/.ssh a symlink: hide
+            # the real directory it points at, not just a name-matched file.
+            if d.is_symlink():
+                d = Path(os.path.realpath(d))
+            if d.is_dir():
                 argv += ["--size", str(_RUN_BYTES), "--tmpfs", str(d)]
         for rel in _SECRET_FILES:
             f = home / rel
             if f.is_file() and not f.is_symlink():
                 argv += ["--ro-bind", "/dev/null", str(f)]
-        for d in (config.CONFIG_DIR, config.STATE_DIR, config.DATA_DIR):
-            if d.is_dir() and not d.is_symlink() and not str(cwd).startswith(str(d)):
-                argv += ["--size", str(_RUN_BYTES), "--tmpfs", str(d)]
         for f in secret_files:
             argv += ["--ro-bind", "/dev/null", f]
     argv.append("--clearenv")

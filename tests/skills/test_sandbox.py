@@ -588,3 +588,20 @@ def test_a_finished_job_is_remembered_as_dead_and_not_rescanned(monkeypatch):
                         lambda proc: pytest.fail("a dead job must not rescan /proc"))
     assert not job.running and not job.running
     assert len(sh._running_for("p1")) == 0
+
+
+@real
+def test_real_kravein_dirs_stay_hidden_when_cwd_is_inside_them(tmp_path, monkeypatch):
+    # The default workspace lives under DATA_DIR; a cwd there used to switch the
+    # mask off for the whole directory, exposing memory.json to opaque code.
+    data = tmp_path / "data"
+    (data / "workspace").mkdir(parents=True)
+    (data / "memory.json").write_text("private")
+    monkeypatch.setattr(config, "DATA_DIR", data)
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path / "none-c")
+    monkeypatch.setattr(config, "STATE_DIR", tmp_path / "none-s")
+    argv = sbx.build_argv(f"cat {data}/memory.json; ls {data}", data / "workspace", "t")
+    assert argv.index("--tmpfs") < argv.index("--ro-bind", argv.index("--tmpfs"))
+    i = [k for k, a in enumerate(argv) if a == str(data)]
+    assert i and argv[i[0] - 1] == "--tmpfs"
+    assert argv.index(str(data)) < argv.index(str(data / "workspace"))
