@@ -79,6 +79,22 @@ class ToolCall:
 
 
 @dataclass
+class Usage:
+    """Token counts exactly as the provider reported them.
+
+    ``input`` is every prompt token the provider counted, cached ones included;
+    ``cached`` is that cached subset (0 when the provider does not say);
+    ``output`` is everything generated (for Gemini: answer + thinking tokens,
+    both billed as output). Never an estimate: no report means ``Reply.usage``
+    is ``None``.
+    """
+
+    input: int = 0
+    cached: int = 0
+    output: int = 0
+
+
+@dataclass
 class Reply:
     """One model turn."""
 
@@ -86,10 +102,63 @@ class Reply:
     tool_calls: list[ToolCall] = field(default_factory=list)
     provider: str = ""
     model: str = ""
+    usage: Usage | None = None
 
     @property
     def wants_tools(self) -> bool:
         return bool(self.tool_calls)
+
+
+def _int(value: Any) -> int | None:
+    try:
+        return None if value is None or isinstance(value, bool) else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def usage_from_openai(raw: Any) -> Usage | None:
+    """OpenAI-wire ``usage`` (Zen, NovaRouter, OpenRouter, Cline direct).
+
+    Cached tokens: ``prompt_tokens_details.cached_tokens`` (OpenAI standard),
+    else DeepSeek's ``prompt_cache_hit_tokens``.
+    """
+    if not isinstance(raw, dict):
+        return None
+    prompt = _int(raw.get("prompt_tokens"))
+    completion = _int(raw.get("completion_tokens"))
+    if prompt is None and completion is None:
+        return None
+    details = raw.get("prompt_tokens_details")
+    cached = _int(details.get("cached_tokens")) if isinstance(details, dict) else None
+    if cached is None:
+        cached = _int(raw.get("prompt_cache_hit_tokens"))
+    return Usage(input=prompt or 0, cached=cached or 0, output=completion or 0)
+
+
+def usage_from_gemini(response: Any) -> Usage | None:
+    """``response.usage_metadata`` of a google-genai reply."""
+    meta = getattr(response, "usage_metadata", None)
+    if meta is None:
+        return None
+    prompt = _int(getattr(meta, "prompt_token_count", None))
+    answer = _int(getattr(meta, "candidates_token_count", None))
+    thoughts = _int(getattr(meta, "thoughts_token_count", None))
+    if prompt is None and answer is None and thoughts is None:
+        return None
+    cached = _int(getattr(meta, "cached_content_token_count", None))
+    return Usage(input=prompt or 0, cached=cached or 0, output=(answer or 0) + (thoughts or 0))
+
+
+# Model roles (#228). `worker:<profile>` is open-ended; `vision` and `voice`
+# exist for the resolver only (live.py and LLM.vision keep their own chains).
+ROLES = ("orchestrator", "utility", "judge", "vision", "voice")
+
+
+def valid_role(role: str) -> bool:
+    if role in ROLES:
+        return True
+    prefix, _, profile = role.partition(":")
+    return prefix == "worker" and bool(profile.strip())
 
 
 def _is_quota_error(exc: Exception) -> bool:
@@ -225,7 +294,7 @@ class GeminiProvider:
             config=types.GenerateContentConfig(**cfg),
         )
 
-        reply = Reply(provider=self.name, model=model)
+        reply = Reply(provider=self.name, model=model, usage=usage_from_gemini(response))
         text_parts: list[str] = []
 
         for candidate in getattr(response, "candidates", None) or []:
@@ -487,6 +556,7 @@ class OpenRouterProvider:
                 text=(message.get("content") or "").strip(),
                 provider=self.name,
                 model=candidate,
+                usage=usage_from_openai(data.get("usage")),
             )
             for call in message.get("tool_calls", []) or []:
                 fn = call.get("function", {}) or {}
@@ -695,6 +765,7 @@ class NovaRouterProvider:
             text=(message.get("content") or "").strip(),
             provider=self.name,
             model=data.get("model") or chosen,
+            usage=usage_from_openai(data.get("usage")),
         )
         for call in message.get("tool_calls", []) or []:
             fn = call.get("function", {}) or {}
@@ -988,6 +1059,99 @@ class LLM:
         healthy = [p for p in usable if not self._is_cooling(p.name)]
         return healthy or usable
 
+    # -- roles (#228) -----------------------------------------------------
+
+    def role_setting(self, role: str) -> list[tuple[str, str]] | None:
+        """The explicit ``models.roles`` chain for ``role`` alone, or ``None``.
+
+        Entries are ``"provider:model"`` split on the FIRST colon (OpenRouter
+        ids hold colons: ``…:free``); ``"provider"`` alone means that
+        provider's configured model. An unknown provider is dropped and
+        audited, never guessed. Read as a whole dict: role keys and model ids
+        are not dotted-path safe.
+        """
+        roles = config.get("models.roles") or {}
+        if not isinstance(roles, dict):
+            return None
+        raw = roles.get(role)
+        if not isinstance(raw, list) or not raw:
+            return None
+        known = {p.name for p in self._all()}
+        chain: list[tuple[str, str]] = []
+        for entry in raw:
+            name, _, model = str(entry).partition(":")
+            name = name.strip().lower()
+            if name not in known:
+                audit.record("llm.role_unknown_provider", role=role, entry=str(entry)[:100])
+                continue
+            chain.append((name, model.strip()))
+        return chain or None
+
+    def resolve_role(self, role: str) -> tuple[str, list[tuple[str, str]] | None]:
+        """``(role that supplied the chain, chain)``; chain ``None`` = global.
+
+        Inheritance: ``worker:<p>`` → ``orchestrator`` → global; every other
+        role → ``orchestrator`` → global. ``""`` (a caller with no role) is the
+        global chain, exactly as before roles existed.
+        """
+        if not role:
+            return "", None
+        if not valid_role(role):
+            raise ValueError(f"unknown model role '{role}' (known: {', '.join(ROLES)}, worker:<profile>)")
+        for candidate in (role, "orchestrator"):
+            chain = self.role_setting(candidate)
+            if chain:
+                return candidate, chain
+        return "", None
+
+    def _plan(self, role: str, prefer: str) -> list[tuple[Any, str]]:
+        """``[(provider, model override)]`` in the order they will be tried.
+
+        No explicit chain for ``role`` (itself or inherited): exactly the
+        pre-roles behaviour, ``_ordered()`` with ``prefer`` moved first.
+        ``prefer`` (a profile's ``model:``) is only that fallback: an explicit
+        setting for the requested role itself wins over it. An inherited
+        orchestrator chain still takes ``prefer`` first, so a profile keeps its
+        model unless the owner set ``worker:<p>``.
+        """
+        source, chain = self.resolve_role(role)
+        if chain is not None and source == role:
+            prefer = ""
+        if chain is None:
+            order: list[tuple[Any, str]] = [(p, "") for p in self._ordered()]
+        else:
+            by_name = {p.name: p for p in self._all()}
+            usable = [(by_name[n], m) for n, m in chain if by_name[n].available()]
+            healthy = [(p, m) for p, m in usable if not self._is_cooling(p.name)]
+            order = healthy or usable
+
+        preferred_name, _, preferred_model = (prefer or "").partition(":")
+        preferred_name = preferred_name.strip().lower()
+        if preferred_name:
+            if chain is None:
+                first = [(p, preferred_model.strip()) for p, _ in order if p.name == preferred_name]
+            else:
+                # The preferred provider joins the chain first even when the
+                # chain does not list it, as long as it can be used at all.
+                provider = {p.name: p for p in self._all()}.get(preferred_name)
+                first = []
+                if provider is not None and provider.available() and (
+                    not self._is_cooling(provider.name) or not order
+                ):
+                    first = [(provider, preferred_model.strip())]
+            if chain is None:
+                order = first + [(p, m) for p, m in order if p.name != preferred_name]
+            else:
+                order = first + order
+        return order
+
+    def _model_label(self, provider: Any) -> str:
+        """``model_of`` for the ledger: a label, so it may never raise."""
+        try:
+            return self.model_of(provider)
+        except Exception:
+            return ""
+
     def model_of(self, provider: Any) -> str:
         """The model a provider would use now, as ``status()`` labels it."""
         from .cline import configured_model
@@ -1050,39 +1214,54 @@ class LLM:
         tools: list[dict] | None = None,
         temperature: float | None = None,
         prefer: str = "",
+        role: str = "",
+        tags: dict[str, str] | None = None,
     ) -> Reply:
         """Get one model turn, failing over between providers.
 
-        ``prefer`` is ``"provider:model"`` (an agent profile's ``model``): that
-        provider is tried first with that model. Every other provider keeps its
-        own configured model and the breaker/failover run as usual, so a bad
-        preference costs one failed attempt, never the request. A provider that
-        is unavailable or cooling down is simply not preferred.
+        ``role`` picks the model chain (``models.roles``, see ``_plan``);
+        ``""`` is the global chain. ``prefer`` is ``"provider:model"`` (an
+        agent profile's ``model``): that provider is tried first with that
+        model unless the role has its own explicit chain. Every other provider
+        keeps its own configured model and the breaker/failover run as usual,
+        so a bad preference costs one failed attempt, never the request. A
+        provider that is unavailable or cooling down is simply not preferred.
+
+        Every attempt, failed ones included, is one row in the usage ledger;
+        ``tags`` (``principal``, ``thread``, ``agent``) label it.
         """
+        from . import usage as _usage
+
         if temperature is None:
             temperature = float(config.get("llm.temperature", 0.4))
 
-        order = self._ordered()
+        order = self._plan(role, prefer)
         if not order:
+            if role and self.resolve_role(role)[1] is not None and self._ordered():
+                raise LLMError(f"no provider in the '{role}' model chain is available")
             raise LLMError(self.status())
 
-        preferred_name, _, preferred_model = (prefer or "").partition(":")
-        preferred_name = preferred_name.strip().lower()
-        if preferred_name:
-            first = [p for p in order if p.name == preferred_name]
-            order = first + [p for p in order if p.name != preferred_name]
+        tags = dict(tags or {})
+        ledger = {
+            "role": role or "default",
+            "principal": str(tags.get("principal") or ""),
+            "thread": str(tags.get("thread") or ""),
+            "agent": str(tags.get("agent") or ""),
+        }
 
         errors: list[str] = []
-        for provider in order:
+        for provider, model in order:
+            started = time.monotonic()
             try:
-                extra = (
-                    {"model": preferred_model.strip()}
-                    if preferred_model.strip() and provider.name == preferred_name
-                    else {}
-                )
+                extra = {"model": model} if model else {}
                 reply = provider.complete(
                     messages, system=system, tools=tools, temperature=temperature,
                     **extra,
+                )
+                _usage.record(
+                    provider=provider.name, model=reply.model or model or self._model_label(provider),
+                    usage=reply.usage, latency_ms=(time.monotonic() - started) * 1000,
+                    ok=True, **ledger,
                 )
                 self._record_success(provider.name)
                 audit.record(
@@ -1093,6 +1272,12 @@ class LLM:
                 )
                 return reply
             except Exception as exc:
+                # Class name only: an error message may echo a request or key.
+                _usage.record(
+                    provider=provider.name, model=model or self._model_label(provider),
+                    latency_ms=(time.monotonic() - started) * 1000,
+                    ok=False, error=type(exc).__name__, **ledger,
+                )
                 errors.append(f"{provider.name}: {exc}")
                 audit.record("llm.provider_failed", provider=provider.name, error=str(exc))
                 if not _is_quota_error(exc):
@@ -1107,11 +1292,12 @@ class LLM:
 
         raise LLMError("No LLM provider could answer. " + " | ".join(errors))
 
-    def chat(self, prompt: str, system: str = "", temperature: float | None = None) -> str:
+    def chat(self, prompt: str, system: str = "", temperature: float | None = None,
+             *, role: str = "") -> str:
         """One-shot completion, no tools."""
         reply = self.complete(
             [{"role": "user", "content": prompt}],
-            system=system, temperature=temperature,
+            system=system, temperature=temperature, role=role,
         )
         return reply.text
 

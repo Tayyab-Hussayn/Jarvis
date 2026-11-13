@@ -580,7 +580,30 @@ def direct_complete(
         usage=body.get("usage"),
         duration_ms=round((time.monotonic() - started) * 1000, 1),
     )
-    return choices[0].get("message") or {}
+    message = dict(choices[0].get("message") or {})
+    # Carried beside the message (the return type stays the message dict) so
+    # the provider can fill Reply.usage from Cline's own numbers.
+    message["_usage"] = body.get("usage")
+    return message
+
+
+def usage_from_cli(raw: Any):
+    """``run_result.usage`` of the Cline CLI (``inputTokens``/``outputTokens``,
+    ``cacheReadTokens``), as an ``llm.Usage``; ``None`` when it reported nothing.
+
+    The CLI counts cache reads separately from ``inputTokens``, so they are
+    added to ``input`` to keep ``Usage.input`` = every prompt token.
+    """
+    from .llm import Usage, _int
+
+    if not isinstance(raw, dict):
+        return None
+    fresh = _int(raw.get("inputTokens"))
+    output = _int(raw.get("outputTokens"))
+    if fresh is None and output is None:
+        return None
+    cached = _int(raw.get("cacheReadTokens")) or 0
+    return Usage(input=(fresh or 0) + cached, cached=cached, output=output or 0)
 
 
 def _to_openai_messages(messages: list[dict[str, Any]], system: str) -> list[dict]:
@@ -827,14 +850,15 @@ class ClineProvider:
         model: str,
     ):
         """The fast path: one HTTPS request, native tool calling."""
-        from .llm import Reply, ToolCall, extract_json
+        from .llm import Reply, ToolCall, extract_json, usage_from_openai
 
         message = direct_complete(
             messages, system=system, tools=tools,
             temperature=temperature, model=model,
         )
 
-        reply = Reply(provider=self.name, model=model)
+        reply = Reply(provider=self.name, model=model,
+                      usage=usage_from_openai(message.get("_usage")))
         reply.text = (message.get("content") or "").strip()
 
         for index, call in enumerate(message.get("tool_calls") or []):
@@ -876,6 +900,7 @@ class ClineProvider:
         reply = Reply(
             provider=self.name,
             model=meta.get("model") or model or configured_model(),
+            usage=usage_from_cli(meta.get("usage")),
         )
 
         if not tools:
