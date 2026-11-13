@@ -332,6 +332,9 @@ sa = (BIN / "start-agent.sh").read_text()
 expect("start-agent.sh defaults to auto (never bypass)", "KRV_AGENT_PERMISSION_MODE:-auto" in sa and "bypassPermissions\"" not in sa, True)
 expect("start-agent.sh resumes by stored session id, never by name (picker hang)",
        '--session-id "$SID"' in sa and '--resume "$SID"' in sa and '--resume "$AGENT"' not in sa, True)
+expect("start-agent.sh: Opus only via the logged per-task --owner-opus exception",
+       "--owner-opus) OWNER_OPUS=1" in sa and "--owner-opus needs --task N" in sa
+       and "model-overrides.log" in sa and '[ "$OWNER_OPUS" = 1 ] || { echo "refused' in sa, True)
 expect("start-agent.sh links .venv into the worktree", 'ln -s "$ROOT/.venv"' in sa, True)
 expect("start-agent.sh can start an agent already assigned (--task, numeric only)", "--task) TASK=" in sa and "*[!0-9]*" in sa, True)
 expect("android worktree gets the shared SDK (local.properties + ANDROID_HOME)", 'ANDROID_HOME="$HOME/Android/Sdk"' in sa and "local.properties" in sa, True)

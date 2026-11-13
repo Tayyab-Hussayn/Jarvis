@@ -31,10 +31,13 @@ if ! python3 -c "import json,sys; sys.exit(0 if sys.argv[1] in json.load(open(sy
   exit 1
 fi
 
-FRESH=0; MODEL="$(cfg agent_default sonnet)"; ACCOUNT=""; TASK=""; EFFORT="medium"
+FRESH=0; MODEL="$(cfg agent_default sonnet)"; ACCOUNT=""; TASK=""; EFFORT="medium"; OWNER_OPUS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --fresh) FRESH=1; shift ;;
+    # Owner exception (2026-11-14): the owner may ask for Opus on one specific task. It is only valid with
+    # --task, applies to that launch only, and every use is logged so a silent escalation is visible.
+    --owner-opus) OWNER_OPUS=1; shift ;;
     --model) MODEL="$2"; shift 2 ;;
     --account) ACCOUNT="${2:?--account needs a value}"; shift 2 ;;
     --task) TASK="${2:?--task needs an issue number}"; shift 2 ;;
@@ -43,8 +46,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Owner rule (2026-10-23): no agent runs on Opus, whatever a packet or flag says.
+if [ "$OWNER_OPUS" = 1 ]; then
+  [ -n "$TASK" ] || { echo "refused: --owner-opus needs --task N (a per-task owner exception)." >&2; exit 2; }
+  MODEL="opus"
+  mkdir -p "$STATE"
+  printf '%s agent=%s task=%s model=opus (owner exception)\n' "$(date -Is)" "$AGENT" "$TASK" >> "$STATE/model-overrides.log"
+fi
+
+# Owner rule (2026-10-23): no agent runs on Opus, whatever a packet or flag says — except the logged,
+# per-task --owner-opus exception above.
 case "$(printf '%s' "$MODEL" | tr '[:upper:]' '[:lower:]')" in
+  opus) [ "$OWNER_OPUS" = 1 ] || { echo "refused: agents always run Sonnet (owner rule 2026-10-23), not '$MODEL'." >&2; exit 2; } ;;
   *sonnet*) ;;
   *) echo "refused: agents always run Sonnet (owner rule 2026-10-23), not '$MODEL'." >&2; exit 2 ;;
 esac
