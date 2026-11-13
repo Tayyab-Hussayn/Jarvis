@@ -587,6 +587,9 @@ def build_parser() -> argparse.ArgumentParser:
     audit_cmd.add_argument("-n", "--limit", type=int, default=30)
     audit_cmd.add_argument("-e", "--event", default="", help="filter by event prefix")
 
+    usage_cmd = sub.add_parser("usage", help="model calls and tokens per role and model")
+    usage_cmd.add_argument("--days", type=float, default=7, help="look back N days (default 7)")
+
     daemon = sub.add_parser("daemon", help="run as a background service")
     daemon.add_argument("--socket", default="", help="override the socket path")
 
@@ -790,6 +793,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "doctor":
         return doctor()
+
+    if command == "usage":
+        from . import usage
+
+        if args.days <= 0:
+            print(red("--days must be positive"), file=sys.stderr)
+            return 2
+        print(usage.report(args.days))
+        return 0
 
     if command == "audit":
         entries = audit.tail(limit=args.limit, event_prefix=args.event)
