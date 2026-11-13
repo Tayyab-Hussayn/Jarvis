@@ -240,7 +240,7 @@ class Agent:
         self._lock = threading.RLock()
         self._llm = client()
         if profile is not None and profile.model:
-            known = {p.name for p in self._llm._all()}
+            known = self._llm.known_providers()   # built-ins + anthropic + endpoints (#231)
             if profile.model.partition(":")[0] not in known:
                 raise ProfileError(
                     f"profile '{profile.name}': unknown provider in model "

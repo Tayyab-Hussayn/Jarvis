@@ -23,6 +23,12 @@ psutil>=5.9
 
 # --- LLM providers ------------------------------------------------------
 google-genai>=1.0
+# Claude (#231). The official SDK, as the v3 plan names: typed errors, the
+# beta header plumbing and request shapes track the API (thinking-block
+# binding, caching). Its own deps (httpx2, pydantic, anyio) already come with
+# google-genai; it adds only jiter and docstring-parser. Major 2 pinned:
+# breaking SDK changes land on a major bump.
+anthropic>=2.8,<3
 
 # --- Voice --------------------------------------------------------------
 # edge-tts is the original's own TTS engine (voice en-US-GuyNeural). Only the

@@ -685,7 +685,7 @@ class NovaRouterProvider:
         ordered = sorted(tools, key=sort_key)
         kept, dropped = ordered[: self.MAX_TOOLS], ordered[self.MAX_TOOLS :]
         audit.record(
-            "llm.novarouter.tools_trimmed",
+            f"llm.{self.name}.tools_trimmed",   # "llm.novarouter.…" for NovaRouter
             sent=len(kept), dropped=[t.get("name", "") for t in dropped],
         )
         return kept
@@ -846,6 +846,362 @@ class ZenProvider(NovaRouterProvider):
         return "\n".join(lines)
 
 
+def _redact(text: str, *secrets: str) -> str:
+    """Remove every secret from ``text`` (an error a gateway echoed back)."""
+    for secret in secrets:
+        if secret and len(secret) >= 4:
+            text = text.replace(secret, "[redacted]")
+    return text
+
+
+ENDPOINT_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+class EndpointProvider(NovaRouterProvider):
+    """A generic OpenAI-compatible endpoint configured in settings (#231).
+
+    ``llm.endpoints.<name> = {"base_url", "key", "model", "max_tools"?,
+    "timeout"?, "block_statuses"?, "blocked_cooldown"?}``. ``key`` is the
+    ``api_keys.json`` name (``config.api_key``), never the key itself. One
+    class reaches DeepSeek, Z.ai (GLM) and any other OpenAI-wire gateway, and
+    it inherits NovaRouter's request/reply handling, usage parsing and the
+    ``_fit_tools`` budget: a gateway with a tool cap must trim, or a failover
+    onto it cannot serve an agent turn (hard-won-llm-agent).
+    """
+
+    def __init__(self, name: str, spec: dict[str, Any]) -> None:
+        self.name = name
+        self.label = str(spec.get("label") or name)
+        self.spec = spec
+        try:
+            self.MAX_TOOLS = max(1, int(spec.get("max_tools") or 10**6))
+        except (TypeError, ValueError):
+            self.MAX_TOOLS = 10**6
+        statuses = spec.get("block_statuses", [402, 429])
+        self.BLOCK_STATUSES = tuple(
+            int(s) for s in (statuses if isinstance(statuses, list) else []) if str(s).isdigit()
+        )
+
+    def _blocked_cooldown(self) -> float:
+        try:
+            return float(self.spec.get("blocked_cooldown", 1800))
+        except (TypeError, ValueError):
+            return 1800.0
+
+    def key_name(self) -> str:
+        return str(self.spec.get("key") or "")
+
+    def _key(self) -> str:
+        return config.api_key(self.key_name())
+
+    def available(self) -> bool:
+        return bool(self._base() and self._key())
+
+    def _timeout(self) -> float:
+        try:
+            return float(self.spec.get("timeout", 45))
+        except (TypeError, ValueError):
+            return 45.0
+
+    def _base(self) -> str:
+        return str(self.spec.get("base_url") or "").rstrip("/")
+
+    def model_name(self, override: str = "") -> str:
+        return override or str(self.spec.get("model") or "")
+
+    def complete(self, messages, *, system="", tools=None, temperature=0.4, model=""):
+        if not self.model_name(model):
+            raise LLMError(f"{self.label} has no model configured")
+        # The inherited error texts quote the gateway's reply body; a gateway
+        # that echoes the Authorization header must not put the key into the
+        # audit log or a failover message.
+        key = self._key()
+        try:
+            return super().complete(messages, system=system, tools=tools,
+                                    temperature=temperature, model=model)
+        except ProviderBlocked as exc:
+            raise ProviderBlocked(_redact(str(exc), key), exc.cooldown) from None
+        except LLMError as exc:
+            raise LLMError(_redact(str(exc), key)) from None
+
+    def report(self) -> str:
+        """`kravein doctor` block: configured or missing, never the key."""
+        lines = [f"Endpoint '{self.name}' (OpenAI-compatible)"]
+        lines.append(f"  model    : {self.model_name() or 'NOT SET'}")
+        lines.append(f"  endpoint : {self._base() or 'NOT SET'}")
+        if not self.key_name():
+            lines.append("  key      : NOT SET — add \"key\": \"<name>_api_key\" to the endpoint")
+        elif not self._key():
+            lines.append(
+                f"  key      : NOT SET — add {self.key_name()} to "
+                f"{config.CONFIG_DIR / 'api_keys.json'}, or set KRAVEIN_{self.key_name().upper()}"
+            )
+        else:
+            lines.append("  key      : present")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic (#231)
+# ---------------------------------------------------------------------------
+
+ANTHROPIC_DEFAULT_MODEL = "claude-opus-5-5"
+ANTHROPIC_SIGNATURE_TAG = "__anthropic__"
+# Models that run "preserved thinking": a replayed thinking block is bound to
+# the exact earlier transcript, and on accounts created after 2026-08-31 any
+# edit is a 400. Kravein's transcript is not append-only (the [context] tail
+# is rebuilt every request, history is trimmed and summarised), so these
+# models get `drop_block`: a stale block is dropped, never a failed turn.
+_PRESERVED_THINKING = re.compile(r"^claude-(opus|sonnet|haiku)-5-5|^claude-(fable|mythos)-5-[12]")
+_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+
+
+def _anthropic_blob(call: dict[str, Any]) -> list[dict] | None:
+    sig = call.get("signature")
+    if isinstance(sig, dict) and isinstance(sig.get(ANTHROPIC_SIGNATURE_TAG), list):
+        return sig[ANTHROPIC_SIGNATURE_TAG]
+    return None
+
+
+def _replayable(msg: dict[str, Any]) -> list[dict] | None:
+    """The original content blocks of an Anthropic tool step, or ``None``.
+
+    Replayed only when the blob's tool_use ids are exactly this step's calls:
+    anything else means the step was rebuilt, and an edited step is worse
+    than a flattened one.
+    """
+    calls = msg.get("tool_calls") or []
+    if not calls:
+        return None
+    blob = _anthropic_blob(calls[0])
+    if blob is None:
+        return None
+    used = [b.get("id") for b in blob if isinstance(b, dict) and b.get("type") == "tool_use"]
+    if used != [c.get("id") for c in calls]:
+        return None
+    return json.loads(json.dumps(blob))      # a private copy, byte-for-byte content
+
+
+def _to_anthropic_messages(messages: list[dict[str, Any]]) -> list[dict]:
+    """The neutral message list as Anthropic ``messages``.
+
+    An assistant tool step from Claude is replayed with its original blocks
+    (thinking, redacted_thinking, text, tool_use) unchanged. A step from any
+    other provider has no such blocks, so it is flattened to text with its
+    results, as the Gemini path does: the model still sees what was done.
+    """
+    out: list[dict] = []
+
+    def add(role: str, blocks: list[dict]) -> None:
+        if not blocks:
+            return
+        if out and out[-1]["role"] == role:
+            out[-1]["content"].extend(blocks)
+        else:
+            out.append({"role": role, "content": list(blocks)})
+
+    live: set[str] = set()
+    for msg in messages:
+        role = msg.get("role", "user")
+        if role == "assistant":
+            blocks = _replayable(msg)
+            if blocks is not None:
+                live.update(c.get("id") for c in msg["tool_calls"])
+                add("assistant", blocks)
+                continue
+            parts = [str(msg.get("content") or "").strip()]
+            for call in msg.get("tool_calls") or []:
+                parts.append(f"[called {call.get('name', '?')}"
+                             f"({json.dumps(call.get('arguments', {}), default=str)})]")
+            text = "\n".join(p for p in parts if p)
+            add("assistant", [{"type": "text", "text": text}] if text else [])
+        elif role == "tool":
+            key = msg.get("tool_call_id") or ""
+            content = str(msg.get("content", "")) or "(empty)"
+            if key in live:
+                add("user", [{"type": "tool_result", "tool_use_id": key, "content": content}])
+            else:
+                add("user", [{"type": "text",
+                              "text": f"[result of {msg.get('name', 'tool')}]: {content}"}])
+        else:
+            text = str(msg.get("content", "")).strip()
+            add("user", [{"type": "text", "text": text or "(empty)"}])
+
+    if not out or out[0]["role"] != "user":
+        out.insert(0, {"role": "user", "content": [{"type": "text", "text": "(conversation continues)"}]})
+    return out
+
+
+def _block_param(block: Any) -> dict | None:
+    """A response block as the param that replays it unchanged."""
+    kind = getattr(block, "type", "")
+    if kind == "thinking":
+        return {"type": "thinking", "thinking": block.thinking, "signature": block.signature}
+    if kind == "redacted_thinking":
+        return {"type": "redacted_thinking", "data": block.data}
+    if kind == "text":
+        return {"type": "text", "text": block.text}
+    if kind == "tool_use":
+        return {"type": "tool_use", "id": block.id, "name": block.name,
+                "input": dict(block.input or {})}
+    return None
+
+
+def usage_from_anthropic(raw: Any) -> Usage | None:
+    """Anthropic ``usage``: ``input_tokens`` counts only uncached input, so
+    cache reads and cache writes are added to keep ``Usage.input`` = every
+    prompt token; ``cached`` = the cache reads."""
+    if raw is None:
+        return None
+    fresh = _int(getattr(raw, "input_tokens", None))
+    output = _int(getattr(raw, "output_tokens", None))
+    if fresh is None and output is None:
+        return None
+    read = _int(getattr(raw, "cache_read_input_tokens", None)) or 0
+    written = _int(getattr(raw, "cache_creation_input_tokens", None)) or 0
+    return Usage(input=(fresh or 0) + read + written, cached=read, output=output or 0)
+
+
+class AnthropicProvider:
+    """Claude through the official ``anthropic`` SDK (#231).
+
+    Rules carried here (claude-api skill, Claude 5.5 family): never a forced
+    ``tool_choice`` (400 on current models), no ``temperature`` (rejected on
+    the current API version), thinking blocks replayed unchanged, the system
+    prompt as a cached block so tools + system are one cached prefix. The SDK
+    does not retry (``max_retries=0``): the facade's failover is the retry.
+    """
+
+    name = "anthropic"
+    label = "Anthropic"
+
+    def __init__(self) -> None:
+        self._client = None
+        self._client_for: tuple[str, float] = ("", 0.0)
+        self._lock = threading.Lock()
+
+    def available(self) -> bool:
+        return bool(config.anthropic_api_key())
+
+    def model_name(self, override: str = "") -> str:
+        return override or str(config.get("llm.anthropic_model", ANTHROPIC_DEFAULT_MODEL))
+
+    def _timeout(self) -> float:
+        return float(config.get("llm.anthropic_timeout_seconds", 60) or 60)
+
+    def _get_client(self, key: str):
+        import anthropic
+
+        with self._lock:
+            wanted = (key, self._timeout())
+            if self._client is None or self._client_for != wanted:
+                self._client = anthropic.Anthropic(
+                    api_key=key, max_retries=0, timeout=wanted[1],
+                )
+                self._client_for = wanted
+            return self._client
+
+    def _blocked_cooldown(self) -> float:
+        return float(config.get("llm.anthropic_blocked_cooldown_seconds", 1800))
+
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        system: str = "",
+        tools: list[dict] | None = None,
+        temperature: float = 0.4,     # accepted for the interface; never sent
+        model: str = "",
+    ) -> Reply:
+        import anthropic
+
+        key = config.anthropic_api_key()
+        if not key:
+            raise LLMError("Anthropic has no API key configured")
+        chosen = self.model_name(model)
+
+        params: dict[str, Any] = {
+            "model": chosen,
+            "max_tokens": int(config.get("llm.anthropic_max_tokens", 16000)),
+            "messages": _to_anthropic_messages(messages),
+        }
+        if system:
+            params["system"] = [{"type": "text", "text": system,
+                                 "cache_control": {"type": "ephemeral"}}]
+        if tools:
+            params["tools"] = [{
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "input_schema": t.get("parameters") or {"type": "object", "properties": {}},
+            } for t in tools]
+            if not system:
+                params["tools"][-1]["cache_control"] = {"type": "ephemeral"}
+        betas: list[str] = []
+        if _PRESERVED_THINKING.match(chosen):
+            params["thinking"] = {"type": "adaptive",
+                                  "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
+            betas.append(_BINDING_BETA)
+        effort = str(config.get("llm.anthropic_effort", "") or "")
+        if effort:
+            params["output_config"] = {"effort": effort}
+        if betas:
+            params["betas"] = betas
+
+        try:
+            response = self._get_client(key).beta.messages.create(**params)
+        except anthropic.APIStatusError as exc:
+            status = int(getattr(exc, "status_code", 0) or 0)
+            detail = _redact(str(getattr(exc, "message", "") or exc), key)[:200]
+            if status == 401:
+                raise LLMError("Anthropic rejected the API key") from None
+            if status in (402, 429) or (status == 400 and "credit balance" in detail.lower()):
+                cooldown = self._blocked_cooldown()
+                retry = (getattr(exc, "response", None) and exc.response.headers.get("retry-after")) or ""
+                if str(retry).isdigit():
+                    # A plain rate limit says when it clears; a 30 s floor
+                    # keeps a "retry-after: 1" from re-paying the round-trip.
+                    cooldown = max(30.0, float(retry))
+                raise ProviderBlocked(f"Anthropic returned {status}: {detail}", cooldown) from None
+            raise LLMError(f"Anthropic returned {status}: {detail}") from None
+        except anthropic.APIConnectionError as exc:
+            raise LLMError(f"Anthropic unreachable: {_redact(str(exc), key)[:200]}") from None
+
+        if getattr(response, "stop_reason", "") == "refusal":
+            details = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) or "unspecified"
+            # Fail over: another model in the chain may serve the request.
+            raise LLMError(f"Anthropic declined the request (refusal: {category})")
+
+        blocks = [b for b in (_block_param(x) for x in response.content or []) if b]
+        reply = Reply(provider=self.name, model=getattr(response, "model", "") or chosen,
+                      usage=usage_from_anthropic(getattr(response, "usage", None)))
+        reply.text = "".join(b["text"] for b in blocks if b["type"] == "text").strip()
+        for block in blocks:
+            if block["type"] == "tool_use":
+                reply.tool_calls.append(ToolCall(
+                    name=block["name"], arguments=dict(block["input"]), id=block["id"],
+                ))
+        if reply.tool_calls:
+            # The whole content rides on the first call: replayed unchanged on
+            # the next request (thinking signatures included), flattened to
+            # text by every other provider.
+            reply.tool_calls[0].signature = {ANTHROPIC_SIGNATURE_TAG: blocks}
+        return reply
+
+    def report(self) -> str:
+        """`kravein doctor` block: configured or missing, never the key."""
+        lines = ["Anthropic provider (Claude)"]
+        lines.append(f"  model    : {self.model_name()}")
+        if self.available():
+            lines.append("  key      : present")
+        else:
+            lines.append(
+                f"  key      : NOT SET — add anthropic_api_key to "
+                f"{config.CONFIG_DIR / 'api_keys.json'}, or set ANTHROPIC_API_KEY"
+            )
+        return "\n".join(lines)
+
+
 
 
 def _to_openai_messages(messages: list[dict[str, Any]], system: str) -> list[dict]:
@@ -905,13 +1261,43 @@ class LLM:
         self.openrouter = OpenRouterProvider()
         self.novarouter = NovaRouterProvider()
         self.zen = ZenProvider()
+        self.anthropic = AnthropicProvider()
 
         self._failures: dict[str, int] = {}
         self._cooling_until: dict[str, float] = {}
         self._breaker_lock = threading.Lock()
 
     def _all(self) -> list[Any]:
+        """The built-in providers: the ones the global chain may pick up."""
         return [self.zen, self.cline, self.gemini, self.openrouter, self.novarouter]
+
+    def endpoints(self) -> list[EndpointProvider]:
+        """Configured OpenAI-compatible endpoints (``llm.endpoints``), rebuilt
+        from settings on every call so a settings change applies next turn.
+
+        A name that is not a plain lowercase id, or that would shadow a
+        built-in provider or ``anthropic``, is skipped (``doctor`` says so).
+        """
+        raw = config.get("llm.endpoints") or {}
+        if not isinstance(raw, dict):
+            return []
+        taken = {p.name for p in self._all()} | {self.anthropic.name}
+        return [
+            EndpointProvider(name, spec) for name, spec in raw.items()
+            if isinstance(spec, dict) and ENDPOINT_NAME.match(str(name)) and name not in taken
+        ]
+
+    def _extras(self) -> list[Any]:
+        """Opt-in providers (#231): used only where a setting names them
+        (``llm.provider``, ``provider_order``, ``models.roles``, a profile's
+        ``model``), never added to the chain just because a key exists."""
+        return [self.anthropic, *self.endpoints()]
+
+    def _named(self) -> dict[str, Any]:
+        return {p.name: p for p in [*self._all(), *self._extras()]}
+
+    def known_providers(self) -> set[str]:
+        return set(self._named())
 
     # -- circuit breaker -------------------------------------------------
 
@@ -1032,7 +1418,8 @@ class LLM:
         fallback sequence after it. Unavailable providers are dropped, so the
         list is exactly what will actually be attempted.
         """
-        by_name = {p.name: p for p in self._all()}
+        by_name = self._named()
+        builtin = [p.name for p in self._all()]
         preferred = str(config.get("llm.provider", "zen")).lower()
         configured = [str(n).lower() for n in (config.get("llm.provider_order") or [])]
 
@@ -1045,7 +1432,7 @@ class LLM:
         # left out on purpose, not merely deprioritised. Only fall back to
         # "everything available" when no order is configured at all.
         if not configured:
-            for name in by_name:
+            for name in builtin:          # opt-in providers only when named
                 if name not in sequence:
                     sequence.append(name)
 
@@ -1076,7 +1463,7 @@ class LLM:
         raw = roles.get(role)
         if not isinstance(raw, list) or not raw:
             return None
-        known = {p.name for p in self._all()}
+        known = self.known_providers()
         chain: list[tuple[str, str]] = []
         for entry in raw:
             name, _, model = str(entry).partition(":")
@@ -1120,20 +1507,24 @@ class LLM:
         if chain is None:
             order: list[tuple[Any, str]] = [(p, "") for p in self._ordered()]
         else:
-            by_name = {p.name: p for p in self._all()}
-            usable = [(by_name[n], m) for n, m in chain if by_name[n].available()]
+            by_name = self._named()
+            usable = [(by_name[n], m) for n, m in chain if n in by_name and by_name[n].available()]
             healthy = [(p, m) for p, m in usable if not self._is_cooling(p.name)]
             order = healthy or usable
 
         preferred_name, _, preferred_model = (prefer or "").partition(":")
         preferred_name = preferred_name.strip().lower()
         if preferred_name:
-            if chain is None:
+            extras = {p.name for p in self._extras()}
+            if chain is None and preferred_name not in extras:
+                # Built-ins: exactly the pre-roles rule (only if in the chain).
                 first = [(p, preferred_model.strip()) for p, _ in order if p.name == preferred_name]
             else:
                 # The preferred provider joins the chain first even when the
                 # chain does not list it, as long as it can be used at all.
-                provider = {p.name: p for p in self._all()}.get(preferred_name)
+                # An opt-in provider is never in the global chain, so naming
+                # it in a profile's `model:` is what brings it in.
+                provider = self._named().get(preferred_name)
                 first = []
                 if provider is not None and provider.available() and (
                     not self._is_cooling(provider.name) or not order
@@ -1158,7 +1549,9 @@ class LLM:
 
         if provider.name == "cline":
             return configured_model()
-        if provider.name in ("gemini", "novarouter", "zen"):
+        if provider.name in ("gemini", "novarouter", "zen") or isinstance(
+            provider, (EndpointProvider, AnthropicProvider)
+        ):
             return provider.model_name()
         return ""
 
