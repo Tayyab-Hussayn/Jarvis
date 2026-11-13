@@ -7,7 +7,7 @@ updated: 2026-11-14
 # engine
 
 ## Code map
-- `agent.py` loop, cancel, tool routing hooks · `llm.py`/`cline.py` providers, failover, breaker, model roles + `Reply.usage` (#228) · `usage.py` per-call usage ledger + `kravein usage` report (#228) · `registry.py` `@skill` + `dispatch` · `safety.py` enforce, denial memory · `audit.py` · `config.py` · `toolselect.py`
+- `agent.py` loop, cancel, tool routing hooks · `llm.py`/`cline.py` providers, failover, breaker, model roles + `Reply.usage` (#228), `EndpointProvider` + `AnthropicProvider` (#231) · `usage.py` per-call usage ledger + `kravein usage` report (#228) · `registry.py` `@skill` + `dispatch` · `safety.py` enforce, denial memory · `audit.py` · `config.py` · `toolselect.py`
 - `jobs.py`/`routines.py` scheduler (tick via `python -m kravein.jobs tick`) · `voice.py`/`live.py` (audio source/sink: `SoundDevice*`, `NetworkAudio`) · `whatsapp_service.py` · `cli.py`/`daemon.py` · `discovery.py` (address pick/watch + mDNS) · `agents/` (#132: `profile.py` SKILL.md loader + `AgentProfile`, `history.py` SQLite per-(profile, thread) history; `delegate.py` the `delegate` skill (#138); `tasks.py` background sub-agent tasks (#158) · `proposals.py` proposals queue + `propose`/`decide_proposal` + daily review (#143); `state.py` agent-state tracker + `/api/agents` list (#146: one `StateTracker` per principal in `SessionStore.tracker()`, fed by the agent observer — kind `agent_state` phases turn_start/llm_start/turn_end from `Agent.ask`, `delegate_end` from `delegate`, plus `tool`/`tool_result` and `Session.on_wait` for cards; frames `{"t":"agent_state", agent, state idle|thinking|working|waiting|done|failed|declined, task?, tool?, delegation?, since, report?{outcome,summary}}` go only to that principal's sessions; `GET /api/agents`, `GET /api/agents/state` -> `{states:[...]}`; snapshot also in the ws prelude on connect/resume; delegate outcomes partial->failed, needs-approval->declined, the report keeps the real outcome; tool_call/tool_result/thinking frames carry `agent`/`delegation` for sub-agent work); `orchestrator/` + `system-ops/` profiles; `_example/` fixture profile) · `service.py` (`kravein start|stop|restart|status|pair|phones|open|logs`: `systemctl --user` on `kravein-web.service` + the server's HTTP API with the owner token, TLS pinned to the on-disk cert)
 
 ## Verify
@@ -17,6 +17,31 @@ updated: 2026-11-14
 ```
 
 ## Public interfaces
+- Endpoints + Anthropic (#231, v3 phase 0b), all in `llm.py`:
+  - **Opt-in providers.** They are used only where a setting names them: `llm.provider`, `llm.provider_order`, `models.roles`, or a profile's `model:` (a profile model naming one puts it first even outside the global chain). A key alone never adds one to the chain. `LLM._all()` stays the five built-ins (`server.py` lists those). `LLM.endpoints()`, `LLM._extras()`, `LLM.known_providers()` (`Agent` validates a profile model against it).
+  - **`EndpointProvider(name, spec)`** is a NovaRouter subclass: OpenAI wire, `usage_from_openai` (DeepSeek `prompt_cache_hit_tokens`), and the `_fit_tools` budget (audit `llm.<name>.tools_trimmed`).
+    - Spec: `base_url`, `key` (the api_keys.json name, read by `config.api_key(name)`; env `KRAVEIN_<NAME>` / `<NAME>` wins), `model`, `max_tools`, `timeout` (45), `block_statuses` ([402, 429] → `ProviderBlocked`), `blocked_cooldown` (1800).
+    - Names must match `[a-z][a-z0-9_-]{0,31}` and must not be a built-in or `anthropic`; otherwise the endpoint is skipped and `doctor` says "NOT USED".
+    - Error texts are run through `_redact(text, key)`.
+  - **`AnthropicProvider`** uses the `anthropic` SDK (pinned `>=2.8,<3`) with `max_retries=0` (the facade's failover is the retry).
+    - Request: `beta.messages.create` with no `tool_choice` and no `temperature`. The system prompt is a text block with `cache_control` (with no system prompt, the last tool carries it).
+    - Settings: `llm.anthropic_model` (default `claude-opus-5-5`), `anthropic_max_tokens` (16000), `anthropic_timeout_seconds` (60), `anthropic_effort` (unset), `anthropic_blocked_cooldown_seconds` (1800).
+    - Preserved-thinking families (`claude-(opus|sonnet|haiku)-5-5`, `claude-(fable|mythos)-5-[12]`) get `thinking={"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"drop_block"}}` with beta `thinking-binding-controls-2026-08-01`. Reason: Kravein's transcript is not append-only (the `[context]` tail is rebuilt each request), and new accounts get a 400 on any edit.
+    - Errors: 401 → `LLMError`. 402, 429 and the 400 "credit balance" → `ProviderBlocked` (cooldown = `retry-after`, floor 30 s, when sent). `stop_reason: refusal` → `LLMError`, so the chain fails over.
+    - Usage: `input = input_tokens + cache_read + cache_creation`, `cached = cache_read`.
+  - **Thinking replay.** The whole reply content (thinking / redacted_thinking / text / tool_use, unchanged) rides on the first `ToolCall.signature` as `{"__anthropic__": [blocks]}`, and `agents/history.py` keeps that tag. `_to_anthropic_messages` replays it only when its tool_use ids equal the step's call ids; anything else is flattened to `[called …]` / `[result of …]` text. Gemini flattens it (not bytes) and the OpenAI wire drops it.
+  - **`doctor`** prints an Anthropic block and one block per endpoint (model, URL, key present / NOT SET), never a key.
+  - Example settings snippet:
+    ```json
+    {"llm": {"endpoints": {
+        "deepseek": {"base_url": "https://api.deepseek.com/v1", "key": "deepseek_api_key", "model": "deepseek-v4.1-flash"},
+        "zai": {"base_url": "https://api.z.ai/api/paas/v4", "key": "zai_api_key", "model": "glm-5.3-flash", "max_tools": 128}}},
+     "models": {"roles": {
+        "orchestrator": ["anthropic:claude-haiku-5-5", "deepseek:deepseek-v4.1-flash"],
+        "worker:system-ops": ["deepseek:deepseek-v4.1-flash", "zai:glm-5.3-flash"],
+        "judge": ["anthropic:claude-sonnet-5-5"], "utility": ["zai:glm-5.3-flash", "gemini"]}}}
+    ```
+    Keys go in `api_keys.json` (`deepseek_api_key`, `zai_api_key`, `anthropic_api_key`). The model ids above are the owner's targets and are **not probed**. "Model ids are not the catalogue": the DeepSeek / Z.ai ids and base URLs must be checked against the account before use.
 - Model roles + usage (#228, v3 phase 0a):
   - `Reply.usage: llm.Usage(input, cached, output) | None`, always the provider's own report and never an estimate. `input` = all prompt tokens (cached included), `cached` = that subset (0 when unknown), `output` = completion (Gemini: candidates + thoughts). Parsers: `llm.usage_from_openai` (Zen/NovaRouter/OpenRouter/Cline direct; `prompt_tokens_details.cached_tokens`, else DeepSeek `prompt_cache_hit_tokens`), `llm.usage_from_gemini` (`usage_metadata`), `cline.usage_from_cli` (`inputTokens + cacheReadTokens`, assuming Cline's `inputTokens` excludes cache reads; **not verified live**). `cline.direct_complete` returns the message dict plus a `_usage` key.
   - Roles: `orchestrator`, `worker:<profile>`, `utility`, `judge`, `vision`, `voice` (`llm.ROLES`, `llm.valid_role`; an unknown role raises `ValueError`). Setting `models.roles.<role> = ["provider:model" | "provider", ...]`, split on the first colon; unknown providers are dropped and audited (`llm.role_unknown_provider`). An explicit chain is exclusive. Inheritance: any role → `orchestrator` → global (`llm.provider` + `provider_order` via `_ordered()`, unchanged). `role=""` = global. `LLM._plan(role, prefer)` gives `[(provider, model)]`. `prefer` (a profile's `model:`) leads unless the requested role itself is set explicitly. The breaker stays per provider name. `vision`/`voice` exist only in the resolver (`LLM.vision` and `live.py` keep their own chains).

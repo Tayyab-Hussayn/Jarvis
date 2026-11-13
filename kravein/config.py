@@ -432,6 +432,7 @@ def api_keys() -> dict[str, str]:
         "openrouter_api_key": ("KRAVEIN_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"),
         "novarouter_api_key": ("KRAVEIN_NOVAROUTER_API_KEY", "NOVAROUTER_API_KEY"),
         "opencode_zen_api_key": ("KRAVEIN_OPENCODE_ZEN_API_KEY", "OPENCODE_ZEN_API_KEY"),
+        "anthropic_api_key": ("KRAVEIN_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
     }
     for key, env_names in env_map.items():
         for name in env_names:
@@ -457,6 +458,26 @@ def novarouter_api_key() -> str:
 
 def zen_api_key() -> str:
     return api_keys().get("opencode_zen_api_key", "")
+
+
+def anthropic_api_key() -> str:
+    return api_keys().get("anthropic_api_key", "")
+
+
+def api_key(name: str) -> str:
+    """A key by its ``api_keys.json`` name, e.g. ``deepseek_api_key`` (#231).
+
+    For configured OpenAI-compatible endpoints. The environment wins, as for
+    the built-in keys: ``KRAVEIN_<NAME>`` then ``<NAME>`` (upper-cased).
+    """
+    name = str(name or "").strip()
+    if not name:
+        return ""
+    for env_name in (f"KRAVEIN_{name.upper()}", name.upper()):
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            return value
+    return api_keys().get(name, "")
 
 
 # --------------------------------------------------------------------------

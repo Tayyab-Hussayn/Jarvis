@@ -892,7 +892,25 @@ def doctor() -> int:
 
     from .llm import ZenProvider
 
-    for block in (ZenProvider().report(), _gemini_report(), cline_provider.doctor()):
+    blocks = [ZenProvider().report(), _gemini_report(), cline_provider.doctor()]
+    # Anthropic + configured OpenAI-compatible endpoints (#231); never a key.
+    # A diagnostic must not die on one provider's block, so this is guarded.
+    try:
+        facade = client()
+        endpoints = facade.endpoints()
+        blocks.append(facade.anthropic.report())
+        blocks += [endpoint.report() for endpoint in endpoints]
+        usable = {e.name for e in endpoints}
+        raw = config.get("llm.endpoints") or {}
+        for name in (raw if isinstance(raw, dict) else {}):
+            if name not in usable:
+                blocks.append(
+                    f"Endpoint '{name}': NOT USED — the name must be lowercase letters, digits, "
+                    "'-' or '_', must not be a built-in provider name, and needs an object value"
+                )
+    except Exception as exc:
+        blocks.append(f"Extra providers: could not be listed ({type(exc).__name__})")
+    for block in blocks:
         for line in block.splitlines():
             colour = red if ("NOT FOUND" in line or "NOT SET" in line) else dim
             print(colour(f"  {line}"))
