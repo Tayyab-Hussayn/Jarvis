@@ -587,6 +587,9 @@ def build_parser() -> argparse.ArgumentParser:
     audit_cmd.add_argument("-n", "--limit", type=int, default=30)
     audit_cmd.add_argument("-e", "--event", default="", help="filter by event prefix")
 
+    usage_cmd = sub.add_parser("usage", help="model calls and tokens per role and model")
+    usage_cmd.add_argument("--days", type=float, default=7, help="look back N days (default 7)")
+
     daemon = sub.add_parser("daemon", help="run as a background service")
     daemon.add_argument("--socket", default="", help="override the socket path")
 
@@ -791,6 +794,15 @@ def main(argv: list[str] | None = None) -> int:
     if command == "doctor":
         return doctor()
 
+    if command == "usage":
+        from . import usage
+
+        if args.days <= 0:
+            print(red("--days must be positive"), file=sys.stderr)
+            return 2
+        print(usage.report(args.days))
+        return 0
+
     if command == "audit":
         entries = audit.tail(limit=args.limit, event_prefix=args.event)
         if not entries:
@@ -880,7 +892,25 @@ def doctor() -> int:
 
     from .llm import ZenProvider
 
-    for block in (ZenProvider().report(), _gemini_report(), cline_provider.doctor()):
+    blocks = [ZenProvider().report(), _gemini_report(), cline_provider.doctor()]
+    # Anthropic + configured OpenAI-compatible endpoints (#231); never a key.
+    # A diagnostic must not die on one provider's block, so this is guarded.
+    try:
+        facade = client()
+        endpoints = facade.endpoints()
+        blocks.append(facade.anthropic.report())
+        blocks += [endpoint.report() for endpoint in endpoints]
+        usable = {e.name for e in endpoints}
+        raw = config.get("llm.endpoints") or {}
+        for name in (raw if isinstance(raw, dict) else {}):
+            if name not in usable:
+                blocks.append(
+                    f"Endpoint '{name}': NOT USED — the name must be lowercase letters, digits, "
+                    "'-' or '_', must not be a built-in provider name, and needs an object value"
+                )
+    except Exception as exc:
+        blocks.append(f"Extra providers: could not be listed ({type(exc).__name__})")
+    for block in blocks:
         for line in block.splitlines():
             colour = red if ("NOT FOUND" in line or "NOT SET" in line) else dim
             print(colour(f"  {line}"))

@@ -240,7 +240,7 @@ class Agent:
         self._lock = threading.RLock()
         self._llm = client()
         if profile is not None and profile.model:
-            known = {p.name for p in self._llm._all()}
+            known = self._llm.known_providers()   # built-ins + anthropic + endpoints (#231)
             if profile.model.partition(":")[0] not in known:
                 raise ProfileError(
                     f"profile '{profile.name}': unknown provider in model "
@@ -324,6 +324,21 @@ class Agent:
             audit.record("agent.history_load_failed", error=str(exc), profile=self._history_key)
 
     # -- helpers ---------------------------------------------------------
+
+    @property
+    def model_role(self) -> str:
+        """``models.roles`` key for this agent's turns (#228)."""
+        if self.profile is None or self.profile.name == ORCHESTRATOR:
+            return "orchestrator"
+        return f"worker:{self.profile.name}"
+
+    def _usage_tags(self) -> dict[str, str]:
+        """Usage-ledger labels. A delegated child is billed to its owner."""
+        return {
+            "principal": self.principal or self.run_principal or "",
+            "thread": self.thread_id or "",
+            "agent": self.profile.name if self.profile is not None else "default",
+        }
 
     def _emit(self, kind: str, text: str, **data: Any) -> None:
         if self.observer is not None:
@@ -481,6 +496,7 @@ class Agent:
         try:
             reply = self._llm.complete(
                 [{"role": "user", "content": prompt}], system=SUMMARY_SYSTEM, tools=None,
+                role="utility", tags=self._usage_tags(),
             )
             text = (reply.text or "").strip()
             wants_tools = reply.wants_tools
@@ -715,7 +731,7 @@ class Agent:
                             self.profile is not None and self.profile.model) else {}
                         reply = self._llm.complete(
                             self._with_context(note), system=system, tools=tools,
-                            **kwargs,
+                            role=self.model_role, tags=self._usage_tags(), **kwargs,
                         )
                     except LLMError as exc:
                         turn.error = str(exc)
@@ -841,8 +857,11 @@ class Agent:
         try:
             kwargs = {"prefer": self.profile.model} if (
                 self.profile is not None and self.profile.model) else {}
+            # utility role; the profile's model stays the fallback preference
+            # (LLM._plan), so with no models.roles nothing changes.
             reply = self._llm.complete(self._with_context(note), system=system,
-                                       tools=None, **kwargs)
+                                       tools=None, role="utility",
+                                       tags=self._usage_tags(), **kwargs)
             text = (reply.text or "").strip()
         except Exception as exc:                      # LLMError or anything else
             audit.record("agent.wrap_up_failed", source=self.source, error=str(exc))

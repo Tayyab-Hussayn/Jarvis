@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS messages (
 
 
 _BYTES_TAG = "__b64__"
+_ANTHROPIC_TAG = "__anthropic__"   # = llm.ANTHROPIC_SIGNATURE_TAG (no import: keeps history light)
 
 
 def _encode(value: Any) -> Any:
@@ -73,6 +74,10 @@ def _restore_signatures(message: dict[str, Any]) -> None:
         if not isinstance(call, dict) or call.get("signature") is None:
             continue
         sig = call["signature"]
+        # Claude's original content blocks (#231) are plain JSON already and
+        # must come back unchanged (thinking signatures are bound to them).
+        if isinstance(sig, dict) and isinstance(sig.get(_ANTHROPIC_TAG), list):
+            continue
         if isinstance(sig, dict) and isinstance(sig.get(_BYTES_TAG), str):
             try:
                 call["signature"] = base64.b64decode(sig[_BYTES_TAG], validate=True)
