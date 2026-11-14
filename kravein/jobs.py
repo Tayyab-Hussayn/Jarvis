@@ -400,6 +400,14 @@ def edit(
     does not have to restate the schedule. Changing the schedule clears the
     retry counter — the old backoff belonged to the old plan.
     """
+    # Same rule as add() (#237): new words for the job carry the editing run's
+    # taint, or a tainted run could rewrite a clean job's prompt and have it
+    # run clean under the owner's outward grants. Taint is only ever added.
+    from . import safety
+
+    editor_taint = set(safety.taint_sources())
+    editor = safety._grant_principal()
+
     with locked() as got:
         if not got:
             raise RuntimeError("job store is busy")
@@ -409,6 +417,12 @@ def edit(
                 continue
             if job.get("kind") in INTERNAL_KINDS and not _internal:
                 raise ValueError("this job is managed by Kravein's settings and cannot be edited")
+
+            if prompt is not None or kind is not None:
+                old = job.get("taint") if isinstance(job.get("taint"), list) else []
+                job["taint"] = sorted({*map(str, old), *editor_taint})
+                if not job.get("principal"):
+                    job["principal"] = editor
 
             if kind is not None:
                 if kind not in VALID_KINDS:

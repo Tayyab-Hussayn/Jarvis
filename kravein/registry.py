@@ -259,6 +259,11 @@ def _scope_values(entry: Skill, cleaned: dict[str, Any]) -> tuple[tuple[str, str
             values[pname] = cleaned[pname]
         elif param.default is not inspect.Parameter.empty:
             values[pname] = param.default
+    # A `**kwargs` bridge (an MCP/plugin wrapper) has its real arguments only
+    # in the call: they all count, or one grant would cover every argument.
+    for pname, value in cleaned.items():
+        if pname not in _INJECTED_PARAMS:
+            values.setdefault(pname, value)
     names = entry.scope or tuple(sorted(values))
     return tuple(sorted(
         (n, json.dumps(values.get(n), sort_keys=True, default=str)) for n in names

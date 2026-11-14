@@ -24,6 +24,7 @@ import stat as stat_mod
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -2091,6 +2092,29 @@ RULES_FILENAME = "safety_rules.json"
 _rules_lock = threading.Lock()
 
 
+@contextmanager
+def _rules_locked():
+    """Thread lock + a cross-process ``flock`` around every read-modify-write.
+
+    The server and a jobs tick are separate processes that both rewrite the
+    store (#237, D4 made jobs use grants). Without the file lock a job saving
+    its use count could write back a grant the owner revoked a moment ago.
+    The lock file is never replaced (the store is: tmp + rename swaps the
+    inode, so locking the store itself guards nothing) - same as jobs.lock.
+    """
+    import fcntl
+
+    with _rules_lock:
+        path = _rules_path().with_name(RULES_FILENAME + ".lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def _rules_path() -> Path:
     return config.STATE_DIR / RULES_FILENAME
 
@@ -2121,7 +2145,7 @@ def _save_rules(rules: list[dict]) -> None:
 
 def list_rules(principal: str) -> list[dict]:
     """The principal's own rules, for the settings view."""
-    with _rules_lock:
+    with _rules_locked():
         return [dict(r) for r in _load_rules() if r["principal"] == principal]
 
 
@@ -2129,7 +2153,7 @@ def add_always_rule(signature: str, principal: str, *, by: str = "") -> dict | N
     """Store a rule. Owner-facing callers only (enforce, after a card answer)."""
     if not signature or not principal:
         return None
-    with _rules_lock:
+    with _rules_locked():
         rules = _load_rules()
         for r in rules:
             if r["signature"] == signature and r["principal"] == principal:
@@ -2147,7 +2171,7 @@ def add_always_rule(signature: str, principal: str, *, by: str = "") -> dict | N
 
 def revoke_rule(rule_id: str, principal: str, *, by: str = "") -> bool:
     """Delete one of the principal's rules. False if it is not theirs/unknown."""
-    with _rules_lock:
+    with _rules_locked():
         rules = _load_rules()
         kept = [r for r in rules if not (r["id"] == rule_id and r["principal"] == principal)]
         if len(kept) == len(rules):
@@ -2161,7 +2185,7 @@ def _match_rule(signature: str, principal: str) -> dict | None:
     """The principal's rule for this signature, with its use count bumped."""
     if not signature or not principal:
         return None
-    with _rules_lock:
+    with _rules_locked():
         rules = _load_rules()
         for r in rules:
             if r.get("kind") == "grant":
@@ -2246,7 +2270,7 @@ def _add_grant(ctx: CallContext, principal: str, cap: int | None,
         return None
     signature = grant_signature(ctx)
     now = time.time()
-    with _rules_lock:
+    with _rules_locked():
         rules = _load_rules()
         rules = [r for r in rules if not (r.get("kind") == "grant" and r["signature"] == signature
                                           and r["principal"] == principal)]
@@ -2274,22 +2298,33 @@ def _use_grant(ctx: CallContext, principal: str) -> tuple[dict | None, str]:
     if not principal:
         return None, "no principal"
     signature = grant_signature(ctx)
-    with _rules_lock:
+    with _rules_locked():
         rules = _load_rules()
         for r in rules:
             if not (r.get("kind") == "grant" and r["signature"] == signature
                     and r["principal"] == principal and r.get("tool") == ctx.tool):
                 continue
+            # Fail closed on anything malformed: a limit that cannot be read
+            # is not "no limit" (a hand edit could turn cap into "5").
             expires = r.get("expires_at")
-            if isinstance(expires, (int, float)) and time.time() >= expires:
+            if expires is not None and (isinstance(expires, bool)
+                                        or not isinstance(expires, (int, float))):
+                return None, "malformed grant"
+            if expires is not None and time.time() >= expires:
                 return None, "expired"
-            if r.get("day") != _today():
-                r["day"], r["day_uses"] = _today(), 0
             cap = r.get("cap")
-            if isinstance(cap, int) and not isinstance(cap, bool) and int(r.get("day_uses") or 0) >= cap:
+            if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 1):
+                return None, "malformed grant"
+            try:
+                uses = int(r.get("uses") or 0)
+                day_uses = int(r.get("day_uses") or 0) if r.get("day") == _today() else 0
+            except (TypeError, ValueError):
+                return None, "malformed grant"
+            if cap is not None and day_uses >= cap:
                 return None, "cap reached"
-            r["uses"] = int(r.get("uses") or 0) + 1
-            r["day_uses"] = int(r.get("day_uses") or 0) + 1
+            r["day"] = _today()
+            r["uses"] = uses + 1
+            r["day_uses"] = day_uses + 1
             r["last_used"] = time.time()
             try:
                 _save_rules(rules)
@@ -2434,7 +2469,7 @@ def enforce(
                     attended=confirmer is not _deny and _attended(confirmer),
                 )
                 return
-            if why in ("expired", "cap reached", "could not record the use"):
+            if why in ("expired", "cap reached", "could not record the use", "malformed grant"):
                 audit.record("safety.grant_unusable", tool=ctx.tool, reason=why,
                              principal=grant_principal)
 
