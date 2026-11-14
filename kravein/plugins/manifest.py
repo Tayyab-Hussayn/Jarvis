@@ -16,6 +16,11 @@ NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")        # no "_": keeps <plugin>-
 # real MCP tool for any profile naming it, with the plugin's own class.
 TOOL_RE = re.compile(r"^(?!mcp_|plugin_)[a-z](?:[a-z0-9]|_(?!_)){0,47}$")
 DANGERS = ("SAFE", "MODERATE", "GUARDED", "DESTRUCTIVE", "CRITICAL")
+# Who gets a plugin tool without listing it (owner ruling on #246, D10: enabling
+# a plugin is enough). "default" = the agent with no profile. Workers get a
+# tool only by listing it, or when the plugin names them here.
+DEFAULT_AGENTS = ("default", "orchestrator")
+AGENT_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 MAX_FILES = 200
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
@@ -36,6 +41,16 @@ class Manifest:
     author: str
     secrets: list[str] = field(default_factory=list)
     tools: dict[str, dict[str, Any]] = field(default_factory=dict)
+    agents: tuple[str, ...] = DEFAULT_AGENTS
+
+
+def _agents(value: Any, where: str) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(a, str) and AGENT_RE.match(a) for a in value):
+        raise ManifestError(f"{where}agents must be a list of agent names "
+                            "(\"default\" = the agent with no profile, \"orchestrator\", a worker)")
+    return tuple(dict.fromkeys(value))
 
 
 def read_manifest(folder: Path) -> Manifest:
@@ -66,6 +81,7 @@ def parse_manifest(folder_name: str, raw: bytes | None) -> Manifest:
     tools = data.get("tools") or {}
     if not isinstance(tools, dict):
         raise ManifestError("tools must be an object {tool_name: {danger, outward, ...}}")
+    plugin_agents = _agents(data.get("agents"), "") or DEFAULT_AGENTS
     clean: dict[str, dict[str, Any]] = {}
     for tool, spec in tools.items():
         spec = {"danger": spec} if isinstance(spec, str) else spec
@@ -80,13 +96,15 @@ def parse_manifest(folder_name: str, raw: bytes | None) -> Manifest:
         clean[str(tool)] = {
             "danger": danger, "outward": bool(spec.get("outward", False)),
             "untrusted_output": spec.get("untrusted_output"), "scope": scope,
+            "agents": _agents(spec.get("agents"), f"tools.{tool}.") or plugin_agents,
         }
     secrets = data.get("secrets") or []
     if not isinstance(secrets, list) or not all(isinstance(s, str) for s in secrets):
         raise ManifestError("secrets must be a list of api_keys.json names")
     return Manifest(name=name, version=str(data.get("version") or "0"),
                     description=str(data.get("description") or "")[:500],
-                    author=str(data.get("author") or "")[:200], secrets=list(secrets), tools=clean)
+                    author=str(data.get("author") or "")[:200], secrets=list(secrets), tools=clean,
+                    agents=plugin_agents)
 
 
 def walk(folder: Path) -> list[Path]:

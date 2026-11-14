@@ -60,6 +60,9 @@ class Skill:
     outward: bool = False
     untrusted_output: bool = False
     origin: str = ""
+    # Plugin tools only (#245): the agents that get it without listing it.
+    # "default" = the agent with no profile; others are profile names.
+    agents: tuple[str, ...] = ()
 
     def available(self) -> tuple[bool, str]:
         """Check the skill's declared external requirements are present."""
@@ -412,6 +415,7 @@ def skill(
                 else bool(nonlocal_untrusted)
             ),
             origin=str(nonlocal_origin or ""),
+            agents=tuple(declared.get("agents") or ()) if ctx is not None else (),
         )
         if ctx is not None:
             ctx["registered"].append(skill_name)
@@ -581,10 +585,28 @@ def is_external(entry: Skill) -> bool:
     return entry.category.startswith(EXTERNAL_CATEGORY_PREFIX)
 
 
+def is_plugin(entry: Skill) -> bool:
+    return entry.category.startswith(PLUGIN_CATEGORY_PREFIX)
+
+
 def is_profile_only(entry: Skill) -> bool:
-    """MCP (#243) and plugin (#245) tools: only a profile that lists them may
-    see or call them; the agent with no profile never does."""
-    return is_external(entry) or entry.category.startswith(PLUGIN_CATEGORY_PREFIX)
+    """Not given to the agent with no profile: an MCP tool (#243, a separate
+    server approval) always; a plugin tool (#245) unless its manifest's
+    ``agents`` includes "default" (it does unless the plugin narrows it)."""
+    if is_external(entry):
+        return True
+    return is_plugin(entry) and "default" not in entry.agents
+
+
+def is_addon(entry: Skill) -> bool:
+    """MCP or plugin: comes and goes with the owner's setup, not with Kravein."""
+    return is_external(entry) or is_plugin(entry)
+
+
+def auto_tools(profile: str) -> frozenset[str]:
+    """Plugin tools a profile gets without listing them (owner ruling on #246:
+    enabling a plugin is enough for the Orchestrator; workers only by name)."""
+    return frozenset(n for n, e in all_skills().items() if is_plugin(e) and profile in e.agents)
 
 
 def register_external(

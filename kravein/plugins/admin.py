@@ -46,7 +46,9 @@ def describe(name: str, files: dict[str, bytes], man: manifest.Manifest) -> list
         for tool, spec in sorted(man.tools.items()):
             extra = ", outward" if spec["outward"] else ""
             scope = f", Always-allow scope: {', '.join(spec['scope'])}" if spec["scope"] else ""
-            lines.append(f"    {tool}: {spec['danger']}{extra}{scope}")
+            who = ", ".join("the agent with no profile" if a == "default" else a
+                            for a in spec.get("agents") or ())
+            lines.append(f"    {tool}: {spec['danger']}{extra}{scope}; available to: {who or 'only profiles that list it'}")
     for rel in sorted(files):
         parts = rel.split("/")
         if len(parts) == 3 and parts[0] == "agents" and parts[2] == "SKILL.md":

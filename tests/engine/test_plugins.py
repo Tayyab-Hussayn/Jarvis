@@ -102,14 +102,67 @@ def test_an_unenabled_plugin_is_inert(plugins):
     assert "not enabled" in admin.list_text()
 
 
-def test_plugin_tools_are_profile_only(plugins):
+def test_enabled_plugin_tools_reach_the_default_agent_and_the_orchestrator(plugins):
+    from conftest import _agent_with
+
     install(plugins)
     enable()
-    assert "example_lookup" not in {d["name"] for d in registry.tool_declarations()}
+    # The agent with no profile: listed and callable, no profile edit (D10).
+    assert {"example_lookup", "example_post"} <= {d["name"] for d in registry.tool_declarations()}
     with confirmer_scope(Asker(True), principal="p1"):
-        assert "not available" in registry.dispatch("example_lookup", {"word": "x"}, source="web")
-    assert registry.resolve_tools(["plugin:example"]) == {"example_lookup", "example_post"}
+        assert registry.dispatch("example_lookup", {"word": "x"}, source="web") == "x: an example definition"
+    # The Orchestrator profile, unchanged on disk.
+    orchestrator, _ = _agent_with([], profile="orchestrator")
+    assert "plugin:example" not in orchestrator.profile.tools
+    assert {"example_lookup", "example_post"} <= orchestrator._allowed
+    assert "example_lookup" in {d["name"] for d in registry.tool_declarations(names=orchestrator._allowed)}
+    assert call("example_lookup", allowed=orchestrator._allowed, word="y") == "y: an example definition"
+
+
+def test_a_worker_gets_a_plugin_tool_only_by_listing_it(plugins):
+    from conftest import _agent_with
+    from kravein.agents import AgentProfile
+
+    install(plugins)
+    enable()
+    worker, _ = _agent_with([], profile="research")
+    assert "example_lookup" not in worker._allowed
+    assert "not available to this agent" in call("example_lookup", allowed=worker._allowed, word="x")
+    listing = AgentProfile(name="lister", purpose="p", tools=("plugin:example",))
+    lister, _ = _agent_with([], profile=listing)
+    assert {"example_lookup", "example_post"} <= lister._allowed
+    # The plugin's own profile lists it.
+    assert {"example_lookup", "example_post"} <= _agent_with([], profile="example-worker")[0]._allowed
     assert registry.resolve_tools(["plugin:not-loaded"]) == frozenset()
+
+
+def test_agents_narrows_who_gets_a_plugin_tool(plugins):
+    from conftest import _agent_with
+
+    make(plugins, "narrow", "from kravein.registry import skill\n"
+         "@skill()\ndef narrow_a() -> str:\n    '''a'''\n    return 'a'\n"
+         "@skill()\ndef narrow_b() -> str:\n    '''b'''\n    return 'b'\n",
+         {"narrow_a": "SAFE", "narrow_b": {"danger": "SAFE", "agents": ["default"]}})
+    data = json.loads((plugins / "narrow" / "plugin.json").read_text())
+    data["agents"] = ["research"]                         # plugin-wide: one worker only
+    (plugins / "narrow" / "plugin.json").write_text(json.dumps(data))
+    enable("narrow")
+    assert registry.get_skill("narrow_a").agents == ("research",)
+    assert registry.get_skill("narrow_b").agents == ("default",)      # per-tool wins
+    default_names = {d["name"] for d in registry.tool_declarations()}
+    assert "narrow_a" not in default_names and "narrow_b" in default_names
+    with confirmer_scope(None, principal="p1"):
+        assert "not available" in registry.dispatch("narrow_a", {}, source="web")
+    assert "narrow_a" not in _agent_with([], profile="orchestrator")[0]._allowed
+    research, _ = _agent_with([], profile="research")
+    assert "narrow_a" in research._allowed and "narrow_b" not in research._allowed
+
+
+def test_mcp_tools_stay_profile_only():
+    entry = registry.Skill(name="mcp__s__t", func=lambda: "", description="", danger=Danger.SAFE,
+                           parameters={}, category="mcp:s", requires=(), aliases=(),
+                           agents=("default", "orchestrator"))
+    assert registry.is_profile_only(entry)
 
 
 # -- the pin -------------------------------------------------------------------------------

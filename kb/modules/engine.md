@@ -25,7 +25,7 @@ updated: 2026-11-14
     "tools": {"<name>_lookup": "SAFE",
               "<name>_send": {"danger": "GUARDED", "outward": true, "scope": ["channel"]}}}
    ```
-   Every tool must be listed here. Its class is a **floor** (the code can only ask more). `outward` = it acts outside this machine, and its grants pause in a tainted run. `scope` = what an "Always allow" is bound to (default: every argument).
+   Every tool must be listed here. Its class is a **floor** (the code can only ask more). `outward` = it acts outside this machine, and its grants pause in a tainted run. `scope` = what an "Always allow" is bound to (default: every argument). Once enabled, the tools are available to the Orchestrator and the agent with no profile; add `"agents": ["orchestrator", "growth"]` (per plugin or per tool) to choose differently.
 3. `tools/<anything>.py`: ordinary skills (the docstring `Args:` block is the tool schema; tool names must start with a letter and be unique across Kravein):
    ```python
    from kravein import safety
@@ -67,7 +67,12 @@ The example in `tests/engine/fixtures/plugins/example/` is a complete plugin.
     - `status()`, `profile_texts()` (hashed SKILL.md text; `agents.profile.load_profile` / `list_profiles` use it, and a core profile always wins).
   - **`registry.plugin_context(name, tools)`**: while active, `@skill` forces category = origin = `plugin:<name>`, danger = max(code, manifest), outward / untrusted / scope from the manifest, no aliases. It refuses an undeclared tool and any existing name (core, MCP, other plugin).
     - `unregister_plugin(name)` removes only that category.
-    - `is_profile_only(entry)` (MCP or plugin): not in the no-profile tool list, and `dispatch(allowed=None)` refuses it. `resolve_tools` accepts `plugin:<name>` while it is not loaded.
+    - **Visibility (owner ruling on #246, D10).** An enabled plugin's tools reach the agent with no profile and the Orchestrator **with no profile edit**. A worker gets them only by listing `plugin:<name>` / the tool, or when the manifest names it.
+      - `plugin.json` `"agents": [...]` (plugin-wide, or per tool, where per tool wins) narrows the default `["default", "orchestrator"]` (`manifest.DEFAULT_AGENTS`; `"default"` = no profile). It is stored as `Skill.agents`.
+      - `is_profile_only(entry)` = MCP always, plugin only without `"default"`: such a tool is not in the no-profile list and `dispatch(allowed=None)` refuses it.
+      - `auto_tools(profile)` = plugin tools naming that profile. `Agent._allowed` = `resolve_tools(profile.tools) | auto_tools(profile.name)`, re-resolved each turn.
+      - `is_addon` (MCP or plugin) keeps them out of the prompt snapshot. MCP stays profile-only (a separate server approval).
+    - `resolve_tools` accepts `plugin:<name>` while it is not loaded.
   - **`admin.py`**: `enable` (shows files + per-file hash + total, CODE PLUGIN warning, tools / profiles / procedures / MCP / secrets, asks once, re-hashes and refuses if anything moved, adds MCP servers as pending, pins), `disable`, `remove` (pins only, never the folder), `list_text`, `doctor_lines` (pins + hash check; never runs plugin code).
   - **Safety:**
     - `classify_command` hard-blocks (CRITICAL) any non-plain-read command naming a path inside the plugins dir (a glob too), our `plugins.json`, or run with a cwd inside the plugins dir.

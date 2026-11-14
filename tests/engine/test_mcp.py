@@ -41,9 +41,9 @@ def log(tmp_path):
     return tmp_path / "sends.log"
 
 
-def add_mock(log, **env):
+def add_mock(log, timeout=10.0, **env):
     mcp_config.add_server("mock", command=[sys.executable, MOCK],
-                          env={"MOCK_VARIANT": "v1", "MOCK_LOG": str(log), **env}, timeout=10)
+                          env={"MOCK_VARIANT": "v1", "MOCK_LOG": str(log), **env}, timeout=timeout)
 
 
 def approve(mgr, **kw):
@@ -74,9 +74,23 @@ def call(name, confirmer=None, *, allowed=None, memory=None, principal="p1", gra
         return registry.dispatch(name, params, source="web", allowed=allowed, context=context)
 
 
-def ready(mgr, log, **kw):
-    add_mock(log)
-    approve(mgr, **kw)
+_APPROVED: dict = {}
+
+
+def ready(mgr, log, scopes=None, timeout=10.0):
+    """A connected, approved mock. The first call approves for real (one
+    extra spawn); later tests store the same decisions directly, so each test
+    spawns the server once. The approve flow itself has its own tests."""
+    import copy
+
+    add_mock(log, timeout=timeout)
+    if not _APPROVED:
+        approve(mgr)
+        _APPROVED.update(copy.deepcopy(mcp_config.servers()["mock"]["tools"]))
+    decisions = copy.deepcopy(_APPROVED)
+    for tool, args in (scopes or {}).items():
+        decisions[tool]["scope"] = list(args)
+    mcp_config.record_approval("mock", decisions)
     mgr.ensure_started(wait=30)
     assert mgr.connection("mock").status == "ready", mgr.connection("mock").error
 
@@ -257,15 +271,12 @@ def test_injected_text_cannot_send_without_a_card(mgr, log, monkeypatch):
 # -- timeout, stop, changed definition mid-session ----------------------------------------
 
 def test_timeout_and_stop(mgr, log):
-    ready(mgr, log)
-    with mcp_config._locked() as data:
-        data["servers"]["mock"]["timeout"] = 1.0
-    mgr.ensure_started(wait=30)
-    assert "timed out" in call("mcp__mock__slow", seconds=5)
+    ready(mgr, log, timeout=1.0)
+    assert "timed out" in call("mcp__mock__slow", seconds=2)
     stop = threading.Event()
     stop.set()
     ctx = type("Ctx", (), {"_stop": stop})()
-    assert "stopped" in call("mcp__mock__slow", context=ctx, seconds=5)
+    assert "stopped" in call("mcp__mock__slow", context=ctx, seconds=2)
 
 
 def test_header_mismatch_drops_the_connection(mgr):
