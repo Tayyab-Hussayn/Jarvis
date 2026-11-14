@@ -490,6 +490,52 @@ def _mentions_mcp_config(command: str) -> bool:
                for name in ("mcp.json", "mcp.json.lock", "mcp.json.tmp"))
 
 
+def _mentions_plugins(command: str, cwd: "str | os.PathLike | None" = None) -> bool:
+    """A path inside Kravein's plugins folder, the folder itself, or our
+    ``plugins.json`` (by path, or as the bare name like settings.json).
+    Relative paths are resolved against ``cwd`` when it is known: the
+    default workspace sits next to the plugins folder (``../plugins/...``)."""
+    state_file = Path(config.CONFIG_DIR) / "plugins.json"
+    if "plugins.json" in command and any(
+            _mentions_file(command, state_file.with_name(n))
+            for n in ("plugins.json", "plugins.json.lock", "plugins.json.tmp")):
+        return True
+    root = resolve_target(Path(config.DATA_DIR) / "plugins")
+    try:
+        tokens = shlex.split(command, comments=True)
+    except ValueError:
+        tokens = command.split()
+    for token in list(tokens):
+        tokens += [t for t in re.split(r"[;&|<>()=,:'\"]", token) if t]
+    for token in tokens:
+        expanded = os.path.expanduser(os.path.expandvars(token))
+        if not expanded.startswith(("/", "~")):
+            if not cwd or not (expanded.startswith(".") or "/" in expanded):
+                continue
+            expanded = os.path.join(os.fspath(cwd), expanded)
+        expanded = re.sub(r"\{[^{}]*\}", "*", expanded)
+        if any(c in expanded for c in "*?["):
+            # A glob that could reach into the tree: `…/kravein/*/x`, `…/plugins/*`.
+            if fnmatch.fnmatchcase(str(root / "x"), os.path.normpath(expanded)) or \
+                    fnmatch.fnmatchcase(str(root), os.path.normpath(expanded)) or \
+                    os.path.normpath(expanded).startswith(str(root)):
+                return True
+            continue
+        target = resolve_target(expanded)
+        if target == root or root in target.parents:
+            return True
+    return False
+
+
+def _inside_plugins(cwd: "str | os.PathLike | None") -> bool:
+    """A command run FROM the plugins tree reaches it with relative paths."""
+    if not cwd:
+        return False
+    root = resolve_target(Path(config.DATA_DIR) / "plugins")
+    here = resolve_target(cwd)
+    return here == root or root in here.parents
+
+
 def _plain_read(command: str) -> bool:
     """Every segment is a known reader with no redirect (nothing written)."""
     segments = _segments(command)
@@ -613,6 +659,17 @@ def classify_command(
     # Only when the FILE is named: a command on the config directory itself
     # (`du -sh ~/.config/kravein`) is judged by the ordinary rules, and writes
     # there are refused by check_path anyway.
+    # The plugins folder and the enabled list (#245) are the owner's for the
+    # same reason: writing either one decides what code runs inside Kravein.
+    if (_mentions_plugins(text, cwd) or _inside_plugins(cwd)) and not _plain_read(text):
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = (
+            "plugins are the owner's: they are added by hand and enabled only "
+            "with `kravein plugin enable`"
+        )
+        return verdict
+
     if "mcp.json" in text and _mentions_mcp_config(text) and not _plain_read(text):
         verdict.blocked = True
         verdict.danger = Danger.CRITICAL

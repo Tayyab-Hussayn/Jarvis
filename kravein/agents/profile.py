@@ -173,6 +173,14 @@ def load_profile(name: str, *, root: Path | None = None) -> AgentProfile:
     if not _NAME_RE.match(name or ""):
         raise ProfileError(f"invalid profile name '{name}'")
     path = (root or PROFILES_DIR) / name / "SKILL.md"
+    if root is None and not path.is_file():
+        # A profile from an enabled plugin (#245): the text the loader hashed,
+        # never a fresh read from the plugin folder. A core profile always
+        # wins a name clash (it is checked first).
+        found = _plugin_profiles().get(name)
+        if found is not None:
+            plugin, text = found
+            return parse_profile(text, expected_name=name, where=f"plugin:{plugin}/agents/{name}")
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -180,11 +188,26 @@ def load_profile(name: str, *, root: Path | None = None) -> AgentProfile:
     return parse_profile(text, expected_name=name, where=str(path))
 
 
+def _plugin_profiles() -> dict[str, tuple[str, str]]:
+    try:
+        from .. import registry
+        from ..plugins import loader
+
+        registry.load_skills()                    # loads the enabled plugins
+        return loader.profile_texts()
+    except Exception:
+        return {}
+
+
 def list_profiles(*, root: Path | None = None) -> list[str]:
     """Names of folders that hold a SKILL.md; folders starting with ``_`` are
-    fixtures and not listed."""
+    fixtures and not listed. Without ``root``: plus enabled plugins' profiles
+    whose names do not clash with a core one."""
     base = root or PROFILES_DIR
-    return sorted(
+    core = {
         p.name for p in base.iterdir()
         if p.is_dir() and not p.name.startswith("_") and (p / "SKILL.md").is_file()
-    )
+    }
+    if root is None:
+        core |= {n for n in _plugin_profiles() if _NAME_RE.match(n)}
+    return sorted(core)

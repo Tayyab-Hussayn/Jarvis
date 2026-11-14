@@ -11,6 +11,8 @@ core file needs editing.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import dataclasses
 import importlib
 import inspect
@@ -58,6 +60,9 @@ class Skill:
     outward: bool = False
     untrusted_output: bool = False
     origin: str = ""
+    # Plugin tools only (#245): the agents that get it without listing it.
+    # "default" = the agent with no profile; others are profile names.
+    agents: tuple[str, ...] = ()
 
     def available(self) -> tuple[bool, str]:
         """Check the skill's declared external requirements are present."""
@@ -245,6 +250,32 @@ _INJECTED_PARAMS = {"_source", "_confirm", "_context"}
 # that reads them is tainted. A skill can say otherwise with untrusted_output=.
 UNTRUSTED_CATEGORIES = frozenset({"web", "browser"})
 
+# Set only by kravein.plugins.loader while a plugin's code runs (#245).
+_plugin_ctx: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("plugin_ctx", default=None)
+PLUGIN_CATEGORY_PREFIX = "plugin:"
+
+
+@contextlib.contextmanager
+def plugin_context(name: str, tools: dict[str, dict[str, Any]]):
+    """While a plugin module executes: every ``@skill`` is bound to the
+    plugin's manifest. Yields the list of names it registered."""
+    ctx = {"name": name, "tools": tools, "registered": []}
+    token = _plugin_ctx.set(ctx)
+    try:
+        yield ctx["registered"]
+    finally:
+        _plugin_ctx.reset(token)
+
+
+def unregister_plugin(name: str) -> list[str]:
+    """Remove every tool of plugin ``name`` (and only those)."""
+    category = f"{PLUGIN_CATEGORY_PREFIX}{name}"
+    with _lock:
+        gone = [n for n, e in _registry.items() if e.category == category]
+        for n in gone:
+            del _registry[n]
+    return gone
+
 
 def _scope_values(entry: Skill, cleaned: dict[str, Any]) -> tuple[tuple[str, str], ...]:
     """The grant scope of THIS call, from the arguments actually passed plus the
@@ -316,7 +347,34 @@ def skill(
         skill_name = name or func.__name__
         schema["name"] = skill_name
 
-        scope_names = tuple(scope)
+        # A plugin's code is running (#245): the plugin's manifest, which the
+        # owner saw at enable time, decides category, origin and the floor of
+        # every declared field. Nothing the plugin's code says can go below it.
+        nonlocal_category, nonlocal_danger = category, danger
+        nonlocal_outward, nonlocal_untrusted, nonlocal_origin = outward, untrusted_output, origin
+        nonlocal_scope = tuple(scope)
+        ctx = _plugin_ctx.get()
+        if ctx is None and str(getattr(func, "__module__", "")).startswith("kravein_plugins."):
+            # Plugin code registering later (a timer, a thread, a lazy call)
+            # is outside the context that applies the manifest: refused.
+            raise ValueError(f"'{skill_name}': a plugin may only define tools while it loads")
+        if ctx is not None:
+            declared = ctx["tools"].get(skill_name)
+            if declared is None:
+                raise ValueError(f"plugin '{ctx['name']}': tool '{skill_name}' is not declared "
+                                 "in plugin.json (add it under \"tools\" with its danger)")
+            if skill_name in _registry:
+                raise ValueError(f"plugin '{ctx['name']}': '{skill_name}' already exists; a plugin "
+                                 "may not replace a core, MCP or other plugin tool")
+            nonlocal_category = nonlocal_origin = f"plugin:{ctx['name']}"
+            nonlocal_danger = max(Danger(danger), Danger[declared["danger"]])
+            nonlocal_outward = bool(outward) or bool(declared.get("outward"))
+            if declared.get("untrusted_output") is not None:
+                nonlocal_untrusted = bool(declared["untrusted_output"]) or bool(untrusted_output)
+            if declared.get("scope"):
+                nonlocal_scope = tuple(declared["scope"])
+
+        scope_names = nonlocal_scope
         unknown_scope = set(scope_names) - set(schema["parameters"]["properties"])
         if unknown_scope:
             raise ValueError(
@@ -344,20 +402,23 @@ def skill(
             name=skill_name,
             func=func,
             description=schema["description"],
-            danger=danger,
+            danger=nonlocal_danger,
             parameters=schema["parameters"],
-            category=category,
+            category=nonlocal_category,
             requires=tuple(requires),
-            aliases=alias_names,
-            alias_presets=presets,
+            aliases=alias_names if ctx is None else (),     # a plugin gets no extra names
+            alias_presets=presets if ctx is None else {},
             scope=scope_names,
-            outward=bool(outward),
+            outward=bool(nonlocal_outward),
             untrusted_output=(
-                category in UNTRUSTED_CATEGORIES if untrusted_output is None
-                else bool(untrusted_output)
+                nonlocal_category in UNTRUSTED_CATEGORIES if nonlocal_untrusted is None
+                else bool(nonlocal_untrusted)
             ),
-            origin=str(origin or ""),
+            origin=str(nonlocal_origin or ""),
+            agents=tuple(declared.get("agents") or ()) if ctx is not None else (),
         )
+        if ctx is not None:
+            ctx["registered"].append(skill_name)
 
         with _lock:
             if skill_name in _registry:
@@ -402,6 +463,16 @@ def load_skills(force: bool = False) -> None:
                 print(f"[registry] skill module '{mod.name}' failed to load: {exc}")
                 audit.record("registry.load_error", module=full, error=str(exc))
         _loaded = True
+        # The owner's enabled plugins (#245), after the core skills so a plugin
+        # can never take a core name. A broken plugin disables only itself.
+        try:
+            from .plugins import loader as _plugins
+
+            _plugins.load_enabled(force)
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:             # a plugin may never stop Kravein starting
+            audit.record("registry.plugins_failed", error=f"{type(exc).__name__}: {exc}"[:300])
 
 
 def all_skills() -> dict[str, Skill]:
@@ -455,7 +526,7 @@ def tool_declarations(
         if names is not None:
             if entry.name not in names:
                 continue
-        elif entry.category == "agents" or is_external(entry):
+        elif entry.category == "agents" or is_profile_only(entry):
             # `delegate` is an Orchestrator-only tool: an agent with no
             # profile never sees it (and `delegate` refuses such a caller too).
             # An MCP tool (#243) is given only to a profile that lists it.
@@ -488,7 +559,8 @@ def resolve_tools(spec: "typing.Iterable[str]") -> frozenset[str]:
         if item in by_cat:
             out.update(s.name for s in by_cat[item])
             continue
-        if item.startswith(EXTERNAL_CATEGORY_PREFIX) or item.startswith(EXTERNAL_NAME_PREFIX):
+        if (item.startswith(EXTERNAL_CATEGORY_PREFIX) or item.startswith(EXTERNAL_NAME_PREFIX)
+                or item.startswith(PLUGIN_CATEGORY_PREFIX)):
             # An MCP server or tool (#243) that is not connected (or not
             # approved) right now: valid to name, contributes nothing until
             # it is registered. The agent re-resolves its profile every turn.
@@ -511,6 +583,30 @@ EXTERNAL_NAME_PREFIX = "mcp__"
 
 def is_external(entry: Skill) -> bool:
     return entry.category.startswith(EXTERNAL_CATEGORY_PREFIX)
+
+
+def is_plugin(entry: Skill) -> bool:
+    return entry.category.startswith(PLUGIN_CATEGORY_PREFIX)
+
+
+def is_profile_only(entry: Skill) -> bool:
+    """Not given to the agent with no profile: an MCP tool (#243, a separate
+    server approval) always; a plugin tool (#245) unless its manifest's
+    ``agents`` includes "default" (it does unless the plugin narrows it)."""
+    if is_external(entry):
+        return True
+    return is_plugin(entry) and "default" not in entry.agents
+
+
+def is_addon(entry: Skill) -> bool:
+    """MCP or plugin: comes and goes with the owner's setup, not with Kravein."""
+    return is_external(entry) or is_plugin(entry)
+
+
+def auto_tools(profile: str) -> frozenset[str]:
+    """Plugin tools a profile gets without listing them (owner ruling on #246:
+    enabling a plugin is enough for the Orchestrator; workers only by name)."""
+    return frozenset(n for n, e in all_skills().items() if is_plugin(e) and profile in e.agents)
 
 
 def register_external(
@@ -618,7 +714,7 @@ def dispatch(
 
     # Checked on the resolved skill, so an alias cannot dodge it. An external
     # (MCP) tool needs a profile that names it: no allow-list = not allowed.
-    if (allowed is not None and entry.name not in allowed) or (allowed is None and is_external(entry)):
+    if (allowed is not None and entry.name not in allowed) or (allowed is None and is_profile_only(entry)):
         audit.record(
             "skill.profile_refused", skill=entry.name, called_as=name, source=source,
         )

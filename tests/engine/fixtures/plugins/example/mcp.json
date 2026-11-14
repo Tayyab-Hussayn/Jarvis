@@ -1,0 +1,1 @@
+{"servers": {"echo": {"command": ["/usr/bin/true"], "env": {"PATH": "inherit"}}}}

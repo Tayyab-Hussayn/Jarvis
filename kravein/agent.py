@@ -248,7 +248,7 @@ class Agent:
         self._allowed: frozenset[str] | None = None
         if profile is not None:
             try:
-                self._allowed = registry.resolve_tools(profile.tools)
+                self._allowed = registry.resolve_tools(profile.tools) | registry.auto_tools(profile.name)
             except ValueError as exc:
                 raise ProfileError(f"profile '{profile.name}': {exc}") from None
         # Nested delegation is impossible by construction: only the Orchestrator
@@ -363,24 +363,24 @@ class Agent:
     # -- helpers ---------------------------------------------------------
 
     def _refresh_external_tools(self) -> None:
-        """A profile naming MCP servers/tools (#243): make sure they are
-        connected, then re-resolve its tool set, since MCP tools come and go
-        (connect, pin change, owner disable). Nothing for other agents."""
+        """Re-resolve a profile's tool set each turn: MCP tools come and go
+        (connect, pin change, owner disable), and plugin tools named for this
+        agent (#245) join it. A profile naming MCP is connected first."""
         if self.profile is None:
             return
         wants = [t for t in self.profile.tools
                  if t.startswith(registry.EXTERNAL_CATEGORY_PREFIX)
                  or t.startswith(registry.EXTERNAL_NAME_PREFIX)]
-        if not wants:
-            return
-        try:
-            from .mcp import manager as _mcp
+        if wants:
+            try:
+                from .mcp import manager as _mcp
 
-            _mcp.ensure_started()
-        except Exception as exc:
-            audit.record("mcp.start_failed", error=type(exc).__name__)
+                _mcp.ensure_started()
+            except Exception as exc:
+                audit.record("mcp.start_failed", error=type(exc).__name__)
         try:
-            self._allowed = registry.resolve_tools(self.profile.tools)
+            self._allowed = (registry.resolve_tools(self.profile.tools)
+                             | registry.auto_tools(self.profile.name))
         except ValueError as exc:
             audit.record("agent.profile_resolve_failed", profile=self.profile.name, error=str(exc))
 
