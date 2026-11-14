@@ -660,3 +660,18 @@ def test_real_the_masking_is_not_vacuous(outside_tmp_home):
     out = box("python3 -c \"print(open('notes.txt').read())\"",
               working_directory=str(outside_tmp_home))
     assert "VISIBLE-VALUE" in out
+
+
+@real
+def test_real_symlinked_secret_files_are_masked(outside_tmp_home):
+    # stow/chezmoi style: ~/.bash_history and ~/.netrc are links to a real file.
+    store = outside_tmp_home / "dotfiles"
+    store.mkdir()
+    for name in (".bash_history", ".netrc"):
+        (store / name).write_text("SECRET-VALUE")
+        (outside_tmp_home / name).symlink_to(store / name)
+    for path in (outside_tmp_home / ".bash_history", outside_tmp_home / ".netrc",
+                 store / ".bash_history", store / ".netrc"):
+        out = box(f"python3 -c \"print(open('{path}').read())\"",
+                  working_directory=str(outside_tmp_home))
+        assert "SECRET-VALUE" not in out, path

@@ -55,3 +55,7 @@ Never run tests that act on the live desktop (close/kill/type); mock `platform/`
 - `platform/shell.start_group(sandbox=True)` raises `SandboxUnavailable`; `run_command(sandbox=True)` turns that into "Refused: sandbox unavailable: <reason>", before any card, never an unsandboxed run. `_sandbox_verdict` is the one place that decides: blocked stays blocked, secret reads still ask (`no_auto`), everything else SAFE.
 - Process tracking: `group_alive` = leader alive, or the process group still exists (sound while observed continuously: a pgid cannot be recycled while it has a member; once seen gone it is remembered in `proc.kravein_gone`, never signalled again and never rescanned), or tagged descendants (`KRAVEIN_GROUP_TAG` in the environment) that left the group (`setsid`, anything inside the sandbox's `--new-session`). `env -i server &` has the group but not the tag; `setsid server` the tag but not the group; both are covered.
 - Doctor: `sandbox.status().summary()` (cli.py is engine's; the line is in the PR text).
+
+## Submit needs a card (#239)
+- `browser_type(submit=True)` types first, then asks (`DESTRUCTIVE`, target `browser-submit:<site>:<field>`, card names URL, title, field) before pressing Enter; any refusal returns "typed but did NOT submit". Enter is re-checked against the same URL after the card. Next (after #237): move browser_type submit and browser_click irreversible to `GUARDED`.
+- Sandbox: symlinked `_SECRET_FILES` (stow/chezmoi) mask both the link path and the real file.

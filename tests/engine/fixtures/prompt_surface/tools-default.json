@@ -204,7 +204,7 @@
   }
  },
  {
-  "description": "Type into a field on the page, found by its label or placeholder.",
+  "description": "Type into a field on the page, found by its label or placeholder. Typing alone changes nothing outside the page. With submit the form is sent (a post, a message, a purchase, a login), so that step asks the owner first, naming the page and the field; if it is declined the text stays typed but is not submitted.",
   "name": "browser_type",
   "parameters": {
    "properties": {
@@ -213,7 +213,7 @@
      "type": "string"
     },
     "submit": {
-     "description": "Press Enter afterwards. Default: False.",
+     "description": "Press Enter afterwards. Asks for confirmation. Default: False.",
      "type": "boolean"
     },
     "text": {
@@ -2056,7 +2056,7 @@
   }
  },
  {
-  "description": "Run a shell command and return its output. The command is risk-classified first. Read-only commands run straight away; anything that deletes, kills, installs or needs root asks you to confirm. Outright dangerous patterns are refused. The working directory persists between calls: after 'cd build' the next command starts in build, and every result ends with '[cwd: ...]'. Output longer than a few thousand characters is kept in a file; the result shows the start and end and names the file to open with read_file or search_text. A command that has not finished at its timeout keeps running as a background job; check it with command_status and stop it with stop_command.",
+  "description": "Run a shell command and return its output. The command is risk-classified first. Read-only commands run straight away; anything that deletes, kills, installs or needs root asks you to confirm. Outright dangerous patterns are refused. The working directory persists between calls: after 'cd build' the next command starts in build, and every result ends with '[cwd: ...]'. Output longer than a few thousand characters is kept in a file; the result shows the start and end and names the file to open with read_file or search_text. A command that has not finished at its timeout keeps running as a background job; check it with command_status and stop it with stop_command. With sandbox the command runs in a read-only, no-network, isolated sandbox where it cannot change anything.",
   "name": "run_command",
   "parameters": {
    "properties": {
@@ -2067,6 +2067,10 @@
     "command": {
      "description": "The command line to run.",
      "type": "string"
+    },
+    "sandbox": {
+     "description": "Try a command, or inspect its effect, safely before running it for real. It runs with a read-only filesystem, no network, no desktop or session bus and no view of host processes, so it cannot change anything and needs no confirmation (unless it reads a secret file). Writes fail or vanish. If the sandbox is unavailable the command is refused, never run unsandboxed. Default: False.",
+     "type": "boolean"
     },
     "timeout_seconds": {
      "description": "Wait this long for the result (1-600). Then the command moves to a background job instead of being killed. Default: 60.",
