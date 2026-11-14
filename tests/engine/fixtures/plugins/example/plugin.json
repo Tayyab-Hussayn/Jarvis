@@ -1,0 +1,11 @@
+{
+  "name": "example",
+  "version": "1.0.0",
+  "description": "An example plugin: one read-only lookup and one outward post.",
+  "author": "Kravein tests",
+  "secrets": [],
+  "tools": {
+    "example_lookup": "SAFE",
+    "example_post": {"danger": "GUARDED", "outward": true, "scope": ["channel"]}
+  }
+}

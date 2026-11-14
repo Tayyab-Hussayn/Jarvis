@@ -597,6 +597,16 @@ def build_parser() -> argparse.ArgumentParser:
                             help="probe: provider:model (makes real, paid calls)")
 
     # MCP servers (#243): every change here is an owner action; no skill can do it.
+    # Plugins (#245): enabling is an owner action; nothing else can do it.
+    plugin_cmd = sub.add_parser("plugin", help="plugins: list, enable, disable, remove")
+    plugin_sub = plugin_cmd.add_subparsers(dest="plugin_action", required=True)
+    plugin_sub.add_parser("list", help="plugins on disk and their state")
+    plugin_enable = plugin_sub.add_parser("enable", help="review a plugin and enable it (pins its hash)")
+    plugin_enable.add_argument("name")
+    plugin_enable.add_argument("--yes", action="store_true", help="do not ask for the final yes")
+    for verb in ("disable", "remove"):
+        plugin_sub.add_parser(verb).add_argument("name")
+
     mcp_cmd = sub.add_parser("mcp", help="MCP servers: add, list, approve, enable, disable, remove")
     mcp_sub = mcp_cmd.add_subparsers(dest="mcp_action", required=True)
     mcp_add = mcp_sub.add_parser("add", help="add a server (its tools stay off until approved)")
@@ -879,6 +889,26 @@ def main(argv: list[str] | None = None) -> int:
     if command == "mcp":
         return _mcp_command(args)
 
+    if command == "plugin":
+        from .plugins import admin as plugin_admin
+        from .plugins.manifest import ManifestError
+
+        try:
+            if args.plugin_action == "list":
+                print(plugin_admin.list_text())
+            elif args.plugin_action == "enable":
+                plugin_admin.enable(args.name, yes=args.yes)
+            elif args.plugin_action == "disable":
+                plugin_admin.disable(args.name)
+                print(f"'{args.name}' disabled (restart Kravein to unload it).")
+            elif args.plugin_action == "remove":
+                plugin_admin.remove(args.name)
+                print(f"'{args.name}' forgotten; its folder was left in place.")
+            return 0
+        except (ValueError, ManifestError, OSError) as exc:
+            print(red(str(exc)), file=sys.stderr)
+            return 2
+
     if command == "models":
         from . import usage
 
@@ -1031,6 +1061,16 @@ def doctor() -> int:
             print(colour(f"  {line}"))
 
     # MCP servers (#243): config-level status only; doctor never spawns one.
+    # Plugins (#245): pins and a fresh hash check; never runs plugin code.
+    print(bold("\nPlugins"))
+    try:
+        from .plugins import admin as plugin_admin
+
+        for line in plugin_admin.doctor_lines():
+            print((red if ("CHANGED" in line or "ERROR" in line or "MISSING" in line) else dim)(f"  {line}"))
+    except Exception as exc:
+        print(red(f"  could not read the plugins ({type(exc).__name__})"))
+
     print(bold("\nMCP servers"))
     try:
         from .mcp import admin as mcp_admin

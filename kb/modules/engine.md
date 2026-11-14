@@ -7,7 +7,7 @@ updated: 2026-11-14
 # engine
 
 ## Code map
-- `agent.py` loop, cancel, tool routing hooks · `llm.py`/`cline.py` providers, failover, breaker, model roles + `Reply.usage` (#228), `EndpointProvider` + `AnthropicProvider` (#231) · `mcp/` MCP client: config, pins, manager, bridge, admin, transport (#243) · `usage.py` per-call usage ledger + `kravein usage` report (#228), model catalog / probe / role validation / doctor checks + `kravein models` (#234) · `registry.py` `@skill` + `dispatch` · `safety.py` enforce, denial memory · `audit.py` · `config.py` · `toolselect.py`
+- `agent.py` loop, cancel, tool routing hooks · `llm.py`/`cline.py` providers, failover, breaker, model roles + `Reply.usage` (#228), `EndpointProvider` + `AnthropicProvider` (#231) · `mcp/` MCP client: config, pins, manager, bridge, admin, transport (#243) · `plugins/` plugin loader: manifest, state, loader, admin (#245) · `usage.py` per-call usage ledger + `kravein usage` report (#228), model catalog / probe / role validation / doctor checks + `kravein models` (#234) · `registry.py` `@skill` + `dispatch` · `safety.py` enforce, denial memory · `audit.py` · `config.py` · `toolselect.py`
 - `jobs.py`/`routines.py` scheduler (tick via `python -m kravein.jobs tick`) · `voice.py`/`live.py` (audio source/sink: `SoundDevice*`, `NetworkAudio`) · `whatsapp_service.py` · `cli.py`/`daemon.py` · `discovery.py` (address pick/watch + mDNS) · `agents/` (#132: `profile.py` SKILL.md loader + `AgentProfile`, `history.py` SQLite per-(profile, thread) history; `delegate.py` the `delegate` skill (#138); `tasks.py` background sub-agent tasks (#158) · `proposals.py` proposals queue + `propose`/`decide_proposal` + daily review (#143); `state.py` agent-state tracker + `/api/agents` list (#146: one `StateTracker` per principal in `SessionStore.tracker()`, fed by the agent observer — kind `agent_state` phases turn_start/llm_start/turn_end from `Agent.ask`, `delegate_end` from `delegate`, plus `tool`/`tool_result` and `Session.on_wait` for cards; frames `{"t":"agent_state", agent, state idle|thinking|working|waiting|done|failed|declined, task?, tool?, delegation?, since, report?{outcome,summary}}` go only to that principal's sessions; `GET /api/agents`, `GET /api/agents/state` -> `{states:[...]}`; snapshot also in the ws prelude on connect/resume; delegate outcomes partial->failed, needs-approval->declined, the report keeps the real outcome; tool_call/tool_result/thinking frames carry `agent`/`delegation` for sub-agent work); `orchestrator/` + `system-ops/` profiles; `_example/` fixture profile) · `service.py` (`kravein start|stop|restart|status|pair|phones|open|logs`: `systemctl --user` on `kravein-web.service` + the server's HTTP API with the owner token, TLS pinned to the on-disk cert)
 
 ## Verify
@@ -16,7 +16,63 @@ updated: 2026-11-14
 .venv/bin/python -m pytest tests/engine -q          # ~540: profiles, history, safety, registry, llm, agent loop, cline, novarouter, voice, jobs, routines, whatsapp, audit, routing
 ```
 
+## Write a plugin in 5 minutes (#245)
+1. Make a folder `~/.local/share/kravein/plugins/<name>/` (lowercase, `-` allowed, no `_`).
+2. `plugin.json`:
+   ```json
+   {"name": "<name>", "version": "1.0.0", "description": "…", "author": "…",
+    "secrets": ["<name>_token"],
+    "tools": {"<name>_lookup": "SAFE",
+              "<name>_send": {"danger": "GUARDED", "outward": true, "scope": ["channel"]}}}
+   ```
+   Every tool must be listed here. Its class is a **floor** (the code can only ask more). `outward` = it acts outside this machine, and its grants pause in a tainted run. `scope` = what an "Always allow" is bound to (default: every argument).
+3. `tools/<anything>.py`: ordinary skills (the docstring `Args:` block is the tool schema; tool names must start with a letter and be unique across Kravein):
+   ```python
+   from kravein import safety
+   from kravein.registry import skill
+   from kravein.safety import Danger, Verdict
+
+   @skill(danger=Danger.GUARDED)
+   def <name>_send(channel: str, text: str, _source: str = "local") -> str:
+       """Send a message.
+
+       Args:
+           channel: Where to send it.
+           text: What to send.
+       """
+       safety.enforce(Verdict(danger=Danger.GUARDED, reasons=[f"sends to {channel}"]),
+                      f"send to '{channel}'", skill="<name>_send", source=_source,
+                      targets=safety.describe_targets(f"<name>:{channel}"))
+       ...
+   ```
+   Any state change calls `safety.enforce` itself (the `skill.unenforced` tripwire watches). Secrets come from `kravein.config.api_key("<name>_token")`.
+4. Optional extras:
+   - `agents/<profile>/SKILL.md`: a worker profile; list `plugin:<name>` in its `tools:`.
+   - `mcp.json` `{"servers": {"x": {...}}}`: becomes the pending MCP server `<name>-x`.
+   - `skills/<x>/SKILL.md`: a procedure (listed only, for now).
+5. Run `kravein plugin enable <name>`: review what is listed, say y, restart Kravein. Then `kravein plugin list` / `kravein doctor`.
+6. **Changing any file disables the plugin** until you run `enable` again.
+
+The example in `tests/engine/fixtures/plugins/example/` is a complete plugin.
+
 ## Public interfaces
+- Plugins (#245, v3 phase 1c; D10 easy, D9 no hooks), `kravein/plugins/`:
+  - **`manifest.py`**:
+    - `plugins_dir()` = `DATA_DIR/plugins`; `read_manifest` (strict; every tool declared with a danger in SAFE..CRITICAL).
+    - `read_files` reads each file ONCE (no symlinks, ≤200 files, ≤2 MB each, `__pycache__` skipped). `hashes` / `total` / `compare` → changed / added / missing.
+  - **`state.py`**: `CONFIG_DIR/plugins.json` (0600, flock): `{plugins: {name: {enabled, files{rel: sha256}, hash, version, enabled_at, mcp_added}}}`. Writers `pin`, `set_enabled`, `forget`: CLI only.
+  - **`loader.py`**: `load_enabled(force)` runs from the end of `registry.load_skills`.
+    - Each enabled plugin is re-hashed and does not load on any difference (`state: changed` + diff).
+    - Each `tools/*.py` is exec'd **from the hashed bytes** (module `kravein_plugins.<name>.<mod>`) inside `registry.plugin_context`. Any exception unregisters the whole plugin (`state: error`); other plugins and Kravein carry on.
+    - `status()`, `profile_texts()` (hashed SKILL.md text; `agents.profile.load_profile` / `list_profiles` use it, and a core profile always wins).
+  - **`registry.plugin_context(name, tools)`**: while active, `@skill` forces category = origin = `plugin:<name>`, danger = max(code, manifest), outward / untrusted / scope from the manifest, no aliases. It refuses an undeclared tool and any existing name (core, MCP, other plugin).
+    - `unregister_plugin(name)` removes only that category.
+    - `is_profile_only(entry)` (MCP or plugin): not in the no-profile tool list, and `dispatch(allowed=None)` refuses it. `resolve_tools` accepts `plugin:<name>` while it is not loaded.
+  - **`admin.py`**: `enable` (shows files + per-file hash + total, CODE PLUGIN warning, tools / profiles / procedures / MCP / secrets, asks once, re-hashes and refuses if anything moved, adds MCP servers as pending, pins), `disable`, `remove` (pins only, never the folder), `list_text`, `doctor_lines` (pins + hash check; never runs plugin code).
+  - **Safety:**
+    - `classify_command` hard-blocks (CRITICAL) any non-plain-read command naming a path inside the plugins dir (a glob too), our `plugins.json`, or run with a cwd inside the plugins dir.
+    - `check_path` already refuses DATA_DIR / CONFIG_DIR writes, and the #211 read guard keeps the plugins dir unreadable to the agent.
+    - Tests ban the plugin writers from skills/agents/platform/mcp code.
 - MCP client (#243, v3 phase 1b), `kravein/mcp/`, on SDK `mcp==2.3.0`:
   - **`config.py`** owns `~/.config/kravein/mcp.json` (0600, flock). Shape: `servers.<name> = {transport stdio|http, command[], url, env{VAR: inherit | key:<api_keys name> | literal}, auth_key, sandbox, timeout, enabled, tools{tool: {pin, class SAFE|GUARDED|DESTRUCTIVE, outward, scope[], definition, approved_at}}}`.
     - Writers (`add_server`, `set_enabled`, `remove_server`, `record_approval`) are reached only from `kravein mcp add|list|approve|enable|disable|remove`; a test bans their import from skills/agents/platform.
