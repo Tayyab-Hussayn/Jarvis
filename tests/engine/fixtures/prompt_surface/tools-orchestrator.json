@@ -1,0 +1,1287 @@
+[
+ {
+  "description": "Report battery charge and time remaining.",
+  "name": "battery_status",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Turn the displays off. Move the mouse to wake them.",
+  "name": "blank_screen",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Turn Bluetooth on or off, or list devices.",
+  "name": "bluetooth_control",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "'on', 'off', 'status' or 'devices'. Default: 'status'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read or control the screen brightness.",
+  "name": "brightness",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "get; set (needs percent); change (needs delta, default +10). Default: 'get'.",
+     "enum": [
+      "get",
+      "set",
+      "change"
+     ],
+     "type": "string"
+    },
+    "delta": {
+     "description": "For change: signed percentage change, e.g. 10 or -10.",
+     "type": "integer"
+    },
+    "percent": {
+     "description": "For set: target brightness 5-100.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Cancel a scheduled shutdown or reboot.",
+  "name": "cancel_shutdown",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Stop a running or queued background task.",
+  "name": "cancel_task",
+  "parameters": {
+   "properties": {
+    "task_id": {
+     "description": "The task id, for example t3a9 (see task_status).",
+     "type": "string"
+    }
+   },
+   "required": [
+    "task_id"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read the clipboard, or put text on it.",
+  "name": "clipboard",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "read or write. Default: 'read'.",
+     "enum": [
+      "read",
+      "write"
+     ],
+     "type": "string"
+    },
+    "text": {
+     "description": "For write: what to copy.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Close an application's windows. By default this asks the window manager to close the window, so the app can prompt to save work. Use force to kill the client outright when it ignores a polite close.",
+  "name": "close_app",
+  "parameters": {
+   "properties": {
+    "app_name": {
+     "description": "Which application's windows to close.",
+     "type": "string"
+    },
+    "force": {
+     "description": "Kill the client instead of asking it to close. Default: False.",
+     "type": "boolean"
+    },
+    "workspace": {
+     "description": "Only close windows on this workspace. Use it whenever the app could have windows open on more than one. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "app_name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Close a window. Defaults to the focused one.",
+  "name": "close_window",
+  "parameters": {
+   "properties": {
+    "force": {
+     "description": "Kill the client instead of politely asking it to close. Default: False.",
+     "type": "boolean"
+    },
+    "id": {
+     "description": "Exact window id from list_windows. When given, closes exactly that window and ignores query; refuses if it no longer exists. Default: ''.",
+     "type": "string"
+    },
+    "query": {
+     "description": "Optional app name or title; omit to close the focused window. Default: ''.",
+     "type": "string"
+    },
+    "workspace": {
+     "description": "Only consider windows on this workspace. Use it whenever the app name could match more than one window. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Close every window on a workspace.",
+  "name": "close_workspace",
+  "parameters": {
+   "properties": {
+    "force": {
+     "description": "Kill the clients instead of politely asking them to close. Default: False.",
+     "type": "boolean"
+    },
+    "workspace": {
+     "description": "Which workspace to clear; omit for the current one. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Record the owner's decision on a proposal, when they say it in this conversation. Only call it after the owner clearly said to approve or decline that proposal. Approving starts the task now; every destructive step inside it still asks the owner for confirmation.",
+  "name": "decide_proposal",
+  "parameters": {
+   "properties": {
+    "decision": {
+     "description": "approve or decline.",
+     "type": "string"
+    },
+    "id": {
+     "description": "The proposal id, for example p1a2b3c.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "id",
+    "decision"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Hand a longer or uncertain task to a specialist sub-agent. Use it for multi-step work, research, shell, packages, services or bulk file work. By default the sub-agent works in the background: you get a task id at once and can keep helping the owner; the report arrives on its own as a \"[task <id> report]\" message, and task_status shows progress. The sub-agent asks the owner for confirmation itself; its raw tool output is not returned, only the report.",
+  "name": "delegate",
+  "parameters": {
+   "properties": {
+    "agent": {
+     "description": "Name of the sub-agent profile, for example system-ops.",
+     "type": "string"
+    },
+    "context": {
+     "description": "Facts from this conversation the sub-agent needs (optional). Default: ''.",
+     "type": "string"
+    },
+    "task": {
+     "description": "The whole task, self-contained: what to do and what done looks like.",
+     "type": "string"
+    },
+    "wait": {
+     "description": "True only if you need the report in this same turn; blocks until it ends. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "agent",
+    "task"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Delete a routine and everything it tracks. The history log survives.",
+  "name": "delete_routine",
+  "parameters": {
+   "properties": {
+    "routine_id": {
+     "description": "Which routine, e.g. \"r1\".",
+     "type": "string"
+    }
+   },
+   "required": [
+    "routine_id"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show disk usage for a filesystem, plus the largest mounts.",
+  "name": "disk_usage",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "A path on the filesystem to report. Default: '/'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Bring a window to the front by app name or title, or by exact id.",
+  "name": "focus_window",
+  "parameters": {
+   "properties": {
+    "id": {
+     "description": "Exact window id from list_windows. When given, acts on exactly that window and ignores query; refuses if it no longer exists. Default: ''.",
+     "type": "string"
+    },
+    "query": {
+     "description": "Part of the application id or window title. Default: ''.",
+     "type": "string"
+    },
+    "workspace": {
+     "description": "Only consider windows on this workspace. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Delete a remembered fact.",
+  "name": "forget",
+  "parameters": {
+   "properties": {
+    "category": {
+     "description": "Which category to remove it from. Required for '*'. Default: ''.",
+     "type": "string"
+    },
+    "key": {
+     "description": "The key to remove, or '*' to clear a whole category.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "key"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List installed applications, optionally filtered by category.",
+  "name": "list_apps",
+  "parameters": {
+   "properties": {
+    "category": {
+     "description": "A freedesktop category, e.g. 'Development', 'Graphics'. Default: ''.",
+     "type": "string"
+    },
+    "limit": {
+     "description": "Maximum results. Default: 60.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List audio outputs/inputs, or connected monitors with resolution and refresh rate.",
+  "name": "list_devices",
+  "parameters": {
+   "properties": {
+    "kind": {
+     "description": "audio or monitors. Default: 'audio'.",
+     "enum": [
+      "audio",
+      "monitors"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List scheduled jobs and reminders, what they recently did, or whether the scheduler is running.",
+  "name": "list_jobs",
+  "parameters": {
+   "properties": {
+    "include_finished": {
+     "description": "For jobs: also show jobs that already ran or failed. Default: False.",
+     "type": "boolean"
+    },
+    "limit": {
+     "description": "For history: how many entries to show.",
+     "type": "integer"
+    },
+    "view": {
+     "description": "jobs (default) = the list; history = what jobs recently did, including failures; status = whether jobs will actually fire and where they are stored. Default: 'jobs'.",
+     "enum": [
+      "jobs",
+      "history",
+      "status"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List the phones paired with Kravein and which are connected right now. Use this to find a phone's name or id when several are connected.",
+  "name": "list_phones",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List every open window grouped by workspace (with each window's exact id and, for terminals, the shell's working directory), or describe the focused window, or list the workspaces.",
+  "name": "list_windows",
+  "parameters": {
+   "properties": {
+    "as_json": {
+     "description": "For windows: return a JSON list of {id, title, app, pid, workspace, focused, cwd} instead of text. Default: False.",
+     "type": "boolean"
+    },
+    "view": {
+     "description": "windows (default), focused (just the window with focus) or workspaces (the workspace list). Default: 'windows'.",
+     "enum": [
+      "windows",
+      "focused",
+      "workspaces"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Lock the session.",
+  "name": "lock_screen",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Cancel, pause/resume, or edit a scheduled job. To create one use schedule_job.",
+  "name": "manage_job",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "cancel (empty job_id cancels EVERY pending job, asks first); pause (needs job_id); edit (needs job_id; changes only the fields given).",
+     "enum": [
+      "cancel",
+      "pause",
+      "edit"
+     ],
+     "type": "string"
+    },
+    "job_id": {
+     "description": "Which job, e.g. \"j3\".",
+     "type": "string"
+    },
+    "prompt": {
+     "description": "For edit: new message or task.",
+     "type": "string"
+    },
+    "repeat": {
+     "description": "For edit: new repeat rule.",
+     "type": "string"
+    },
+    "resume": {
+     "description": "For pause: True to resume a paused job instead.",
+     "type": "boolean"
+    },
+    "title": {
+     "description": "For edit: new heading.",
+     "type": "string"
+    },
+    "when": {
+     "description": "For edit: new time, e.g. '10m' or '5pm'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Control media playback in any MPRIS-aware player, or show what is playing.",
+  "name": "media_control",
+  "parameters": {
+   "properties": {
+    "command": {
+     "description": "play, pause, play-pause, next, previous, stop, or status to show what is currently playing. Default: 'play-pause'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Store or look up facts about the user across conversations. To delete one use forget.",
+  "name": "memory",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "remember (needs key and value) or recall (query; empty lists everything). Default: 'recall'.",
+     "enum": [
+      "remember",
+      "recall"
+     ],
+     "type": "string"
+    },
+    "category": {
+     "description": "Group: for remember the group to file under (default facts); for recall limit to this group.",
+     "type": "string"
+    },
+    "key": {
+     "description": "For remember: short name of the fact.",
+     "type": "string"
+    },
+    "query": {
+     "description": "For recall: text to look for.",
+     "type": "string"
+    },
+    "value": {
+     "description": "For remember: the fact itself.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Move the focused window to another workspace.",
+  "name": "move_window_to_workspace",
+  "parameters": {
+   "properties": {
+    "workspace": {
+     "description": "Destination workspace number as shown on the bar, or name. On niri the view follows the focused window to its new workspace.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "workspace"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Mute, unmute, or toggle the microphone.",
+  "name": "mute_microphone",
+  "parameters": {
+   "properties": {
+    "state": {
+     "description": "True to mute, False to unmute, omit to toggle.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show network interfaces, addresses and the active connection.",
+  "name": "network_status",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Watch desktop notifications for calls and messages, and read what was seen.",
+  "name": "notifications",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "status; recent (limit, kind); watch (enabled). Default: 'status'.",
+     "enum": [
+      "status",
+      "recent",
+      "watch"
+     ],
+     "type": "string"
+    },
+    "enabled": {
+     "description": "For watch: True to start watching, False to stop.",
+     "type": "boolean"
+    },
+    "kind": {
+     "description": "For recent: only this kind of notification.",
+     "type": "string"
+    },
+    "limit": {
+     "description": "For recent: how many to show.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Launch an application by name. Focuses it if it is already running. With a workspace it starts a new instance there and, by default, takes the user to that workspace with the new window focused.",
+  "name": "open_app",
+  "parameters": {
+   "properties": {
+    "app_name": {
+     "description": "What to open, e.g. 'firefox', 'terminal', 'file manager'.",
+     "type": "string"
+    },
+    "focus": {
+     "description": "With a workspace: true (default) switches the user there and focuses the new window; false launches in the background and leaves the current workspace and focus alone. Default: True.",
+     "type": "boolean"
+    },
+    "workspace": {
+     "description": "Open a new instance on this workspace (the number shown on the bar, or an existing workspace name). Leave empty to open or focus normally. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "app_name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Open a URL in the browser on this computer. For the phone use phone_open_url.",
+  "name": "open_url",
+  "parameters": {
+   "properties": {
+    "browser": {
+     "description": "A specific browser command; omit for your default. Default: ''.",
+     "type": "string"
+    },
+    "url": {
+     "description": "Where to go.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Turn the flashlight (torch) on your phone on or off.",
+  "name": "phone_flashlight",
+  "parameters": {
+   "properties": {
+    "device": {
+     "description": "Phone name or id. Omit when only one phone is connected. Default: ''.",
+     "type": "string"
+    },
+    "on": {
+     "description": "True to turn the phone's flashlight on, False to turn it off.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "on"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Open an installed app on your phone. To open an app on this computer use open_app.",
+  "name": "phone_launch_app",
+  "parameters": {
+   "properties": {
+    "app": {
+     "description": "The app's name as shown on the phone (e.g. \"WhatsApp\") or its package name (e.g. \"com.whatsapp\").",
+     "type": "string"
+    },
+    "device": {
+     "description": "Phone name or id. Omit when only one phone is connected. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "app"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Open a web page in the browser on your phone. To open it on this computer use open_url.",
+  "name": "phone_open_url",
+  "parameters": {
+   "properties": {
+    "device": {
+     "description": "Phone name or id. Omit when only one phone is connected. Default: ''.",
+     "type": "string"
+    },
+    "url": {
+     "description": "The http or https address to open on the phone. A bare domain like example.com gets https:// added.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Set the media volume on your phone. For this computer's speakers use set_volume.",
+  "name": "phone_set_volume",
+  "parameters": {
+   "properties": {
+    "device": {
+     "description": "Phone name or id. Omit when only one phone is connected. Default: ''.",
+     "type": "string"
+    },
+    "percent": {
+     "description": "Target phone media volume, 0-100.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "percent"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read your phone's battery, volume and model. Not this computer's battery or volume.",
+  "name": "phone_status",
+  "parameters": {
+   "properties": {
+    "device": {
+     "description": "Phone name or id. Omit when only one phone is connected. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Suspend, reboot, shut down, or log out of this computer. Always asks first. To cancel a pending shutdown or reboot use cancel_shutdown.",
+  "name": "power_session",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "suspend, reboot, shutdown or log_out.",
+     "enum": [
+      "suspend",
+      "reboot",
+      "shutdown",
+      "log_out"
+     ],
+     "type": "string"
+    },
+    "delay_seconds": {
+     "description": "For reboot/shutdown: wait this long first, giving you time to cancel.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Suggest a next step to the owner and wait for their decision. Nothing runs now. Use it for anything major (deleting, installing, spending, sending) and for useful follow-ups. The owner approves or declines in the app or by voice.",
+  "name": "propose",
+  "parameters": {
+   "properties": {
+    "agent": {
+     "description": "For delegate: the sub-agent that does it, for example system-ops. Default: ''.",
+     "type": "string"
+    },
+    "kind": {
+     "description": "delegate (a sub-agent does it after approval), note (advice only) or capability (a missing tool or weakness you noticed; advice only). A sub-agent may use only note or capability. Default: 'delegate'.",
+     "type": "string"
+    },
+    "reasons": {
+     "description": "Two or three concrete reasons (\"do this, not that, because ...\").",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "risk": {
+     "description": "low or major. Use major for deleting, installing, spending or sending. Default: 'low'.",
+     "type": "string"
+    },
+    "task": {
+     "description": "For delegate: the whole task, self-contained. Default: ''.",
+     "type": "string"
+    },
+    "title": {
+     "description": "One short line, what you suggest.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "reasons"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Look up what has been remembered about the owner. Read-only; to store a fact use memory.",
+  "name": "recall",
+  "parameters": {
+   "properties": {
+    "category": {
+     "description": "Limit to one category. Default: ''.",
+     "type": "string"
+    },
+    "query": {
+     "description": "Text to search keys and values for. Omit to list everything. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Set, list or cancel reminders (desktop notifications that fire later, even if Kravein is closed).",
+  "name": "reminder",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "set (needs message; delay default 10m); list; cancel (EVERY pending reminder, asks first). Default: 'set'.",
+     "enum": [
+      "set",
+      "list",
+      "cancel"
+     ],
+     "type": "string"
+    },
+    "delay": {
+     "description": "For set: when, e.g. '10m', '1h30m', '45s', or a clock time like '5pm'.",
+     "type": "string"
+    },
+    "message": {
+     "description": "For set: what to remind you about.",
+     "type": "string"
+    },
+    "title": {
+     "description": "For set: notification heading.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Create a daily routine, or pause/resume one. Steps are added with routine_step; deleting uses delete_routine.",
+  "name": "routine",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "add (needs name); pause (needs routine_id; resume=True resumes).",
+     "enum": [
+      "add",
+      "pause"
+     ],
+     "type": "string"
+    },
+    "day_start": {
+     "description": "For add: when the routine's day rolls over, HH:MM local (default 04:00).",
+     "type": "string"
+    },
+    "days": {
+     "description": "For add: which weekdays it runs; empty for every day.",
+     "type": "string"
+    },
+    "name": {
+     "description": "For add: what to call it, e.g. \"Morning\".",
+     "type": "string"
+    },
+    "resume": {
+     "description": "For pause: True to resume a paused routine instead.",
+     "type": "boolean"
+    },
+    "routine_id": {
+     "description": "For pause: which routine, e.g. \"r1\".",
+     "type": "string"
+    },
+    "timezone": {
+     "description": "For add: IANA timezone; empty for the machine's.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show today's routines (what is done, what is next, the score), or how recent days went.",
+  "name": "routine_status",
+  "parameters": {
+   "properties": {
+    "history": {
+     "description": "True to show past days instead: score, what was missed, streak. Default: False.",
+     "type": "boolean"
+    },
+    "limit": {
+     "description": "With history: how many days back (default 14).",
+     "type": "integer"
+    },
+    "routine_id": {
+     "description": "Limit to one routine, e.g. \"r1\". Leave empty for all. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Work on one step (habit) of a routine: add, edit, delete, mark done, or skip it.",
+  "name": "routine_step",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "add (needs label, plus at, or after_step + after_minutes, never both); edit, delete, complete, skip (need step_id; edit changes only the fields given).",
+     "enum": [
+      "add",
+      "edit",
+      "delete",
+      "complete",
+      "skip"
+     ],
+     "type": "string"
+    },
+    "after_minutes": {
+     "description": "For add: minutes after after_step was actually done.",
+     "type": "integer"
+    },
+    "after_step": {
+     "description": "For add: step this one follows.",
+     "type": "string"
+    },
+    "at": {
+     "description": "Fixed time HH:MM local (add, edit).",
+     "type": "string"
+    },
+    "insist": {
+     "description": "For add: keep nagging until done.",
+     "type": "boolean"
+    },
+    "label": {
+     "description": "For add: name of the habit; for edit: its new name.",
+     "type": "string"
+    },
+    "messages": {
+     "description": "Reminder wording variants (add, edit).",
+     "type": "string"
+    },
+    "nag_every_minutes": {
+     "description": "For add: minutes between nags.",
+     "type": "integer"
+    },
+    "nag_max": {
+     "description": "For add: most nags.",
+     "type": "integer"
+    },
+    "points": {
+     "description": "Score value of the step (add, edit).",
+     "type": "integer"
+    },
+    "requires": {
+     "description": "For add: step that must be confirmed done before this one unlocks.",
+     "type": "string"
+    },
+    "routine_id": {
+     "description": "Which routine, e.g. \"r1\".",
+     "type": "string"
+    },
+    "step_id": {
+     "description": "Which step, e.g. \"s2\" (edit, delete, complete, skip).",
+     "type": "string"
+    },
+    "window_minutes": {
+     "description": "How long the step stays open after it is due (add, edit).",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action",
+    "routine_id"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Schedule something to happen later, once or on a repeating schedule. Fires even if Kravein is closed, because a systemd timer drives it.",
+  "name": "schedule_job",
+  "parameters": {
+   "properties": {
+    "kind": {
+     "description": "\"notify\" to just show a message — use this for reminders. \"agent\" to actually run the request with tools when it fires. Default: 'notify'.",
+     "type": "string"
+    },
+    "prompt": {
+     "description": "For kind=notify, the message to show. For kind=agent, the request to run — write it exactly as the user would say it.",
+     "type": "string"
+    },
+    "repeat": {
+     "description": "A 5-field cron expression for a recurring job, e.g. \"0 9 * * *\" for every day at 9am, \"0 9 * * 1\" for Mondays. Default: ''.",
+     "type": "string"
+    },
+    "speak": {
+     "description": "Also say it out loud when it fires. Default: False.",
+     "type": "boolean"
+    },
+    "title": {
+     "description": "Heading on the notification. Default: 'Kravein'.",
+     "type": "string"
+    },
+    "when": {
+     "description": "An absolute ISO 8601 timestamp, e.g. \"2026-09-07T17:00\". Resolve any relative phrasing yourself — \"tomorrow\", \"next Tuesday\", \"in two weeks\" — using the current date and time given in the context, and pass the resulting absolute timestamp. A plain duration (\"20m\", \"1h30m\", \"2d\") is also accepted. Leave empty when using repeat. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "prompt"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search the web and open the top result in the browser.",
+  "name": "search_and_open",
+  "parameters": {
+   "properties": {
+    "query": {
+     "description": "What to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find installed applications matching a name or description.",
+  "name": "search_apps",
+  "parameters": {
+   "properties": {
+    "limit": {
+     "description": "Maximum results. Default: 8.",
+     "type": "integer"
+    },
+    "query": {
+     "description": "What to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show a desktop notification.",
+  "name": "send_notification",
+  "parameters": {
+   "properties": {
+    "message": {
+     "description": "Body text.",
+     "type": "string"
+    },
+    "title": {
+     "description": "Notification heading. Default: 'Kravein'.",
+     "type": "string"
+    },
+    "urgency": {
+     "description": "'low', 'normal' or 'critical'. Default: 'normal'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "message"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Switch the desktop between light and dark.",
+  "name": "set_dark_mode",
+  "parameters": {
+   "properties": {
+    "enabled": {
+     "description": "True for dark, False for light, omit to toggle.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Say something out loud through the speakers.",
+  "name": "speak",
+  "parameters": {
+   "properties": {
+    "blocking": {
+     "description": "Wait for it to finish before returning. Default: False.",
+     "type": "boolean"
+    },
+    "text": {
+     "description": "What to say.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Stop any speech that is currently playing.",
+  "name": "stop_speaking",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Switch to a workspace and confirm the user is really there.",
+  "name": "switch_workspace",
+  "parameters": {
+   "properties": {
+    "workspace": {
+     "description": "Workspace number as shown on the bar (e.g. '3') or a workspace name. On niri, 'next'/'down' and 'previous'/'up' move one workspace down or up (niri workspaces are stacked vertically).",
+     "type": "string"
+    }
+   },
+   "required": [
+    "workspace"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Report overall machine health: CPU, memory, disk, uptime and load.",
+  "name": "system_status",
+  "parameters": {
+   "properties": {
+    "detailed": {
+     "description": "Include per-core CPU, temperatures and network counters. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Capture the screen to a PNG file.",
+  "name": "take_screenshot",
+  "parameters": {
+   "properties": {
+    "active_window": {
+     "description": "Capture only the focused window. Default: False.",
+     "type": "boolean"
+    },
+    "region": {
+     "description": "Interactively select a region with the mouse. Default: False.",
+     "type": "boolean"
+    },
+    "save_path": {
+     "description": "Where to save it. Defaults to the cache directory. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show how far the background sub-agent tasks have got. Cheap: no model call. Use it when the owner asks about progress, or before you say anything about a task. A task is only finished once its \"[task <id> report]\" message has arrived; never claim otherwise.",
+  "name": "task_status",
+  "parameters": {
+   "properties": {
+    "task_id": {
+     "description": "One task id such as t3a9; empty lists all of the owner's tasks. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Undo the file changes a run made: restore what it edited, moved or deleted, remove what it created. Files only. Packages, services, messages and anything outside the file tools cannot be undone. The owner confirms on a card that lists every path. A file edited again after the run is skipped and listed; only set force when the owner asks to overwrite those too (a second card asks again).",
+  "name": "undo_changes",
+  "parameters": {
+   "properties": {
+    "force": {
+     "description": "Also overwrite files that changed after the run. Only when the owner asked for it. Default: False.",
+     "type": "boolean"
+    },
+    "task": {
+     "description": "The run or task id (shown as \"undo available: <id>\"). Empty means this run's own changes, else the newest run. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read or control this computer's speaker volume. For the phone use phone_set_volume.",
+  "name": "volume",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "get; set (needs percent); change (needs delta, default +10); mute (state, omit to toggle). Default: 'get'.",
+     "enum": [
+      "get",
+      "set",
+      "change",
+      "mute"
+     ],
+     "type": "string"
+    },
+    "delta": {
+     "description": "For change: signed percentage change, e.g. 10 or -10.",
+     "type": "integer"
+    },
+    "percent": {
+     "description": "For set: target volume 0-100.",
+     "type": "integer"
+    },
+    "state": {
+     "description": "For mute: True to mute, False to unmute, omit to toggle.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Get the current weather and a short forecast.",
+  "name": "weather",
+  "parameters": {
+   "properties": {
+    "city": {
+     "description": "City name. Omit to use your approximate location. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search the web and return result titles, snippets and links.",
+  "name": "web_search",
+  "parameters": {
+   "properties": {
+    "max_results": {
+     "description": "How many results to return. Default: 6.",
+     "type": "integer"
+    },
+    "query": {
+     "description": "What to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Turn Wi-Fi on or off, check its state, or list visible networks.",
+  "name": "wifi_control",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "'on', 'off', 'toggle', 'status', or 'list' for visible networks. Default: 'status'.",
+     "type": "string"
+    },
+    "rescan": {
+     "description": "For list: force a fresh scan first. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Toggle fullscreen, or tiling/floating, on the focused window.",
+  "name": "window_state",
+  "parameters": {
+   "properties": {
+    "mode": {
+     "description": "fullscreen or floating.",
+     "enum": [
+      "fullscreen",
+      "floating"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [
+    "mode"
+   ],
+   "type": "object"
+  }
+ }
+]

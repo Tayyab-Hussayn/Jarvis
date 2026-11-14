@@ -1,0 +1,361 @@
+[
+ {
+  "description": "Read the visible text of the current page, or report whether the browser is running and which tabs are open.",
+  "name": "browser_read",
+  "parameters": {
+   "properties": {
+    "max_chars": {
+     "description": "Truncate beyond this many characters. Default: 3000.",
+     "type": "integer"
+    },
+    "status": {
+     "description": "True to report the browser and its numbered tabs instead of page text. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Convert a document to another format using LibreOffice.",
+  "name": "convert_document",
+  "parameters": {
+   "properties": {
+    "source": {
+     "description": "File to convert.",
+     "type": "string"
+    },
+    "target_format": {
+     "description": "Target extension, e.g. 'pdf', 'docx', 'odt', 'csv'. Default: 'pdf'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "source"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Build a Word document.",
+  "name": "create_document",
+  "parameters": {
+   "properties": {
+    "filename": {
+     "description": "Output name. Defaults to the documents folder. Default: ''.",
+     "type": "string"
+    },
+    "open_after": {
+     "description": "Open the file when it is done. Default: False.",
+     "type": "boolean"
+    },
+    "sections": {
+     "description": "One dict per section with 'heading' and 'body' text.",
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "title": {
+     "description": "Document title.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "sections"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Build a PDF from a title and body text.",
+  "name": "create_pdf",
+  "parameters": {
+   "properties": {
+    "content": {
+     "description": "Body text. Blank lines separate paragraphs; a line ending in ':' is treated as a heading.",
+     "type": "string"
+    },
+    "filename": {
+     "description": "Output name. Defaults to the documents folder. Default: ''.",
+     "type": "string"
+    },
+    "open_after": {
+     "description": "Open the file when it is done. Default: False.",
+     "type": "boolean"
+    },
+    "title": {
+     "description": "Document title.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "content"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Build a PowerPoint deck.",
+  "name": "create_presentation",
+  "parameters": {
+   "properties": {
+    "filename": {
+     "description": "Output name. Defaults to the documents folder. Default: ''.",
+     "type": "string"
+    },
+    "open_after": {
+     "description": "Open the file when it is done. Default: False.",
+     "type": "boolean"
+    },
+    "slides": {
+     "description": "One dict per slide with 'title' and 'bullets' (a list of strings).",
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "title": {
+     "description": "Deck title, used for the opening slide.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "slides"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Build an Excel workbook.",
+  "name": "create_spreadsheet",
+  "parameters": {
+   "properties": {
+    "filename": {
+     "description": "Output name. Defaults to the documents folder. Default: ''.",
+     "type": "string"
+    },
+    "open_after": {
+     "description": "Open the file when it is done. Default: False.",
+     "type": "boolean"
+    },
+    "sheets": {
+     "description": "One dict per sheet with 'name', 'headers' (list) and 'rows' (list of lists).",
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "sheets"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show metadata for a file or directory: size, permissions, type, dates.",
+  "name": "describe_file",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "The file or directory to describe.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Fetch a web page and return its readable text.",
+  "name": "fetch_page",
+  "parameters": {
+   "properties": {
+    "max_chars": {
+     "description": "Maximum characters of text to return. Default: 4000.",
+     "type": "integer"
+    },
+    "url": {
+     "description": "The page to fetch.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search for files by name, newest first, and optionally by their contents.",
+  "name": "find_files",
+  "parameters": {
+   "properties": {
+    "content": {
+     "description": "Also require this text to appear inside the file. Default: ''.",
+     "type": "string"
+    },
+    "max_results": {
+     "description": "Maximum matches to return (1-500). Default: 50.",
+     "type": "integer"
+    },
+    "name": {
+     "description": "Filename or glob pattern, e.g. '*.pdf' or 'report'.",
+     "type": "string"
+    },
+    "path": {
+     "description": "Directory to search under. Default: 'home'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List the contents of a directory.",
+  "name": "list_files",
+  "parameters": {
+   "properties": {
+    "limit": {
+     "description": "Maximum entries to return. Default: 200.",
+     "type": "integer"
+    },
+    "long_format": {
+     "description": "Show permissions, owner and modification time. Default: False.",
+     "type": "boolean"
+    },
+    "path": {
+     "description": "Directory path, or a shortcut like 'home', 'desktop', 'downloads'. Default: 'home'.",
+     "type": "string"
+    },
+    "show_hidden": {
+     "description": "Include dotfiles. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read a text file; every line is prefixed with its line number. Read a file with this before editing it with edit_file or overwriting it with write_file. For a long file read it in pieces with start_line.",
+  "name": "read_file",
+  "parameters": {
+   "properties": {
+    "max_lines": {
+     "description": "Maximum lines to return. Default: 200.",
+     "type": "integer"
+    },
+    "path": {
+     "description": "File to read.",
+     "type": "string"
+    },
+    "start_line": {
+     "description": "1-indexed line to start from; use the value the previous read printed after 'continue with start_line='. Default: 1.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Look up what has been remembered about the owner. Read-only; to store a fact use memory.",
+  "name": "recall",
+  "parameters": {
+   "properties": {
+    "category": {
+     "description": "Limit to one category. Default: ''.",
+     "type": "string"
+    },
+    "query": {
+     "description": "Text to search keys and values for. Omit to list everything. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search inside file contents under a directory (like grep -rn / rg). Output is capped and paged; narrow it with glob or a more specific directory, or continue with offset. To find files by name use find_files.",
+  "name": "search_text",
+  "parameters": {
+   "properties": {
+    "context_lines": {
+     "description": "Lines of context to show around each match (0-10). Default: 0.",
+     "type": "integer"
+    },
+    "directory": {
+     "description": "Directory to search under. Default: 'home'.",
+     "type": "string"
+    },
+    "glob": {
+     "description": "Only search files whose name matches, e.g. '*.py'. Default: ''.",
+     "type": "string"
+    },
+    "max_results": {
+     "description": "Maximum results per page (1-200): matching lines, or files for the files and count outputs. Default: 40.",
+     "type": "integer"
+    },
+    "offset": {
+     "description": "Skip this many results first; use the value the previous page printed after 'continue with offset='. Default: 0.",
+     "type": "integer"
+    },
+    "output": {
+     "description": "'content' lists matching lines (default), 'files' lists only the files that match, 'count' gives the number of matches per file. Default: 'content'.",
+     "enum": [
+      "content",
+      "files",
+      "count"
+     ],
+     "type": "string"
+    },
+    "query": {
+     "description": "Text to look for (case-insensitive). Plain text unless regex is true.",
+     "type": "string"
+    },
+    "regex": {
+     "description": "Treat query as a regular expression. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search the web and return result titles, snippets and links.",
+  "name": "web_search",
+  "parameters": {
+   "properties": {
+    "max_results": {
+     "description": "How many results to return. Default: 6.",
+     "type": "integer"
+    },
+    "query": {
+     "description": "What to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ }
+]

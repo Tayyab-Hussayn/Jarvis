@@ -590,6 +590,11 @@ def build_parser() -> argparse.ArgumentParser:
     usage_cmd = sub.add_parser("usage", help="model calls and tokens per role and model")
     usage_cmd.add_argument("--days", type=float, default=7, help="look back N days (default 7)")
 
+    models_cmd = sub.add_parser("models", help="the model catalog: list, or probe one model")
+    models_cmd.add_argument("action", choices=["list", "probe"])
+    models_cmd.add_argument("target", nargs="?", default="",
+                            help="probe: provider:model (makes real, paid calls)")
+
     daemon = sub.add_parser("daemon", help="run as a background service")
     daemon.add_argument("--socket", default="", help="override the socket path")
 
@@ -794,6 +799,29 @@ def main(argv: list[str] | None = None) -> int:
     if command == "doctor":
         return doctor()
 
+    if command == "models":
+        from . import usage
+
+        if args.action == "list":
+            print(usage.list_report())
+            return 0
+        if not args.target:
+            print(red("usage: kravein models probe <provider:model>"), file=sys.stderr)
+            return 2
+        print(dim(f"Probing {args.target}: three real calls (plain, tool call, replay)…"))
+        try:
+            entry = usage.probe(args.target)
+        except ValueError as exc:
+            print(red(str(exc)), file=sys.stderr)
+            return 2
+        result = entry.get("probe") or {}
+        if result.get("ok"):
+            print(green(f"{entry['key']}: tool calling verified "
+                        f"({result.get('latency_ms', 0)} ms total)"))
+            return 0
+        print(red(f"{entry['key']}: failed at {result.get('step')}: {result.get('error')}"))
+        return 1
+
     if command == "usage":
         from . import usage
 
@@ -914,6 +942,20 @@ def doctor() -> int:
         for line in block.splitlines():
             colour = red if ("NOT FOUND" in line or "NOT SET" in line) else dim
             print(colour(f"  {line}"))
+
+    # Role chains and the model catalog (#234). Warnings, not problems: a
+    # hand-edited role or an old price still works, it is just unverified.
+    print(bold("\nModel roles"))
+    try:
+        from . import usage
+
+        warnings = usage.doctor_warnings()
+    except Exception as exc:
+        warnings = [f"could not check role chains ({type(exc).__name__})"]
+    for warning in warnings:
+        print(yellow(f"  ! {warning}"))
+    if not warnings:
+        print(green("  role chains and catalog look fine"))
 
     print(bold("\nOwner instructions"))
     path = config.owner_instructions_path()

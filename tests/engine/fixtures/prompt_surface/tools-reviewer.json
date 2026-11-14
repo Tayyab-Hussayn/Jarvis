@@ -1,0 +1,580 @@
+[
+ {
+  "description": "Report battery charge and time remaining.",
+  "name": "battery_status",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Explain what a command would do and how risky it is, without running it.",
+  "name": "check_command",
+  "parameters": {
+   "properties": {
+    "command": {
+     "description": "The command line to analyse.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "command"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show metadata for a file or directory: size, permissions, type, dates.",
+  "name": "describe_file",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "The file or directory to describe.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show what is taking up space in a directory.",
+  "name": "directory_size",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "Directory to measure. Default: 'home'.",
+     "type": "string"
+    },
+    "top": {
+     "description": "How many of the largest entries to list. Default: 10.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show disk usage for a filesystem, plus the largest mounts.",
+  "name": "disk_usage",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "A path on the filesystem to report. Default: '/'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Describe the host: distro, compositor, audio stack and available tools. Useful when a skill is unavailable and you need to know why.",
+  "name": "environment_report",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search for files by name, newest first, and optionally by their contents.",
+  "name": "find_files",
+  "parameters": {
+   "properties": {
+    "content": {
+     "description": "Also require this text to appear inside the file. Default: ''.",
+     "type": "string"
+    },
+    "max_results": {
+     "description": "Maximum matches to return (1-500). Default: 50.",
+     "type": "integer"
+    },
+    "name": {
+     "description": "Filename or glob pattern, e.g. '*.pdf' or 'report'.",
+     "type": "string"
+    },
+    "path": {
+     "description": "Directory to search under. Default: 'home'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find running processes by name and show their PIDs.",
+  "name": "find_process",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "Process name or fragment to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List installed applications, optionally filtered by category.",
+  "name": "list_apps",
+  "parameters": {
+   "properties": {
+    "category": {
+     "description": "A freedesktop category, e.g. 'Development', 'Graphics'. Default: ''.",
+     "type": "string"
+    },
+    "limit": {
+     "description": "Maximum results. Default: 60.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List the contents of a directory.",
+  "name": "list_files",
+  "parameters": {
+   "properties": {
+    "limit": {
+     "description": "Maximum entries to return. Default: 200.",
+     "type": "integer"
+    },
+    "long_format": {
+     "description": "Show permissions, owner and modification time. Default: False.",
+     "type": "boolean"
+    },
+    "path": {
+     "description": "Directory path, or a shortcut like 'home', 'desktop', 'downloads'. Default: 'home'.",
+     "type": "string"
+    },
+    "show_hidden": {
+     "description": "Include dotfiles. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List scheduled jobs and reminders, what they recently did, or whether the scheduler is running.",
+  "name": "list_jobs",
+  "parameters": {
+   "properties": {
+    "include_finished": {
+     "description": "For jobs: also show jobs that already ran or failed. Default: False.",
+     "type": "boolean"
+    },
+    "limit": {
+     "description": "For history: how many entries to show.",
+     "type": "integer"
+    },
+    "view": {
+     "description": "jobs (default) = the list; history = what jobs recently did, including failures; status = whether jobs will actually fire and where they are stored. Default: 'jobs'.",
+     "enum": [
+      "jobs",
+      "history",
+      "status"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List the phones paired with Kravein and which are connected right now. Use this to find a phone's name or id when several are connected.",
+  "name": "list_phones",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List running processes.",
+  "name": "list_processes",
+  "parameters": {
+   "properties": {
+    "filter_name": {
+     "description": "Only show processes whose name contains this text. Default: ''.",
+     "type": "string"
+    },
+    "limit": {
+     "description": "How many to show. Default: 15.",
+     "type": "integer"
+    },
+    "sort_by": {
+     "description": "'cpu', 'memory' or 'name'. Default: 'cpu'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List systemd services.",
+  "name": "list_services",
+  "parameters": {
+   "properties": {
+    "failed_only": {
+     "description": "Only show units that have failed. Default: False.",
+     "type": "boolean"
+    },
+    "system_scope": {
+     "description": "List system units instead of user units. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List open terminal windows, so one can be chosen to type into.",
+  "name": "list_terminals",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List every open window grouped by workspace (with each window's exact id and, for terminals, the shell's working directory), or describe the focused window, or list the workspaces.",
+  "name": "list_windows",
+  "parameters": {
+   "properties": {
+    "as_json": {
+     "description": "For windows: return a JSON list of {id, title, app, pid, workspace, focused, cwd} instead of text. Default: False.",
+     "type": "boolean"
+    },
+    "view": {
+     "description": "windows (default), focused (just the window with focus) or workspaces (the workspace list). Default: 'windows'.",
+     "enum": [
+      "windows",
+      "focused",
+      "workspaces"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show network interfaces, addresses and the active connection.",
+  "name": "network_status",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show details about a package, installed or not.",
+  "name": "package_info",
+  "parameters": {
+   "properties": {
+    "package": {
+     "description": "Package name.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "package"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read your phone's battery, volume and model. Not this computer's battery or volume.",
+  "name": "phone_status",
+  "parameters": {
+   "properties": {
+    "device": {
+     "description": "Phone name or id. Omit when only one phone is connected. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show what the assistant has recently done. Every skill call, shell command and confirmation decision is recorded.",
+  "name": "read_audit_log",
+  "parameters": {
+   "properties": {
+    "event_filter": {
+     "description": "Only show events starting with this prefix, e.g. 'shell', 'safety' or 'skill'. Default: ''.",
+     "type": "string"
+    },
+    "limit": {
+     "description": "How many entries to show. Default: 25.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read a text file; every line is prefixed with its line number. Read a file with this before editing it with edit_file or overwriting it with write_file. For a long file read it in pieces with start_line.",
+  "name": "read_file",
+  "parameters": {
+   "properties": {
+    "max_lines": {
+     "description": "Maximum lines to return. Default: 200.",
+     "type": "integer"
+    },
+    "path": {
+     "description": "File to read.",
+     "type": "string"
+    },
+    "start_line": {
+     "description": "1-indexed line to start from; use the value the previous read printed after 'continue with start_line='. Default: 1.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read the systemd journal.",
+  "name": "read_logs",
+  "parameters": {
+   "properties": {
+    "lines": {
+     "description": "How many recent lines to return. Default: 40.",
+     "type": "integer"
+    },
+    "since": {
+     "description": "A time expression, e.g. '1 hour ago' or 'today'. Default: ''.",
+     "type": "string"
+    },
+    "unit": {
+     "description": "Limit to one unit, e.g. 'NetworkManager'. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show today's routines (what is done, what is next, the score), or how recent days went.",
+  "name": "routine_status",
+  "parameters": {
+   "properties": {
+    "history": {
+     "description": "True to show past days instead: score, what was missed, streak. Default: False.",
+     "type": "boolean"
+    },
+    "limit": {
+     "description": "With history: how many days back (default 14).",
+     "type": "integer"
+    },
+    "routine_id": {
+     "description": "Limit to one routine, e.g. \"r1\". Leave empty for all. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Report screen dimensions and capture capability, or whether keyboard/mouse input can be synthesised.",
+  "name": "screen_info",
+  "parameters": {
+   "properties": {
+    "topic": {
+     "description": "screen (default) for size and capture, or input for typing/mouse capability. Default: 'screen'.",
+     "enum": [
+      "screen",
+      "input"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search the Arch repositories for installable packages.",
+  "name": "search_packages",
+  "parameters": {
+   "properties": {
+    "limit": {
+     "description": "Maximum results. Default: 12.",
+     "type": "integer"
+    },
+    "query": {
+     "description": "What to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search inside file contents under a directory (like grep -rn / rg). Output is capped and paged; narrow it with glob or a more specific directory, or continue with offset. To find files by name use find_files.",
+  "name": "search_text",
+  "parameters": {
+   "properties": {
+    "context_lines": {
+     "description": "Lines of context to show around each match (0-10). Default: 0.",
+     "type": "integer"
+    },
+    "directory": {
+     "description": "Directory to search under. Default: 'home'.",
+     "type": "string"
+    },
+    "glob": {
+     "description": "Only search files whose name matches, e.g. '*.py'. Default: ''.",
+     "type": "string"
+    },
+    "max_results": {
+     "description": "Maximum results per page (1-200): matching lines, or files for the files and count outputs. Default: 40.",
+     "type": "integer"
+    },
+    "offset": {
+     "description": "Skip this many results first; use the value the previous page printed after 'continue with offset='. Default: 0.",
+     "type": "integer"
+    },
+    "output": {
+     "description": "'content' lists matching lines (default), 'files' lists only the files that match, 'count' gives the number of matches per file. Default: 'content'.",
+     "enum": [
+      "content",
+      "files",
+      "count"
+     ],
+     "type": "string"
+    },
+    "query": {
+     "description": "Text to look for (case-insensitive). Plain text unless regex is true.",
+     "type": "string"
+    },
+    "regex": {
+     "description": "Treat query as a regular expression. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show the status of one systemd unit.",
+  "name": "service_status",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "Unit name, e.g. 'ydotool.service'.",
+     "type": "string"
+    },
+    "system_scope": {
+     "description": "Query the system manager instead of the user one. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Report overall machine health: CPU, memory, disk, uptime and load.",
+  "name": "system_status",
+  "parameters": {
+   "properties": {
+    "detailed": {
+     "description": "Include per-core CPU, temperatures and network counters. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Capture the screen to a PNG file.",
+  "name": "take_screenshot",
+  "parameters": {
+   "properties": {
+    "active_window": {
+     "description": "Capture only the focused window. Default: False.",
+     "type": "boolean"
+    },
+    "region": {
+     "description": "Interactively select a region with the mouse. Default: False.",
+     "type": "boolean"
+    },
+    "save_path": {
+     "description": "Where to save it. Defaults to the cache directory. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find where a command lives on PATH.",
+  "name": "which_command",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "Command name.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find which package provides a file or command.",
+  "name": "which_package_owns",
+  "parameters": {
+   "properties": {
+    "target": {
+     "description": "A command name or absolute file path.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "target"
+   ],
+   "type": "object"
+  }
+ }
+]
