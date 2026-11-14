@@ -605,3 +605,58 @@ def test_real_kravein_dirs_stay_hidden_when_cwd_is_inside_them(tmp_path, monkeyp
     i = [k for k, a in enumerate(argv) if a == str(data)]
     assert i and argv[i[0] - 1] == "--tmpfs"
     assert argv.index(str(data)) < argv.index(str(data / "workspace"))
+
+
+@pytest.fixture
+def outside_tmp_home(monkeypatch):
+    # The sandbox replaces /tmp with a tmpfs, so a pytest tmp_path HOME would be
+    # invisible inside no matter what is masked and the tests below would prove
+    # nothing. Use a throwaway HOME inside the worktree, never the real one.
+    import shutil
+    base = Path(__file__).resolve().parent / f".sbx-home-{secrets.token_hex(4)}"
+    base.mkdir()
+    monkeypatch.setenv("HOME", str(base))
+    monkeypatch.setattr(config, "CONFIG_DIR", base / ".config" / "kravein")
+    monkeypatch.setattr(config, "STATE_DIR", base / ".local" / "state" / "kravein")
+    monkeypatch.setattr(config, "DATA_DIR", base / ".local" / "share" / "kravein")
+    sbx._scan_cache.clear()
+    yield base
+    shutil.rmtree(base, ignore_errors=True)
+
+
+_PRIVATE = [
+    ".config/google-chrome/Default/Cookies",
+    ".config/chromium/Default/Cookies",
+    ".mozilla/firefox/p.default/cookies.sqlite",
+    ".config/kravein/api_keys.json",
+    ".local/state/kravein/audit.jsonl",
+    ".local/share/kravein/chrome-profile/Default/Cookies",
+    ".local/share/keyrings/login.keyring",
+    ".config/Signal/config.json",
+    ".bash_history",
+    ".zsh_history",
+    ".python_history",
+    ".git-credentials",
+    ".npmrc",
+]
+
+
+@real
+@pytest.mark.parametrize("rel", _PRIVATE)
+def test_real_opaque_code_cannot_read_private_files(outside_tmp_home, rel):
+    f = outside_tmp_home / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("SECRET-VALUE")
+    # `python3 -c` is opaque to the classifier, so it runs with no card.
+    out = box(f"python3 -c \"print(open('{f}').read())\"", working_directory=str(outside_tmp_home))
+    assert "SECRET-VALUE" not in out
+
+
+@real
+def test_real_the_masking_is_not_vacuous(outside_tmp_home):
+    # Control: an ordinary file in the same fake HOME IS visible, so the tests
+    # above fail because of the mask and not because HOME is missing.
+    (outside_tmp_home / "notes.txt").write_text("VISIBLE-VALUE")
+    out = box("python3 -c \"print(open('notes.txt').read())\"",
+              working_directory=str(outside_tmp_home))
+    assert "VISIBLE-VALUE" in out

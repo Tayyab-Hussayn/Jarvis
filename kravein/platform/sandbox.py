@@ -52,9 +52,21 @@ _RETRY_AFTER = 30.0       # a failed probe is retried after this long
 # back to the model. An explicit read the classifier can see (``cat ~/.ssh/id``)
 # is left visible: it asks for a card, and a card that then returns nothing
 # would be a lie.
+# Opaque code is SAFE inside the sandbox (no card) and its output reaches the
+# model, so anything that holds a session, token or history must simply not
+# exist in there. Kravein's own config/state/data dirs (the Playwright profile
+# lives in the data dir) are masked separately in build_argv.
 _SECRET_DIRS = (".ssh", ".gnupg", ".aws", ".azure", ".docker", ".kube",
-                ".password-store", ".config/gh", ".config/gcloud")
-_SECRET_FILES = (".netrc",)
+                ".password-store", ".config/gh", ".config/gcloud",
+                # browser profiles: cookies and saved logins
+                ".mozilla", ".config/google-chrome", ".config/chromium",
+                ".config/BraveSoftware", ".config/vivaldi", ".config/microsoft-edge",
+                # keyrings, credential stores, messaging sessions
+                ".local/share/keyrings", ".config/rclone",
+                ".config/Signal", ".local/share/TelegramDesktop")
+_SECRET_FILES = (".netrc", ".git-credentials", ".npmrc", ".pypirc",
+                 ".bash_history", ".zsh_history", ".python_history",
+                 ".local/share/fish/fish_history")
 _SECRET_NAMES = (".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_*",
                  "*api_keys*", "*credentials*", "*secret*")
 
@@ -254,10 +266,17 @@ def build_argv(command: str, cwd: Path, tag: str, binary: str | None = None,
     # tmpfs and only that subtree shows. Skipping the mask for such a cwd (the
     # earlier string-prefix test) left memory.json etc. readable to opaque code.
     kdirs: list[str] = []
+    kdirs_again: list[str] = []
     if hide_secrets:
         for d in (config.CONFIG_DIR, config.STATE_DIR, config.DATA_DIR):
             if d.is_dir() and not d.is_symlink():
                 kdirs += ["--size", str(_RUN_BYTES), "--tmpfs", str(d)]
+                # A cwd that CONTAINS the dir (cwd = $HOME) is bound back over
+                # the mask and would bring it back: mask it again on top. Not
+                # when cwd is inside it, or the cwd itself would vanish.
+                real_d, real_cwd = Path(os.path.realpath(d)), Path(os.path.realpath(cwd))
+                if real_d != real_cwd and real_d not in real_cwd.parents:
+                    kdirs_again += ["--size", str(_RUN_BYTES), "--tmpfs", str(d)]
     argv = [
         binary,
         # net, ipc, pid, uts, user and cgroup (where the kernel has them): the
@@ -281,6 +300,7 @@ def build_argv(command: str, cwd: Path, tag: str, binary: str | None = None,
         "--size", str(_TMP_BYTES), "--tmpfs", "/tmp",
         *kdirs,
         "--ro-bind", str(cwd), str(cwd),
+        *kdirs_again,
         "--chdir", str(cwd),
         # /run covers /run/user/<uid> (Wayland, the session bus, the keyring and
         # gpg sockets). After the cwd bind on purpose, see above.
