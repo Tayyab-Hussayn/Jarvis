@@ -15,6 +15,7 @@ like shell commands and filesystem paths.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import stat as stat_mod
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -36,13 +38,19 @@ class Danger(IntEnum):
 
     SAFE = 0        # read-only: status, listing, search
     MODERATE = 1    # visible but reversible: launch app, set volume, write file
-    DESTRUCTIVE = 2 # data loss or process death: delete, kill, overwrite
-    CRITICAL = 3    # whole-system: shutdown, reboot, package removal, sudo
+    # Risky but not data loss (#237): outward messages, spending, acting on an
+    # account, an unknown external tool. Asks like DESTRUCTIVE, but the owner's
+    # "Always allow" creates a scoped, revocable grant. Compared by name or
+    # ordering only: nothing may depend on the numeric values.
+    GUARDED = 2
+    DESTRUCTIVE = 3 # data loss or process death: delete, kill, overwrite
+    CRITICAL = 4    # whole-system: shutdown, reboot, package removal, sudo
 
 
 DANGER_LABELS = {
     Danger.SAFE: "safe",
     Danger.MODERATE: "moderate",
+    Danger.GUARDED: "guarded",
     Danger.DESTRUCTIVE: "destructive",
     Danger.CRITICAL: "critical",
 }
@@ -88,7 +96,7 @@ class Verdict:
 
     @property
     def needs_confirmation(self) -> bool:
-        return self.danger >= Danger.DESTRUCTIVE
+        return self.danger >= Danger.GUARDED
 
     def summary(self) -> str:
         label = DANGER_LABELS[self.danger]
@@ -1740,6 +1748,67 @@ class TurnMemory:
     def __init__(self) -> None:
         self.targets: set[str] = set()
         self.retried_declined = False
+        # Taint (#237): where untrusted content entered this run ("tool:web_fetch",
+        # "mcp:leads", "task:t3"). A sub-agent sharing this memory taints its
+        # parent by construction. Only ever grows within a run.
+        self.taint: set[str] = set()
+
+
+def mark_tainted(source: str) -> None:
+    """Untrusted content (a web page, an MCP result, a tainted report) has
+    entered this run's context. Outward grants stop applying (see enforce)."""
+    source = str(source or "untrusted").strip() or "untrusted"
+    memory = _memory()
+    if source not in memory.taint:
+        memory.taint.add(source)
+        audit.record("safety.tainted", source=source)
+
+
+def taint_sources() -> frozenset[str]:
+    return frozenset(_memory().taint)
+
+
+# -- the call being dispatched (#237) -----------------------------------------
+#
+# A grant's scope is computed by CODE from the arguments of the call that is
+# actually running, never from anything a caller passes to enforce(). The
+# registry pushes this context around every skill call; with none (a direct
+# call outside dispatch) no grant is offered or used: the card always shows.
+
+@dataclass(frozen=True)
+class CallContext:
+    tool: str
+    scope: tuple[tuple[str, str], ...]   # (arg name, canonical JSON value), sorted
+    outward: bool = False
+    origin: str = ""                     # "mcp:<server>" / "plugin:<id>"; "" = core
+
+
+def _call_stack() -> list[CallContext]:
+    stack = getattr(_local, "calls", None)
+    if stack is None:
+        stack = _local.calls = []
+    return stack
+
+
+class call_context:
+    """Context manager: ``registry.dispatch`` only."""
+
+    def __init__(self, ctx: CallContext) -> None:
+        self._ctx = ctx
+
+    def __enter__(self) -> CallContext:
+        _call_stack().append(self._ctx)
+        return self._ctx
+
+    def __exit__(self, *exc_info) -> None:
+        stack = _call_stack()
+        if stack and stack[-1] is self._ctx:
+            stack.pop()
+
+
+def current_call() -> CallContext | None:
+    stack = _call_stack()
+    return stack[-1] if stack else None
 
 
 def _memory() -> TurnMemory:
@@ -1820,6 +1889,7 @@ class confirmer_scope:
         fn: Confirmer | None,
         memory: TurnMemory | None = None,
         principal: str | None = None,
+        grant_principal: str | None = None,
     ):
         self._fn = fn
         self._memory = memory if memory is not None else TurnMemory()
@@ -1827,24 +1897,34 @@ class confirmer_scope:
         # enclosing scope's (a delegated sub-agent acts for the same owner);
         # "" means nobody's: no rule applies and none is offered.
         self._principal = principal
+        # Whose GUARDED grants apply (#237). Separate from `principal` on
+        # purpose: owner ruling D4 lets grants act in delegated and scheduled
+        # runs, while the DESTRUCTIVE rules of #199 must stay out of them.
+        # None keeps the enclosing scope's.
+        self._grant_principal = grant_principal
         self._previous: Confirmer | None = None
         self._previous_memory: TurnMemory | None = None
         self._previous_principal: str = ""
+        self._previous_grant: str = ""
 
     def __enter__(self) -> "confirmer_scope":
         self._previous = getattr(_local, "confirmer", None)
         self._previous_memory = getattr(_local, "memory", None)
         self._previous_principal = getattr(_local, "principal", "")
+        self._previous_grant = getattr(_local, "grant_principal", "")
         _local.confirmer = self._fn
         _local.memory = self._memory
         if self._principal is not None:
             _local.principal = self._principal
+        if self._grant_principal is not None:
+            _local.grant_principal = self._grant_principal
         return self
 
     def __exit__(self, *exc_info) -> None:
         _local.confirmer = self._previous
         _local.memory = self._previous_memory
         _local.principal = self._previous_principal
+        _local.grant_principal = self._previous_grant
 
 
 def describe_targets(*parts: str) -> list[str]:
@@ -2012,6 +2092,29 @@ RULES_FILENAME = "safety_rules.json"
 _rules_lock = threading.Lock()
 
 
+@contextmanager
+def _rules_locked():
+    """Thread lock + a cross-process ``flock`` around every read-modify-write.
+
+    The server and a jobs tick are separate processes that both rewrite the
+    store (#237, D4 made jobs use grants). Without the file lock a job saving
+    its use count could write back a grant the owner revoked a moment ago.
+    The lock file is never replaced (the store is: tmp + rename swaps the
+    inode, so locking the store itself guards nothing) - same as jobs.lock.
+    """
+    import fcntl
+
+    with _rules_lock:
+        path = _rules_path().with_name(RULES_FILENAME + ".lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def _rules_path() -> Path:
     return config.STATE_DIR / RULES_FILENAME
 
@@ -2042,7 +2145,7 @@ def _save_rules(rules: list[dict]) -> None:
 
 def list_rules(principal: str) -> list[dict]:
     """The principal's own rules, for the settings view."""
-    with _rules_lock:
+    with _rules_locked():
         return [dict(r) for r in _load_rules() if r["principal"] == principal]
 
 
@@ -2050,7 +2153,7 @@ def add_always_rule(signature: str, principal: str, *, by: str = "") -> dict | N
     """Store a rule. Owner-facing callers only (enforce, after a card answer)."""
     if not signature or not principal:
         return None
-    with _rules_lock:
+    with _rules_locked():
         rules = _load_rules()
         for r in rules:
             if r["signature"] == signature and r["principal"] == principal:
@@ -2068,7 +2171,7 @@ def add_always_rule(signature: str, principal: str, *, by: str = "") -> dict | N
 
 def revoke_rule(rule_id: str, principal: str, *, by: str = "") -> bool:
     """Delete one of the principal's rules. False if it is not theirs/unknown."""
-    with _rules_lock:
+    with _rules_locked():
         rules = _load_rules()
         kept = [r for r in rules if not (r["id"] == rule_id and r["principal"] == principal)]
         if len(kept) == len(rules):
@@ -2082,9 +2185,11 @@ def _match_rule(signature: str, principal: str) -> dict | None:
     """The principal's rule for this signature, with its use count bumped."""
     if not signature or not principal:
         return None
-    with _rules_lock:
+    with _rules_locked():
         rules = _load_rules()
         for r in rules:
+            if r.get("kind") == "grant":
+                continue                # a GUARDED grant never answers a DESTRUCTIVE card
             if r["signature"] == signature and r["principal"] == principal:
                 r["uses"] = int(r.get("uses") or 0) + 1
                 r["last_used"] = time.time()
@@ -2099,11 +2204,155 @@ def _match_rule(signature: str, principal: str) -> dict | None:
 ALWAYS = "always"        # a Confirmer may return this instead of True
 
 
+# ---------------------------------------------------------------------------
+# GUARDED grants (#237)
+# ---------------------------------------------------------------------------
+#
+# A grant is the owner's "Always allow" on a GUARDED card. It lives in the
+# rules file (`kind: "grant"`) so the existing list/revoke path and
+# /api/safety/rules see it. Rules that are not up for negotiation:
+#   - created ONLY by enforce(), after a real confirmer answered "always" to
+#     the very card enforce() offered it for; the signature is computed here
+#     from the running call, never taken from the answer, a skill or the model;
+#   - GUARDED only: DESTRUCTIVE/CRITICAL never get or use one (owner, 2026-11-13);
+#   - a secret read or an owner-only card is never answered by one;
+#   - applies attended and unattended alike (owner ruling D4), but is
+#     suspended for an outward tool in a tainted run (§13.4);
+#   - per-day cap and expiry, every use audited, revocable.
+
+GRANT_MAX_CAP = 1000
+GRANT_MAX_SECONDS = 365 * 86400
+
+
+@dataclass(frozen=True)
+class AlwaysAllow:
+    """A confirmer's "Always allow" with the owner's own limits.
+
+    ``cap`` = uses per day, ``expires_in`` = seconds. Both optional and
+    bounded. It carries no scope and no signature: those come from code.
+    """
+
+    cap: int | None = None
+    expires_in: float | None = None
+
+
+def _answer_limits(answer: Any) -> tuple[int | None, float | None] | None:
+    """``(cap, expires_in)`` for an Always answer, ``None`` if it is not one."""
+    if answer == ALWAYS and isinstance(answer, str):
+        return None, None
+    if isinstance(answer, AlwaysAllow):
+        cap = answer.cap
+        if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int)
+                                or not 1 <= cap <= GRANT_MAX_CAP):
+            return None               # malformed limits: not an approval at all
+        exp = answer.expires_in
+        if exp is not None and (isinstance(exp, bool) or not isinstance(exp, (int, float))
+                                or not 0 < exp <= GRANT_MAX_SECONDS):
+            return None
+        return cap, (float(exp) if exp is not None else None)
+    return None
+
+
+def grant_signature(ctx: CallContext) -> str:
+    blob = json.dumps({"tool": ctx.tool, "scope": list(ctx.scope), "origin": ctx.origin},
+                      sort_keys=True, separators=(",", ":"))
+    return f"grant:{ctx.tool}:{hashlib.sha256(blob.encode()).hexdigest()[:24]}"
+
+
+def _today() -> str:
+    return time.strftime("%Y-%m-%d", time.localtime())
+
+
+def _add_grant(ctx: CallContext, principal: str, cap: int | None,
+               expires_in: float | None, *, by: str = "") -> dict | None:
+    """Private: enforce() is the only caller."""
+    if not principal:
+        return None
+    signature = grant_signature(ctx)
+    now = time.time()
+    with _rules_locked():
+        rules = _load_rules()
+        rules = [r for r in rules if not (r.get("kind") == "grant" and r["signature"] == signature
+                                          and r["principal"] == principal)]
+        grant = {
+            "id": uuid.uuid4().hex[:12], "kind": "grant", "signature": signature,
+            "principal": principal, "tool": ctx.tool, "origin": ctx.origin,
+            "outward": ctx.outward, "scope": {k: json.loads(v) for k, v in ctx.scope},
+            "cap": cap, "expires_at": (now + expires_in) if expires_in else None,
+            "created_at": now, "uses": 0, "last_used": None, "day": _today(), "day_uses": 0,
+        }
+        rules.append(grant)
+        _save_rules(rules)
+    audit.record("safety.grant_created", grant_id=grant["id"], tool=ctx.tool,
+                 principal=principal, cap=cap, expires_at=grant["expires_at"], by=by)
+    return dict(grant)
+
+
+def _use_grant(ctx: CallContext, principal: str) -> tuple[dict | None, str]:
+    """``(grant, "")`` with its counters bumped, or ``(None, why)``.
+
+    Matches only on the signature recomputed from the running call: a
+    hand-edited store with a wider "scope" field still cannot match anything
+    else.
+    """
+    if not principal:
+        return None, "no principal"
+    signature = grant_signature(ctx)
+    with _rules_locked():
+        rules = _load_rules()
+        for r in rules:
+            if not (r.get("kind") == "grant" and r["signature"] == signature
+                    and r["principal"] == principal and r.get("tool") == ctx.tool):
+                continue
+            # Fail closed on anything malformed: a limit that cannot be read
+            # is not "no limit" (a hand edit could turn cap into "5").
+            expires = r.get("expires_at")
+            if expires is not None and (isinstance(expires, bool)
+                                        or not isinstance(expires, (int, float))):
+                return None, "malformed grant"
+            if expires is not None and time.time() >= expires:
+                return None, "expired"
+            cap = r.get("cap")
+            if cap is not None and (isinstance(cap, bool) or not isinstance(cap, int) or cap < 1):
+                return None, "malformed grant"
+            try:
+                uses = int(r.get("uses") or 0)
+                day_uses = int(r.get("day_uses") or 0) if r.get("day") == _today() else 0
+            except (TypeError, ValueError):
+                return None, "malformed grant"
+            if cap is not None and day_uses >= cap:
+                return None, "cap reached"
+            r["day"] = _today()
+            r["uses"] = uses + 1
+            r["day_uses"] = day_uses + 1
+            r["last_used"] = time.time()
+            try:
+                _save_rules(rules)
+            except OSError:
+                # Uncounted use would let a cap be exceeded: fail closed.
+                return None, "could not record the use"
+            return dict(r), ""
+    return None, "no grant"
+
+
+def _grant_principal() -> str:
+    return getattr(_local, "grant_principal", "") or _current_principal()
+
+
 def always_offer() -> dict:
     """What the card being raised right now may offer, for a Confirmer to read:
-    ``{"allowed": bool, "signature": str}``. Thread-local, set by enforce()."""
+    ``{"allowed": bool, "signature": str}`` (unchanged for #199 rules). A grant
+    offer adds ``kind: "grant"``, ``tool``, ``scope`` (shown to the owner) and
+    ``outward`` (the UI offers "up to N per day" by default). Thread-local,
+    set by enforce().
+    """
     sig = getattr(_local, "always_signature", "")
-    return {"allowed": bool(sig), "signature": sig}
+    offer: dict[str, Any] = {"allowed": bool(sig), "signature": sig}
+    ctx = getattr(_local, "always_grant", None)
+    if sig and ctx is not None:
+        offer.update(kind="grant", tool=ctx.tool, outward=ctx.outward,
+                     scope={k: json.loads(v) for k, v in ctx.scope})
+    return offer
 
 
 def _current_principal() -> str:
@@ -2150,7 +2399,7 @@ def enforce(
         )
         raise SafetyError(
             f"Refused: {action_desc}. The confirmation policy is \"decline\": "
-            "destructive and critical actions are refused without asking. Tell "
+            "guarded, destructive and critical actions are refused without asking. Tell "
             "the user; only they can change the policy in settings — do not "
             "retry it another way."
         )
@@ -2189,6 +2438,40 @@ def enforce(
 
     confirmer = get_confirmer()
     detail = verdict.summary()
+
+    # GUARDED + a matching grant (#237). After the hard refusals, the decline
+    # policy and the denial memory; before the confirmer. Attended or not (D4).
+    ctx = current_call()
+    grant_principal = _grant_principal()
+    grantable = bool(
+        verdict.danger == Danger.GUARDED
+        and not verdict.no_auto
+        and ctx is not None
+        and grant_principal
+    )
+    if grantable:
+        taint = taint_sources()
+        # The taint rule (§13.4): injected text can ask for anything, so an
+        # outward grant does not apply once untrusted content is in the run -
+        # unless all of it came from the very server/plugin the grant is for.
+        suspended = bool(ctx.outward and taint and not (ctx.origin and taint <= {ctx.origin}))
+        if suspended:
+            audit.record("safety.grant_suspended", skill=skill, source=source, tool=ctx.tool,
+                         action=action_desc, taint=sorted(taint))
+        else:
+            grant, why = _use_grant(ctx, grant_principal)
+            if grant is not None:
+                audit.record(
+                    "safety.grant_used",
+                    skill=skill, source=source, action=action_desc, tool=ctx.tool,
+                    grant_id=grant["id"], principal=grant_principal, uses=grant["uses"],
+                    day_uses=grant["day_uses"], cap=grant.get("cap"),
+                    attended=confirmer is not _deny and _attended(confirmer),
+                )
+                return
+            if why in ("expired", "cap reached", "could not record the use", "malformed grant"):
+                audit.record("safety.grant_unusable", tool=ctx.tool, reason=why,
+                             principal=grant_principal)
 
     # "Always approve" (#199): same preconditions as auto-approve, minus the
     # timer. Only an eligible, DESTRUCTIVE (never CRITICAL) signature.
@@ -2260,19 +2543,28 @@ def enforce(
 
     approved = False
     always = False
-    offered = verdict.signature if rule_ok else ""
+    limits: tuple[int | None, float | None] | None = None
+    # One offer per card: a #199 rule (DESTRUCTIVE) or a grant (GUARDED).
+    offered_grant = ctx if grantable else None
+    offered = verdict.signature if rule_ok else (
+        grant_signature(offered_grant) if offered_grant is not None else "")
     _local.always_signature = offered
+    _local.always_grant = offered_grant
     try:
         answer = confirmer(action_desc, detail, verdict.danger)
         # A str answer counts only if it is exactly "always"; any other string
-        # is not an approval.
-        always = answer == ALWAYS
-        approved = always or (not isinstance(answer, str) and bool(answer))
+        # is not an approval. An AlwaysAllow with bad limits is not one either.
+        limits = _answer_limits(answer)
+        always = limits is not None
+        approved = always or (
+            not isinstance(answer, (str, AlwaysAllow)) and bool(answer)
+        )
     except Exception as exc:
         audit.record("safety.confirm_error", action=action_desc, error=str(exc))
         approved = always = False
     finally:
         _local.always_signature = ""
+        _local.always_grant = None
 
     audit.record(
         "safety.confirm_result",
@@ -2280,7 +2572,12 @@ def enforce(
         danger=DANGER_LABELS[verdict.danger], approved=approved,
         always=bool(always and offered),
     )
-    if always and offered:
+    if always and offered and offered_grant is not None:
+        try:
+            _add_grant(offered_grant, grant_principal, limits[0], limits[1], by=source)
+        except OSError as exc:
+            audit.record("safety.rule_store_error", error=str(exc))
+    elif always and offered:
         try:
             add_always_rule(offered, principal, by=source)
         except OSError as exc:

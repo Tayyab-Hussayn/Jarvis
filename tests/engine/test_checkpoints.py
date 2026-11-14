@@ -538,7 +538,9 @@ def test_doctor_reports_the_instructions_file(env, capsys, monkeypatch):
         pass
     assert "Owner instructions" in capsys.readouterr().out
     path = config.owner_instructions_path()
-    path.parent.mkdir(parents=True)
+    # doctor's sandbox probe (#235) runs platform.shell, which creates the
+    # config dir, as `kravein doctor` always did through main().
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("hello owner")
     try:
         cli.doctor()

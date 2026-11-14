@@ -57,6 +57,7 @@ def green(t: str) -> str:
 DANGER_COLOR = {
     Danger.SAFE: green,
     Danger.MODERATE: cyan,
+    Danger.GUARDED: yellow,
     Danger.DESTRUCTIVE: yellow,
     Danger.CRITICAL: red,
 }
@@ -906,6 +907,13 @@ def doctor() -> int:
 
     print(bold("Environment"))
     print(f"  {env.summary()}")
+    # Whether run_command(sandbox=True) can work here (#235).
+    try:
+        from .platform import sandbox
+
+        print(f"  sandbox: {sandbox.status().summary()}")
+    except Exception as exc:
+        print(red(f"  sandbox: could not be checked ({type(exc).__name__})"))
 
     print(bold("\nLLM"))
     status = client().status()
