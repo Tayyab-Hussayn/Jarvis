@@ -59,7 +59,8 @@ class _Conn:
         self.client: Any = None
         self.proc: Any = None
         self.closing: asyncio.Event | None = None
-        self.done = threading.Event()
+        self.done = threading.Event()          # the connect attempt is over (ready or failed)
+        self.finished = threading.Event()      # the task has ended and its process is killed
         self.listed: dict[str, dict[str, Any]] = {}
         self.report: dict[str, list[str]] = {}
         self.registered: list[str] = []
@@ -170,8 +171,18 @@ class Manager:
             conns = list(self._conns.values())
             for name in list(self._conns):
                 self._close(name)
+        # Wait for each task to END (its exit stack kills the server's process
+        # group), not merely to have connected: stopping the loop earlier
+        # leaves the servers running as orphans.
         for conn in conns:
-            conn.done.wait(wait)
+            if conn.closing is not None:
+                conn.finished.wait(wait)
+        with self._lock:
+            for conn in conns:
+                if not conn.finished.is_set() and conn.proc is not None:
+                    from ..platform import shell
+
+                    shell.kill_group(conn.proc, 0.5)
         with self._lock:
             loop, self._loop, self._thread, self._mtime = self._loop, None, None, None
         if loop is not None:
@@ -250,6 +261,7 @@ class Manager:
             _bridge.unregister(conn)
             conn.client = None
             conn.done.set()
+            conn.finished.set()
 
     async def _list(self, client: Any) -> dict[str, dict[str, Any]]:
         tools: dict[str, dict[str, Any]] = {}

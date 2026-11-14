@@ -18,12 +18,18 @@ from .manager import Manager
 
 def describe_tool(defn: dict[str, Any], old: dict[str, Any] | None = None) -> str:
     clean = pins.sanitized(defn)
-    desc = clean[0] if clean else "(schema too large or not an object: will not be registered)"
-    props = sorted((defn.get("input_schema") or {}).get("properties", {}) or {})
     hints = defn.get("_hints") or {}
-    lines = [f"  tool: {defn['name']}",
-             f"    description: {desc}",
-             f"    arguments  : {', '.join(props) or '(none)'}"]
+    lines = [f"  tool: {defn['name']}"]
+    if clean is None:
+        lines.append("    (schema too large or not an object: will not be registered)")
+    else:
+        # Everything the model will read on every turn, not just the names:
+        # nested descriptions, enums, defaults and titles are server text too.
+        desc, params = clean
+        lines.append(f"    description: {desc}")
+        lines.append("    arguments (exactly as the model will see them):")
+        lines += ["      " + ln for ln in json.dumps(params, indent=1, sort_keys=True,
+                                                     ensure_ascii=False).splitlines()]
     if hints:
         lines.append("    server says (a suggestion, not trusted): "
                      + ", ".join(f"{k}={v}" for k, v in sorted(hints.items())))
