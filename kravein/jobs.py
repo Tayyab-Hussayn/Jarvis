@@ -282,6 +282,17 @@ def add(
             raise ValueError("a one-shot job needs a time")
         first = when.astimezone(timezone.utc)
 
+    # Who the job acts for, and whether the run creating it had read untrusted
+    # content (#237). Both come from the creating run's thread-local safety
+    # scope, never from an argument the model controls: D4 lets a job use its
+    # owner's GUARDED grants, and a job prompt written in a tainted run must
+    # not start clean, or injected text could launder itself through the
+    # scheduler into an outward grant.
+    from . import safety
+
+    owner = safety._grant_principal()
+    taint = sorted(safety.taint_sources())
+
     with locked() as got:
         if not got:
             raise RuntimeError("job store is busy")
@@ -304,6 +315,8 @@ def add(
             "runs": 0,
             "running_pid": None,
             "running_since": "",
+            "principal": owner,
+            "taint": taint,
         }
         data["jobs"].append(job)
         save(data)
@@ -622,6 +635,12 @@ def run_job(job: dict[str, Any]) -> tuple[bool, str, str]:
             confirmer=None,
             observer=watch,
         )
+        # Owner ruling D4: the job's creator's GUARDED grants apply here too.
+        # Without a grant the action is still refused (no confirmer). A job
+        # created in a tainted run starts tainted (#237).
+        agent.grant_principal = str(job.get("principal") or "")
+        taint = job.get("taint")
+        agent.initial_taint = frozenset(str(s) for s in taint) if isinstance(taint, list) else frozenset()
         turn = agent.ask(prompt)
     except Exception as exc:
         return False, "", f"{type(exc).__name__}: {exc}"

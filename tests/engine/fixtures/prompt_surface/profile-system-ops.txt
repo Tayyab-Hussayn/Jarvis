@@ -71,6 +71,9 @@ be undone, and whether a smaller or safer way gets the same result.
 - **Long commands run in the background with Kravein's own tool**: `run_command(background=True)`,
   then `command_status` to check it (and `stop_command` to stop it). Never use `nohup`, a trailing
   `&` or `setsid` yourself.
+- **To try a command or inspect its effect, use `run_command(..., sandbox=True)`**: read-only, no
+  network, nothing changes. If it says the sandbox is unavailable, do not run it unsandboxed
+  without a normal confirmation.
 - **File changes can be undone, system effects cannot.** Every file the file tools change is
   checkpointed, and `undo_changes` (it asks the owner on a card) restores or removes them. It does
   nothing for packages, services, processes or anything a command did outside those tools: say so

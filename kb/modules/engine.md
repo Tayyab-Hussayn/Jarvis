@@ -17,6 +17,26 @@ updated: 2026-11-14
 ```
 
 ## Public interfaces
+- GUARDED, grants, taint (#237, v3 phase 1a; owner ruling D4):
+  - **Levels.** `Danger` is SAFE 0, MODERATE 1, **GUARDED 2**, DESTRUCTIVE 3, CRITICAL 4. Use names or ordering, never the numbers; the transport sends `danger.name`. `needs_confirmation` starts at GUARDED, and so does the `skill.unenforced` tripwire. Auto-approve (#35) and the #199 rules still check `== DESTRUCTIVE`.
+  - **`@skill(scope=(...), outward=, untrusted_output=None, origin="")`.**
+    - `scope` names must be parameters (a typo raises); with none declared, every non-injected argument counts, defaults included (`registry._scope_values`).
+    - `untrusted_output=None` takes the category default: `registry.UNTRUSTED_CATEGORIES` = web, browser.
+    - `dispatch` pushes a `safety.CallContext(tool, scope, outward, origin)` for the call (`safety.call_context` / `current_call()`). After an untrusted tool it calls `safety.mark_tainted(origin or "tool:<name>")`.
+  - **Grants** live in `safety_rules.json` as `kind: "grant"`, so `list_rules`/`revoke_rule` and `/api/safety/rules` see them.
+    - Fields: id, principal, tool, origin, outward, scope (for display), signature = `grant_signature(ctx)` (sha of tool + scope + origin), cap, expires_at, created_at, uses, last_used, day, day_uses.
+    - Created only by `enforce` through private `_add_grant`, when the confirmer answers `ALWAYS` or `AlwaysAllow(cap<=1000, expires_in<=365 d)` to a GUARDED card that `enforce` offered. A malformed AlwaysAllow is not an approval.
+    - `always_offer()` keeps `{allowed, signature}` for rules; a grant offer adds `kind: "grant"`, tool, scope and outward.
+    - Matching recomputes the signature from the running call; a failed use count = no grant (fail closed).
+    - Audit: `safety.grant_created`, `grant_used`, `grant_unusable` (expired / cap reached), `grant_suspended`, `rule_revoked`.
+  - **enforce order.** blocked → below GUARDED allow → decline → `pre_confirmed` kwarg → declined this turn → **GUARDED grant** (not `no_auto`; needs a call context and a grant principal; not tainted+outward unless all taint comes from the grant's `origin`; under cap; not expired) → #199 rule / auto (DESTRUCTIVE) → no confirmer refuses → ask.
+  - **Grant principal** = `confirmer_scope(grant_principal=)`, else the scope principal. `Agent._ask` passes `grant_principal or principal or run_principal`, so live runs, delegated children and jobs act for the owner, while #199 rules still key on `principal` only.
+    - `jobs.add` stamps `principal` and `taint` from the creating run's scope (never from args).
+    - `run_job` sets `Agent.grant_principal` / `initial_taint` from them.
+  - **Taint.** `TurnMemory.taint` (`mark_tainted`, `taint_sources`).
+    - The agent marks a tool message `untrusted: [...]` when taint grew during that call, and re-seeds each turn from the transcript (`_transcript_taint`: message marks, `UNTRUSTED_SUMMARY_MARK` on a folded summary, `initial_taint`).
+    - A user message quoting `[task <id> report]` takes that task's stored taint (`_report_taint`; a lookup failure counts as tainted).
+    - Background tasks store `tainted` (column added on connect); their thread note (`note_message`) and `status_text` taint the reader. A blocking delegate shares the TurnMemory.
 - Model catalog + probe + snapshot (#234, v3 phase 0c), in `usage.py`:
   - **Catalog.** `models.catalog["provider:model"] = {as_of, price{input,cached?,output}, context, max_tools, tool_calling: verified|failed|untested, verified_at, probe{ok, at, step, error, latency_ms, input?, cached?, output?}, streaming, opaque_replay}`. It is read as a whole dict (ids have dots) and written only through `update_entry` → `config.update_settings`. `streaming` means "Kravein's adapter streams" (false today); `opaque_replay` is true for gemini/anthropic.
   - **One price source.** The catalog `price` wins. `models.prices` (#230) is a read-only fallback, and `models list` shows where a price came from (`price_source`).

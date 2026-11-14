@@ -48,6 +48,16 @@ class Skill:
     aliases: tuple[str, ...]
     # alias -> kwargs the alias name implies (e.g. pause_job -> action=pause).
     alias_presets: dict[str, dict[str, Any]] = dataclasses.field(default_factory=dict)
+    # GUARDED grants and taint (#237). `scope` = the arguments a grant is
+    # bound to (empty = all of them, the narrowest); `outward` = acts outside
+    # this machine (a grant is suspended in a tainted run); `untrusted_output`
+    # = its result carries outside content (taints the run); `origin` = the
+    # MCP server / plugin it belongs to ("" = core), used for the
+    # same-source exception to the taint rule.
+    scope: tuple[str, ...] = ()
+    outward: bool = False
+    untrusted_output: bool = False
+    origin: str = ""
 
     def available(self) -> tuple[bool, str]:
         """Check the skill's declared external requirements are present."""
@@ -231,6 +241,30 @@ _INJECTED_PARAMS = {"_source", "_confirm", "_context"}
 # Decorator
 # ---------------------------------------------------------------------------
 
+# Categories whose results carry outside content by default (#237): the run
+# that reads them is tainted. A skill can say otherwise with untrusted_output=.
+UNTRUSTED_CATEGORIES = frozenset({"web", "browser"})
+
+
+def _scope_values(entry: Skill, cleaned: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    """The grant scope of THIS call, from the arguments actually passed plus the
+    signature's defaults, so an omitted argument cannot match a grant made
+    with a different explicit value."""
+    sig = inspect.signature(entry.func)
+    values: dict[str, Any] = {}
+    for pname, param in sig.parameters.items():
+        if pname in _INJECTED_PARAMS or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        if pname in cleaned:
+            values[pname] = cleaned[pname]
+        elif param.default is not inspect.Parameter.empty:
+            values[pname] = param.default
+    names = entry.scope or tuple(sorted(values))
+    return tuple(sorted(
+        (n, json.dumps(values.get(n), sort_keys=True, default=str)) for n in names
+    ))
+
+
 def skill(
     _func: Callable | None = None,
     *,
@@ -240,6 +274,10 @@ def skill(
     category: str = "general",
     requires: tuple[str, ...] | list[str] = (),
     aliases: "tuple[str, ...] | list[str] | typing.Mapping[str, dict[str, Any]]" = (),
+    scope: "tuple[str, ...] | list[str]" = (),
+    outward: bool = False,
+    untrusted_output: bool | None = None,
+    origin: str = "",
 ) -> Callable:
     """Register a function as a skill.
 
@@ -255,12 +293,31 @@ def skill(
             always win over the caller's arguments, because the alias name
             decides the action and a caller must not turn pause into cancel.
             Aliases are never shown to the model.
+        scope: For a GUARDED skill, the arguments an "Always allow" grant is
+            bound to (``("channel", "campaign")``: not the message text). None
+            declared = every argument, the narrowest grant. A name that is
+            not a parameter raises: a typo must never widen a grant.
+        outward: Acts outside this machine (sends, posts, pays). Its grants
+            are suspended while the run is tainted.
+        untrusted_output: Its result carries outside content (a web page, an
+            email body) and taints the run. ``None`` = the category default
+            (``web``, ``browser``: untrusted).
+        origin: The MCP server or plugin it belongs to (``"mcp:leads"``);
+            ``""`` for core skills.
     """
 
     def decorator(func: Callable) -> Callable:
         schema = build_schema(func, description)
         skill_name = name or func.__name__
         schema["name"] = skill_name
+
+        scope_names = tuple(scope)
+        unknown_scope = set(scope_names) - set(schema["parameters"]["properties"])
+        if unknown_scope:
+            raise ValueError(
+                f"{skill_name} declares scope argument(s) it does not take: "
+                f"{', '.join(sorted(unknown_scope))}"
+            )
 
         presets: dict[str, dict[str, Any]] = {}
         if isinstance(aliases, typing.Mapping):
@@ -288,6 +345,13 @@ def skill(
             requires=tuple(requires),
             aliases=alias_names,
             alias_presets=presets,
+            scope=scope_names,
+            outward=bool(outward),
+            untrusted_output=(
+                category in UNTRUSTED_CATEGORIES if untrusted_output is None
+                else bool(untrusted_output)
+            ),
+            origin=str(origin or ""),
         )
 
         with _lock:
@@ -554,10 +618,20 @@ def dispatch(
         cleaned["_context"] = context
 
     enforced_before = safety.enforce_calls()
+    # What enforce() binds a grant to (#237): computed here, from the call that
+    # is really running, so no caller can name a scope or a signature.
+    call = safety.CallContext(
+        tool=entry.name, scope=_scope_values(entry, cleaned),
+        outward=entry.outward, origin=entry.origin,
+    )
 
     with audit.action(entry.name, params, source=source) as ctx:
         try:
-            result = entry.func(**cleaned)
+            with safety.call_context(call):
+                result = entry.func(**cleaned)
+            if entry.untrusted_output:
+                # The result enters the model's context: the run is tainted.
+                safety.mark_tainted(entry.origin or f"tool:{entry.name}")
         except (SafetyError, ConfirmationRequired) as exc:
             ctx["result"] = str(exc)
             return str(exc)
@@ -568,13 +642,13 @@ def dispatch(
             ctx["result"] = f"{type(exc).__name__}: {exc}"
             return f"Skill '{entry.name}' failed: {type(exc).__name__}: {exc}"
 
-        # Tripwire, not enforcement: a skill declared DESTRUCTIVE or worse that
+        # Tripwire, not enforcement: a skill declared GUARDED or worse that
         # returned without calling safety.enforce() at all (directly or through
         # a skill it delegates to) is a skill someone forgot to guard. Only the
         # skill knows what its arguments mean, so the registry cannot enforce
         # for it — but it can make the omission visible in the audit log.
         if (
-            entry.danger >= Danger.DESTRUCTIVE
+            entry.danger >= Danger.GUARDED
             and safety.enforce_calls() == enforced_before
         ):
             audit.record(

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -20,7 +21,14 @@ from . import audit, config, registry, toolselect
 from .agents import AgentProfile, ProfileError, history as _history, load_profile
 from .llm import LLMError, ToolCall, client
 from .platform import detect
-from .safety import Confirmer, TurnMemory, confirmer_scope, retried_declined_target
+from .safety import (
+    Confirmer,
+    TurnMemory,
+    confirmer_scope,
+    current_memory,
+    retried_declined_target,
+    taint_sources,
+)
 
 # Called with (kind, text) — or (kind, text, data) for observers that want the
 # structured form. kind is one of: thinking, tool, tool_result, answer, error.
@@ -143,10 +151,38 @@ SUMMARY_SYSTEM = (
     "no preamble, under 250 words."
 )
 SUMMARY_MAX_CHARS = 3000
+# Prefixed to a summary that folded untrusted content (#237): the summary is
+# persisted text, so this is how its taint survives a reload.
+UNTRUSTED_SUMMARY_MARK = "[contains untrusted outside content]\n"
 _SUMMARY_INPUT_MAX_CHARS = 24000
 # After a trim the history is cut down to this share of the budget, so the
 # next turns do not trigger another summary call straight away.
 _TRIM_TARGET = 0.6
+
+
+_REPORT_MARK = re.compile(r"\[task (t[0-9a-z]+) report\]")
+
+
+def _report_taint(text: str) -> list[str]:
+    """Taint of the background-task reports quoted in ``text`` (#237).
+
+    The server delivers a finished task's report as a turn whose text is
+    ``tasks.note_text(row)``; the marker it writes names the task, and the
+    task's stored taint (code, not text) decides. An unknown id adds nothing;
+    a lookup failure counts as tainted, never as clean.
+    """
+    ids = set(_REPORT_MARK.findall(text or ""))
+    if not ids:
+        return []
+    try:
+        from .agents import tasks
+
+        found: set[str] = set()
+        for task_id in ids:
+            found.update(tasks.manager.taint_of(task_id))
+        return sorted(found)
+    except Exception:
+        return sorted(f"task:{i}" for i in ids)
 
 
 def estimate_tokens(message: dict[str, Any]) -> int:
@@ -183,6 +219,8 @@ class Agent:
     token_budget: int = 0               # 0 = none; else the estimated tokens a run may add to its transcript
     delegate_wait: bool = False         # force blocking delegate (an approved proposal's turn needs the real outcome)
     _turn_allowed: "frozenset[str] | None" = None  # this ask()'s own tool narrowing (report follow-up)
+    grant_principal: str = ""           # whose GUARDED grants apply when it is not `principal` (a job, #237)
+    initial_taint: frozenset = frozenset()  # taint carried in from outside (a job made by a tainted run)
 
     def __init__(
         self,
@@ -323,6 +361,19 @@ class Agent:
             audit.record("agent.history_load_failed", error=str(exc), profile=self._history_key)
 
     # -- helpers ---------------------------------------------------------
+
+    def _transcript_taint(self) -> set[str]:
+        """Taint sources still present in this conversation's context."""
+        sources: set[str] = set(self.initial_taint)
+        for m in self.messages:
+            marks = m.get("untrusted")
+            if isinstance(marks, list):
+                sources.update(str(s) for s in marks if s)
+            elif marks:
+                sources.add(str(marks))
+        if self.summary.startswith(UNTRUSTED_SUMMARY_MARK):
+            sources.add("summary")
+        return sources
 
     @property
     def model_role(self) -> str:
@@ -468,8 +519,13 @@ class Agent:
                 break
 
         dropped = self.messages[:cut]
+        was_tainted = self.summary.startswith(UNTRUSTED_SUMMARY_MARK) or any(
+            m.get("untrusted") for m in dropped)
         summary = self._summarize(dropped)
         if summary:
+            # A summary of untrusted content is still untrusted content (#237).
+            if was_tainted and not summary.startswith(UNTRUSTED_SUMMARY_MARK):
+                summary = UNTRUSTED_SUMMARY_MARK + summary
             self.summary = summary
         del self.messages[:cut]
         audit.record(
@@ -672,7 +728,11 @@ class Agent:
         getattr(self, "tool_state", {}).pop("plan", None)
 
         with self._lock:
-            self.messages.append({"role": "user", "content": text})
+            user_message: dict[str, Any] = {"role": "user", "content": text}
+            report_taint = _report_taint(text)
+            if report_taint:
+                user_message["untrusted"] = report_taint
+            self.messages.append(user_message)
             self._trim_history()
             run_start = len(self.messages) - 1
             exhausted = ""
@@ -684,7 +744,15 @@ class Agent:
 
             # The confirmer must be installed for the whole loop, since skills
             # run on this thread and read it from thread-local state.
-            with confirmer_scope(self.confirmer, self._memory, principal=self.principal or None):
+            # Grants (#237, owner ruling D4) act for the run's owner: the live
+            # principal, a delegated child's owner, or the job's creator.
+            # #199 rules stay keyed on `principal` alone.
+            grant_owner = self.grant_principal or self.principal or self.run_principal or None
+            with confirmer_scope(self.confirmer, self._memory,
+                                 principal=self.principal or None, grant_principal=grant_owner):
+                # Untrusted content already in the context (earlier turns, a
+                # folded summary, a tainted job's prompt) taints this run too.
+                current_memory().taint.update(self._transcript_taint())
                 for iteration in range(1, max_iterations + 1):
                     turn.iterations = iteration
                     if cancelled():
@@ -793,14 +861,22 @@ class Agent:
                             })
                             continue
                         self._round_allowed = round_allowed
+                        taint_before = taint_sources()
                         result = self._run_tool(call)
                         turn.tool_calls.append(call.name)
-                        self.messages.append({
+                        message = {
                             "role": "tool",
                             "name": call.name,
                             "tool_call_id": call.id or call.name,
                             "content": self._cap_result(call.name, result),
-                        })
+                        }
+                        # This result brought outside content in (#237). The
+                        # mark is stored with the message, so the taint lasts
+                        # as long as the content stays in the context.
+                        new_taint = taint_sources() - taint_before
+                        if new_taint:
+                            message["untrusted"] = sorted(new_taint)
+                        self.messages.append(message)
                         declined = (
                             declined or retried_declined_target()
                             or (self.end_turn_check is not None and bool(self.end_turn_check()))
