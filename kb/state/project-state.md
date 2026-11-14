@@ -54,6 +54,24 @@ Merged since: #197–#210. **System-ops harness upgrade** (plan `kb/plans/system
 ## Status 2026-11-13 (architecture redesign, no execution yet)
 - Owner wants Kravein v3 (JARVIS goal). Research pack + Fable's proposal **v4** in `user-space/fable-research/` (gitignored, main checkout only, for Fable; README has the owner's end goal; delete after the plan lands in `kb/plans/`). Fable runs as a separate session; the owner relays messages (Fable is NOT a team agent).
 - **2026-11-14 owner: execute the v3 plan autonomously** (plan of record `kb/plans/kravein-v3-architecture.md`). Engine runs on Opus via the logged `--owner-opus` exception (PR #229 is open: the classifier blocked the self-merge, so the owner merges it). Packets follow §19's recommendations until the owner rules; D2, D3 and D7 removals wait for the owner. Merged #230 (model roles + usage ledger, `kravein usage`) and #232 (generic OpenAI-compatible endpoints + Anthropic provider; no live keys yet). Parked for phase 2: #233 (append-only transcript so Claude thinking survives). In flight: engine #234, phase 0c (catalog, probe, doctor, prompt snapshot). Next: 0d web model picker + spend view; then phase 1.
+- **Opus queue** (engine, one at a time; review → merge → next immediately; owner rulings D4/D9/D10 at the top of the plan):
+  1. 0c #234 (in flight)
+  2. 1a safety: `GUARDED` + grants (D4) + taint
+  3. 1b MCP core (`kravein/mcp/`, stdio via platform/shell, pins, bridge, mock server)
+  4. 1c plugin loader, declarative + easy code plugins (D10), plus the `growth` profile
+  5. 2a `Runtime.submit` + runs table + parked approvals + unattended profile, moving jobs/daemon/review onto it
+  6. 2b loop: degrade, tool-result clearing, parallel SAFE calls, loop guard, #233
+  7. 2c streaming + real cancel
+  8. 2d verification: `submit_report`, handoff packet, `ask_parent`, typed results, code outcome
+  9. 3a tool search bridge
+  10. 4a voice thin front + handoff
+  11. then the cores of 5, 6/6B, 7, 3B and 4B
+
+  **Sonnet in parallel:**
+  - web 0d (picker + spend) after 0c;
+  - skills: `browser_type` submit fix + re-class outward skills to `GUARDED` after 1a;
+  - web: grants/MCP/plugin UI;
+  - qa: mock MCP + evals.
 - Then: orchestrator reviews v4's new sections (8A computer use, 8B browser, 12A goals, phases 3B/4B/6B), then the owner decides D1–D23; then the plan goes to `kb/plans/`, with the core built by Fable and the rest by Sonnet agents (split proposed in chat: Fable = Runtime/runs, safety GUARDED/grants/taint, MCP core, LLM contract, voice handoff, verification contract).
 - Fable found a safety gap: `browser_type(submit=True)` submits forms without a card (to fix first in phase 1). `click_on_screen` uses the broken ydotool absolute-move path, and GUI click does not work on niri.
 - #227 (skills sandbox): plan + commit f737040 on origin/agent/skills, no PR yet. Agents are all stopped.
