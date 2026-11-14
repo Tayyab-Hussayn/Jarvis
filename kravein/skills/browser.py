@@ -22,6 +22,7 @@ import urllib.parse
 from ..platform import browser
 from ..registry import skill
 from . import _merge
+from .. import safety
 from ..safety import Danger, Verdict, describe_targets, enforce
 
 # Words that suggest the click does something you cannot take back. Matched
@@ -342,14 +343,42 @@ def browser_click(
         return f"Could not click '{description}': {exc}"
 
 
+def _find_field(page, description: str):
+    """The first visible-by-label field matching ``description``, or None."""
+    for build in (
+        lambda: page.get_by_placeholder(description),
+        lambda: page.get_by_label(description),
+        lambda: page.get_by_role("textbox", name=description),
+        lambda: page.get_by_role("searchbox", name=description),
+    ):
+        try:
+            locator = build()
+            if locator.count():
+                return locator.first
+        except Exception:
+            continue
+    return None
+
+
 @skill(category="browser", danger=Danger.MODERATE)
-def browser_type(description: str, text: str, submit: bool = False) -> str:
+def browser_type(
+    description: str,
+    text: str,
+    submit: bool = False,
+    _source: str = "local",
+    _confirm: bool = False,
+) -> str:
     """Type into a field on the page, found by its label or placeholder.
+
+    Typing alone changes nothing outside the page. With submit the form is
+    sent (a post, a message, a purchase, a login), so that step asks the owner
+    first, naming the page and the field; if it is declined the text stays
+    typed but is not submitted.
 
     Args:
         description: Label, placeholder or nearby text of the field.
         text: What to type.
-        submit: Press Enter afterwards.
+        submit: Press Enter afterwards. Asks for confirmation.
     """
     problem = _guard()
     if problem:
@@ -359,32 +388,60 @@ def browser_type(description: str, text: str, submit: bool = False) -> str:
 
     def do_type(context):
         page = browser.active_page(context)
-        for build in (
-            lambda: page.get_by_placeholder(description),
-            lambda: page.get_by_label(description),
-            lambda: page.get_by_role("textbox", name=description),
-            lambda: page.get_by_role("searchbox", name=description),
-        ):
-            try:
-                locator = build()
-                if not locator.count():
-                    continue
-                field = locator.first
-                field.click()
-                field.fill(text)
-                if submit:
-                    field.press("Enter")
-                    page.wait_for_load_state("domcontentloaded", timeout=8000)
-                return page.url
-            except Exception:
-                continue
-        raise browser.BrowserError(f"no field matches '{description}'")
+        field = _find_field(page, description)
+        if field is None:
+            raise browser.BrowserError(f"no field matches '{description}'")
+        try:
+            field.click()
+            field.fill(text)
+        except Exception as exc:
+            raise browser.BrowserError(f"could not fill '{description}': {exc}")
+        return page.url, page.title()
 
     try:
-        where = browser.call(do_type)
-        return f"Typed into '{description}'" + (f" and submitted — now on {where}" if submit else ".")
+        url, title = browser.call(do_type)
     except browser.BrowserError as exc:
         return f"Could not type into '{description}': {exc}"
+    if not submit:
+        return f"Typed into '{description}'."
+
+    # Submitting is outward-facing, so the card comes BEFORE Enter is pressed
+    # (the text is already typed; declining leaves it there). Every failure of
+    # the confirmation path - decline, timeout, no confirmer - ends here with
+    # nothing submitted.
+    verdict = Verdict(
+        danger=Danger.DESTRUCTIVE,
+        reasons=[f"submits '{description}' on {_site(url)} ({title[:60]}) — "
+                 "a post, message, purchase or login cannot be taken back"],
+    )
+    try:
+        enforce(
+            verdict, f"submit '{description}' on {url} ({title[:60]})",
+            skill="browser_type", source=_source, pre_confirmed=_confirm,
+            targets=describe_targets(f"browser-submit:{_site(url)}:{description.lower()}"),
+        )
+    except (safety.SafetyError, safety.ConfirmationRequired) as exc:
+        return (f"Typed into '{description}' on {_site(url)} but did NOT submit it: "
+                f"{exc}")
+
+    def do_submit(context):
+        page = browser.active_page(context)
+        if page.url != url:
+            # The page moved while the card was open: the owner approved a
+            # different page, so do not press Enter on this one.
+            raise browser.BrowserError(f"the page changed to {page.url} while waiting; not submitted")
+        field = _find_field(page, description)
+        if field is None:
+            raise browser.BrowserError(f"the field '{description}' is gone; not submitted")
+        field.press("Enter")
+        page.wait_for_load_state("domcontentloaded", timeout=8000)
+        return page.url
+
+    try:
+        where = browser.call(do_submit)
+    except browser.BrowserError as exc:
+        return f"Typed into '{description}' but could not submit: {exc}"
+    return f"Typed into '{description}' and submitted — now on {where}"
 
 
 @skill(category="browser", danger=Danger.MODERATE)

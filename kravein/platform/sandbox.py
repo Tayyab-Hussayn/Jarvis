@@ -324,7 +324,15 @@ def build_argv(command: str, cwd: Path, tag: str, binary: str | None = None,
                 argv += ["--size", str(_RUN_BYTES), "--tmpfs", str(d)]
         for rel in _SECRET_FILES:
             f = home / rel
-            if f.is_file() and not f.is_symlink():
+            # Dotfile managers make ~/.bash_history, ~/.netrc ... symlinks. A
+            # /dev/null bind over the link path would not touch the target and
+            # a read through another path would still work, so mask the real
+            # file AND the link path.
+            if f.is_symlink():
+                real = Path(os.path.realpath(f))
+                if real.is_file():
+                    argv += ["--ro-bind", "/dev/null", str(real)]
+            if f.is_file() or f.is_symlink():
                 argv += ["--ro-bind", "/dev/null", str(f)]
         for f in secret_files:
             argv += ["--ro-bind", "/dev/null", f]
