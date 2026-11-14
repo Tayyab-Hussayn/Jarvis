@@ -10,7 +10,7 @@ import types
 
 import pytest
 
-from kravein import audit, config, usage, webauth
+from kravein import audit, config, llm, usage, webauth
 
 TOKEN = "test-token-models"
 BROWSER = {"Authorization": f"Bearer {TOKEN}"}
@@ -24,6 +24,9 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
     monkeypatch.setattr(config, "_settings_cache", None)
     monkeypatch.setattr(config, "DEFAULT_SETTINGS", copy.deepcopy(config.DEFAULT_SETTINGS))
+    # llm.client() is a process singleton; an earlier test may leave it holding
+    # stub providers (no real 'gemini'), which made validation answer 400.
+    monkeypatch.setattr(llm, "_client", None)
     calls: list[tuple[str, dict]] = []
     monkeypatch.setattr(audit, "record", lambda ev, **kw: calls.append((ev, kw)))
     webauth.clear_lan_hosts()
