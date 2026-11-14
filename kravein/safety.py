@@ -477,6 +477,30 @@ def _mentions_settings_file(command: str) -> bool:
     return _mentions_file(command, config.settings_path())
 
 
+_PLAIN_READERS = frozenset({"cat", "head", "tail", "less", "more", "grep", "rg", "wc",
+                            "jq", "stat", "ls", "file", "diff", "cmp", "sha256sum", "md5sum"})
+
+
+def _mentions_mcp_config(command: str) -> bool:
+    """Our mcp.json (or its lock/tmp, or the config dir) by path or bare name.
+    Not a substring: `.mcp.json` / `.vscode/mcp.json` in the owner's own
+    projects are other files and must stay editable."""
+    base = Path(config.CONFIG_DIR)
+    return any(_mentions_file(command, base / name)
+               for name in ("mcp.json", "mcp.json.lock", "mcp.json.tmp"))
+
+
+def _plain_read(command: str) -> bool:
+    """Every segment is a known reader with no redirect (nothing written)."""
+    segments = _segments(command)
+    if not segments:
+        return False
+    for argv, redirects in segments:
+        if redirects or not argv or argv[0] not in _PLAIN_READERS:
+            return False
+    return True
+
+
 def _mentions_file(command: str, target_path: "str | os.PathLike") -> bool:
     """Does a shell command name Kravein's own settings file?
 
@@ -579,6 +603,22 @@ def classify_command(
         verdict.block_reason = (
             f"{config.settings_path()} is Kravein's own settings file; the "
             "assistant may not change its own safety settings"
+        )
+        return verdict
+
+    # The MCP server config (#243) holds the owner's approvals and pins: whoever
+    # writes it decides which outside tools run. Stricter than the settings
+    # file: any command naming it is refused unless it is provably a plain
+    # read (an inline `python3 -c "open(...,'w')"` only scored DESTRUCTIVE).
+    # Only when the FILE is named: a command on the config directory itself
+    # (`du -sh ~/.config/kravein`) is judged by the ordinary rules, and writes
+    # there are refused by check_path anyway.
+    if "mcp.json" in text and _mentions_mcp_config(text) and not _plain_read(text):
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = (
+            "the MCP server config is the owner's: servers and their tools are "
+            "added and approved only with `kravein mcp`"
         )
         return verdict
 

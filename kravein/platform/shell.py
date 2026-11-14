@@ -256,6 +256,54 @@ def start_group(
             os.close(fd)
 
 
+def spawn_pipe(
+    argv: list[str],
+    *,
+    env: dict[str, str],
+    stderr_path: str | os.PathLike,
+    cwd: str | os.PathLike | None = None,
+    sandbox: bool = False,
+    audit_event: str = "shell.mcp_server",
+) -> subprocess.Popen:
+    """Start a long-lived stdio server (an MCP server, #243) with pipes.
+
+    Unlike everything else here the environment is NOT inherited: the child
+    gets exactly ``env`` (plus the group tag), so a third-party server never
+    sees Kravein's keys. ``argv[0]`` must already be resolved by the caller.
+    Own process group (``kill_group`` ends the tree), stderr to a 0600 file
+    (a pipe nobody reads would fill and block the server). ``sandbox=True``
+    runs it under bubblewrap with no network; no fallback if that fails.
+    """
+    import shlex
+
+    audit.record(audit_event, argv=list(argv), env_names=sorted(env), sandbox=sandbox)
+    tag = secrets.token_hex(8)
+    command: list[str] = list(argv)
+    if sandbox:
+        from . import sandbox as sandbox_mod
+
+        state = sandbox_mod.status()
+        if not state.available:
+            raise SandboxUnavailable(state.reason)
+        workdir = Path(cwd) if cwd else Path.home()
+        command = sandbox_mod.build_argv(shlex.join(argv), workdir, tag, state.path)
+    fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        proc = subprocess.Popen(
+            command,
+            cwd=str(cwd) if cwd else None,
+            env={**env, "KRAVEIN_GROUP_TAG": tag},
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=fd,
+            start_new_session=True,
+        )
+    finally:
+        os.close(fd)
+    proc.kravein_tag = tag
+    return proc
+
+
 def wait(proc: subprocess.Popen, timeout: float | None) -> int | None:
     """Return the exit code, or None if ``proc`` is still running after ``timeout``."""
     try:

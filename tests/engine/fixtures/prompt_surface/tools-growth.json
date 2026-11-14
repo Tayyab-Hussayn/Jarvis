@@ -1,0 +1,38 @@
+[
+ {
+  "description": "Keep a todo plan for a task of three or more steps; replaces the whole plan. Send every item each time, not only the changes. Exactly one item may be in_progress. Mark an item completed only when a tool result shows it is done. An empty list clears the plan.",
+  "name": "update_plan",
+  "parameters": {
+   "properties": {
+    "items": {
+     "description": "The whole plan, in order. Each item is {content: short step description, status: pending | in_progress | completed}.",
+     "items": {
+      "properties": {
+       "content": {
+        "type": "string"
+       },
+       "status": {
+        "enum": [
+         "pending",
+         "in_progress",
+         "completed"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "content",
+       "status"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "items"
+   ],
+   "type": "object"
+  }
+ }
+]

@@ -362,6 +362,28 @@ class Agent:
 
     # -- helpers ---------------------------------------------------------
 
+    def _refresh_external_tools(self) -> None:
+        """A profile naming MCP servers/tools (#243): make sure they are
+        connected, then re-resolve its tool set, since MCP tools come and go
+        (connect, pin change, owner disable). Nothing for other agents."""
+        if self.profile is None:
+            return
+        wants = [t for t in self.profile.tools
+                 if t.startswith(registry.EXTERNAL_CATEGORY_PREFIX)
+                 or t.startswith(registry.EXTERNAL_NAME_PREFIX)]
+        if not wants:
+            return
+        try:
+            from .mcp import manager as _mcp
+
+            _mcp.ensure_started()
+        except Exception as exc:
+            audit.record("mcp.start_failed", error=type(exc).__name__)
+        try:
+            self._allowed = registry.resolve_tools(self.profile.tools)
+        except ValueError as exc:
+            audit.record("agent.profile_resolve_failed", profile=self.profile.name, error=str(exc))
+
     def _transcript_taint(self) -> set[str]:
         """Taint sources still present in this conversation's context."""
         sources: set[str] = set(self.initial_taint)
@@ -706,6 +728,7 @@ class Agent:
         # Lets `decide_proposal` tell "proposed earlier" from "proposed this turn".
         self.turn_no = getattr(self, "turn_no", 0) + 1
         self.turn_text = text
+        self._refresh_external_tools()
         turn = Turn()
 
         def cancelled() -> bool:

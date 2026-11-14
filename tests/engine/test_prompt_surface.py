@@ -29,8 +29,10 @@ UPDATE = os.environ.get("KRAVEIN_UPDATE_SNAPSHOT") == "1"
 
 def _ours() -> set[str]:
     registry.load_skills()
+    # MCP tools (#243) come and go with connections: never part of the snapshot.
     return {name for name, entry in registry.all_skills().items()
-            if getattr(entry.func, "__module__", "").startswith("kravein.")}
+            if getattr(entry.func, "__module__", "").startswith("kravein.")
+            and not registry.is_external(entry)}
 
 
 def _tools(names=None) -> str:

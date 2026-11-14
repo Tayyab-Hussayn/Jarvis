@@ -455,9 +455,10 @@ def tool_declarations(
         if names is not None:
             if entry.name not in names:
                 continue
-        elif entry.category == "agents":
+        elif entry.category == "agents" or is_external(entry):
             # `delegate` is an Orchestrator-only tool: an agent with no
             # profile never sees it (and `delegate` refuses such a caller too).
+            # An MCP tool (#243) is given only to a profile that lists it.
             continue
         elif entry.name in ROUTING_ONLY_SKILLS:
             if not routing:
@@ -487,11 +488,74 @@ def resolve_tools(spec: "typing.Iterable[str]") -> frozenset[str]:
         if item in by_cat:
             out.update(s.name for s in by_cat[item])
             continue
+        if item.startswith(EXTERNAL_CATEGORY_PREFIX) or item.startswith(EXTERNAL_NAME_PREFIX):
+            # An MCP server or tool (#243) that is not connected (or not
+            # approved) right now: valid to name, contributes nothing until
+            # it is registered. The agent re-resolves its profile every turn.
+            entry = get_skill(item)
+            if entry is not None:
+                out.add(entry.name)
+            continue
         entry = get_skill(item)
         if entry is None:
             raise ValueError(f"unknown tool or category '{item}'")
         out.add(entry.name)
     return frozenset(out)
+
+
+# -- external tools (MCP, #243) ------------------------------------------------
+
+EXTERNAL_CATEGORY_PREFIX = "mcp:"
+EXTERNAL_NAME_PREFIX = "mcp__"
+
+
+def is_external(entry: Skill) -> bool:
+    return entry.category.startswith(EXTERNAL_CATEGORY_PREFIX)
+
+
+def register_external(
+    *,
+    name: str,
+    func: Callable[..., Any],
+    description: str,
+    parameters: dict[str, Any],
+    danger: Danger,
+    category: str,
+    outward: bool,
+    origin: str,
+    scope: "tuple[str, ...] | list[str]" = (),
+) -> Skill:
+    """Register a tool that has no Python signature to read (an MCP tool).
+
+    Only ``kravein.mcp.bridge`` calls this, for a tool the owner approved and
+    whose pin matches. Its output is always untrusted; an existing core skill
+    is never replaced, and an external name must carry the external prefix.
+    ``scope`` (the owner's choice at approval) must name schema properties.
+    """
+    if not name.startswith(EXTERNAL_NAME_PREFIX) or not category.startswith(EXTERNAL_CATEGORY_PREFIX):
+        raise ValueError(f"external tool '{name}' must be named mcp__* in an mcp:* category")
+    scope = tuple(scope)
+    unknown = set(scope) - set((parameters or {}).get("properties", {}))
+    if unknown:
+        raise ValueError(f"{name}: scope names unknown argument(s) {', '.join(sorted(unknown))}")
+    entry = Skill(
+        name=name, func=func, description=description, danger=danger,
+        parameters=parameters, category=category, requires=(), aliases=(),
+        scope=scope, outward=bool(outward), untrusted_output=True, origin=origin,
+    )
+    with _lock:
+        existing = _registry.get(name)
+        if existing is not None and not is_external(existing):
+            raise ValueError(f"'{name}' would replace a core skill")
+        _registry[name] = entry
+    return entry
+
+
+def unregister_external(name: str) -> None:
+    with _lock:
+        existing = _registry.get(name)
+        if existing is not None and is_external(existing):
+            del _registry[name]
 
 
 # ---------------------------------------------------------------------------
@@ -552,8 +616,9 @@ def dispatch(
         known = ", ".join(sorted(all_skills())[:20])
         return f"Unknown skill '{name}'. Try one of: {known}…"
 
-    # Checked on the resolved skill, so an alias cannot dodge it.
-    if allowed is not None and entry.name not in allowed:
+    # Checked on the resolved skill, so an alias cannot dodge it. An external
+    # (MCP) tool needs a profile that names it: no allow-list = not allowed.
+    if (allowed is not None and entry.name not in allowed) or (allowed is None and is_external(entry)):
         audit.record(
             "skill.profile_refused", skill=entry.name, called_as=name, source=source,
         )
