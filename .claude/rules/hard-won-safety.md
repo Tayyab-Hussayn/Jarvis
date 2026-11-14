@@ -58,3 +58,11 @@ mechanism built exactly to catch a retry under a different verb never saw the fi
 - `systemctl --user enable` asks.
 - Inline interpreter code (`python -c`, `node -e`, heredocs, `eval`) is DESTRUCTIVE: `python3 -c 'shutil.rmtree(...)'` was SAFE before #209. `sh -c` is judged by its inner string.
 - "Always approve" rules are written only by the server after an owner click, apply only to live owner sources, and are never offered for anything DESTRUCTIVE or worse.
+- **A grant is scoped by code, never by the answer (#237/#242).**
+  - What a GUARDED "Always allow" stores: a grant bound to the tool and to the values of its declared `scope` arguments. `registry.dispatch` computes these from the call that is running.
+  - What the UI's answer may carry: only the owner's own limits, `AlwaysAllow(cap, expires_in)`.
+  - Grants never touch DESTRUCTIVE/CRITICAL, a secret read or an owner-only card.
+  - Grants apply unattended (owner ruling D4).
+  - Taint: grants are suspended for outward tools once untrusted content has entered the run.
+  - Taint travels with the content: tool messages, summaries, task reports, and jobs created by a tainted run.
+  - Without that, a job scheduled from a tainted run would launder injected text into an outward grant.
