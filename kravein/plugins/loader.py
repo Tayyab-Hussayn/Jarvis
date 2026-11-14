@@ -78,7 +78,9 @@ def _load_one(name: str, pins: dict[str, Any]) -> dict[str, Any]:
             return {"state": "changed", "diff": diff,
                     "error": "files changed since you enabled it; run `kravein plugin enable "
                              f"{name}` to review and enable it again"}
-        man = manifest.read_manifest(folder)
+        # Parsed from the hashed bytes, never re-read: the floors, outward
+        # flags and declared tools are exactly what the owner pinned.
+        man = manifest.parse_manifest(name, files.get("plugin.json"))
     except (OSError, manifest.ManifestError) as exc:
         return {"state": "error", "error": str(exc)}
 
@@ -88,8 +90,13 @@ def _load_one(name: str, pins: dict[str, Any]) -> dict[str, Any]:
             for rel in sorted(f for f in files if f.startswith("tools/") and f.endswith(".py")
                               and f.count("/") == 1):
                 _exec(name, rel, files[rel], folder)
-    except Exception as exc:                     # any failure disables only this plugin
+    except KeyboardInterrupt:
+        raise
+    except BaseException as exc:                 # incl. sys.exit / argparse: only this plugin goes
         registry.unregister_plugin(name)
+        prefix = f"kravein_plugins.{name.replace('-', '_')}."
+        for mod in [m for m in sys.modules if m.startswith(prefix)]:
+            sys.modules.pop(mod, None)
         reason = f"{type(exc).__name__}: {exc}"[:300]
         audit.record("plugin.load_failed", plugin=name, error=reason)
         return {"state": "error", "error": reason}

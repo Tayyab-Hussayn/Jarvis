@@ -351,6 +351,10 @@ def skill(
         nonlocal_outward, nonlocal_untrusted, nonlocal_origin = outward, untrusted_output, origin
         nonlocal_scope = tuple(scope)
         ctx = _plugin_ctx.get()
+        if ctx is None and str(getattr(func, "__module__", "")).startswith("kravein_plugins."):
+            # Plugin code registering later (a timer, a thread, a lazy call)
+            # is outside the context that applies the manifest: refused.
+            raise ValueError(f"'{skill_name}': a plugin may only define tools while it loads")
         if ctx is not None:
             declared = ctx["tools"].get(skill_name)
             if declared is None:
@@ -461,7 +465,9 @@ def load_skills(force: bool = False) -> None:
             from .plugins import loader as _plugins
 
             _plugins.load_enabled(force)
-        except Exception as exc:
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:             # a plugin may never stop Kravein starting
             audit.record("registry.plugins_failed", error=f"{type(exc).__name__}: {exc}"[:300])
 
 

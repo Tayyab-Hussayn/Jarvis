@@ -57,7 +57,9 @@ def describe(name: str, files: dict[str, bytes], man: manifest.Manifest) -> list
     servers = _mcp_servers(files)
     for server, spec in sorted(servers.items()):
         where = spec.get("url") or " ".join(spec.get("command") or [])
-        lines.append(f"  MCP server '{name}-{server}': {where} (added as pending; approve it separately)")
+        lines.append(f"  MCP server '{name}-{server}': {where} (added DISABLED with no tool "
+                     "approved; approve and enable it separately)")
+        lines += ["    " + ln for ln in server_access(spec)]
     if man.secrets:
         missing = [k for k in man.secrets if not config.api_key(k)]
         lines.append(f"  needs secrets: {', '.join(man.secrets)}"
@@ -86,7 +88,7 @@ def enable(name: str, *, yes: bool = False, ask: Callable[[str], str] = input,
     if not folder.is_dir():
         raise ValueError(f"no plugin folder {folder}")
     files = manifest.read_files(folder)
-    man = manifest.read_manifest(folder)
+    man = manifest.parse_manifest(name, files.get("plugin.json"))   # the bytes being pinned
     servers = _mcp_servers(files)
     for line in describe(name, files, man):
         out(line)
@@ -103,28 +105,41 @@ def enable(name: str, *, yes: bool = False, ask: Callable[[str], str] = input,
               version=man.version, mcp_added=added)
     out(f"Enabled '{name}'. Restart Kravein (or the server) for its tools and profiles to load.")
     if added:
-        out("Its MCP servers are pending; approve each with: "
-            + "; ".join(f"kravein mcp approve {s}" for s in added))
+        out("Its MCP servers are added disabled. For each: "
+            + "; ".join(f"kravein mcp approve {s} && kravein mcp enable {s}" for s in added))
     return True
 
 
+def server_access(spec: dict[str, Any]) -> list[str]:
+    from ..mcp.admin import server_access as _access
+
+    return _access(spec)
+
+
 def _add_mcp(plugin: str, servers: dict[str, dict[str, Any]]) -> list[str]:
-    """Add each server as a PENDING MCP server (no tool approved)."""
+    """Add each server DISABLED with no tool approved: it is not even started
+    until the owner approves its tools and enables it (`kravein mcp approve`,
+    `kravein mcp enable`). A name another source already owns is refused."""
     if not servers:
         return []
     from ..mcp import config as mcp_config
 
     existing = mcp_config.servers()
+    ours = set((state.load().get(plugin) or {}).get("mcp_added") or [])
+    for server in servers:
+        full = f"{plugin}-{server}"
+        if full in existing and full not in ours:
+            raise ValueError(f"MCP server '{full}' already exists and was not added by this "
+                             "plugin; remove it or rename the plugin's server")
     added = []
     for server, spec in sorted(servers.items()):
         full = f"{plugin}-{server}"
-        if full in existing:
-            added.append(full)
-            continue
-        mcp_config.add_server(
-            full, command=spec.get("command") or None, url=spec.get("url") or "",
-            env=spec.get("env") or {}, auth_key=spec.get("auth_key") or "",
-            sandbox=bool(spec.get("sandbox")), timeout=float(spec.get("timeout") or 60))
+        if full not in existing:
+            mcp_config.add_server(
+                full, command=spec.get("command") or None, url=spec.get("url") or "",
+                env=spec.get("env") or {}, auth_key=spec.get("auth_key") or "",
+                sandbox=bool(spec.get("sandbox")), timeout=float(spec.get("timeout") or 60))
+            mcp_config.set_enabled(full, False)
         added.append(full)
     return added
 

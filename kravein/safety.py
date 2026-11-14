@@ -490,9 +490,11 @@ def _mentions_mcp_config(command: str) -> bool:
                for name in ("mcp.json", "mcp.json.lock", "mcp.json.tmp"))
 
 
-def _mentions_plugins(command: str) -> bool:
+def _mentions_plugins(command: str, cwd: "str | os.PathLike | None" = None) -> bool:
     """A path inside Kravein's plugins folder, the folder itself, or our
-    ``plugins.json`` (by path, or as the bare name like settings.json)."""
+    ``plugins.json`` (by path, or as the bare name like settings.json).
+    Relative paths are resolved against ``cwd`` when it is known: the
+    default workspace sits next to the plugins folder (``../plugins/...``)."""
     state_file = Path(config.CONFIG_DIR) / "plugins.json"
     if "plugins.json" in command and any(
             _mentions_file(command, state_file.with_name(n))
@@ -508,7 +510,9 @@ def _mentions_plugins(command: str) -> bool:
     for token in tokens:
         expanded = os.path.expanduser(os.path.expandvars(token))
         if not expanded.startswith(("/", "~")):
-            continue
+            if not cwd or not (expanded.startswith(".") or "/" in expanded):
+                continue
+            expanded = os.path.join(os.fspath(cwd), expanded)
         expanded = re.sub(r"\{[^{}]*\}", "*", expanded)
         if any(c in expanded for c in "*?["):
             # A glob that could reach into the tree: `…/kravein/*/x`, `…/plugins/*`.
@@ -657,7 +661,7 @@ def classify_command(
     # there are refused by check_path anyway.
     # The plugins folder and the enabled list (#245) are the owner's for the
     # same reason: writing either one decides what code runs inside Kravein.
-    if (_mentions_plugins(text) or _inside_plugins(cwd)) and not _plain_read(text):
+    if (_mentions_plugins(text, cwd) or _inside_plugins(cwd)) and not _plain_read(text):
         verdict.blocked = True
         verdict.danger = Danger.CRITICAL
         verdict.block_reason = (

@@ -12,7 +12,9 @@ from typing import Any
 from .. import config
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")        # no "_": keeps <plugin>-<server> MCP names valid
-TOOL_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
+# No "__" and no reserved prefix: an `mcp__server__tool` name would shadow the
+# real MCP tool for any profile naming it, with the plugin's own class.
+TOOL_RE = re.compile(r"^(?!mcp_|plugin_)[a-z](?:[a-z0-9]|_(?!_)){0,47}$")
 DANGERS = ("SAFE", "MODERATE", "GUARDED", "DESTRUCTIVE", "CRITICAL")
 MAX_FILES = 200
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -38,16 +40,27 @@ class Manifest:
 
 def read_manifest(folder: Path) -> Manifest:
     try:
-        data = json.loads((folder / "plugin.json").read_text(encoding="utf-8"))
+        raw = (folder / "plugin.json").read_bytes()
     except FileNotFoundError:
         raise ManifestError("plugin.json is missing") from None
-    except (OSError, ValueError) as exc:
+    except OSError as exc:
+        raise ManifestError(f"plugin.json cannot be read ({exc})") from None
+    return parse_manifest(folder.name, raw)
+
+
+def parse_manifest(folder_name: str, raw: bytes | None) -> Manifest:
+    """Parse plugin.json from bytes the caller already holds (the hashed ones)."""
+    if raw is None:
+        raise ManifestError("plugin.json is missing")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
         raise ManifestError(f"plugin.json is not valid JSON ({exc})") from None
     if not isinstance(data, dict):
         raise ManifestError("plugin.json must be an object")
     name = str(data.get("name") or "")
-    if name != folder.name:
-        raise ManifestError(f"plugin.json name '{name}' must equal the folder name '{folder.name}'")
+    if name != folder_name:
+        raise ManifestError(f"plugin.json name '{name}' must equal the folder name '{folder_name}'")
     if not NAME_RE.match(name):
         raise ManifestError("name: lowercase letters, digits and '-', up to 32, starting with a letter")
     tools = data.get("tools") or {}
@@ -82,8 +95,10 @@ def walk(folder: Path) -> list[Path]:
     files: list[Path] = []
     for path in sorted(folder.rglob("*")):
         rel = path.relative_to(folder)
-        if any(part == "__pycache__" for part in rel.parts):
-            continue                                  # Kravein never imports from disk
+        # Compiled code the owner cannot read, and that a sibling import could
+        # load from disk after the hash: refused, not skipped.
+        if any(part == "__pycache__" for part in rel.parts) or path.suffix in (".pyc", ".pyo", ".so"):
+            raise ManifestError(f"{rel}: compiled files are not allowed in a plugin; delete them")
         if path.is_symlink():
             raise ManifestError(f"{rel} is a symlink; plugins may not contain links")
         if path.is_file():

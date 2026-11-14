@@ -33,6 +33,7 @@ from .. import config as kconfig
 from . import config, pins
 
 _RECONNECT_GAP = 10.0          # seconds between automatic reconnects of one server
+_CONNECT_TIMEOUT = 30.0        # connect + list, whatever the per-call timeout is
 _LIST_PAGE_CAP = 20
 
 
@@ -237,9 +238,13 @@ class Manager:
                 transport = await self._transport(conn, stack)
                 client = Client(transport, mode="auto", read_timeout_seconds=conn.timeout,
                                 cache=None, client_info=Implementation(name="kravein", version="3"))
-                await asyncio.wait_for(stack.enter_async_context(client), conn.timeout)
+                # Starting a server (a Python or Node process importing its
+                # SDK) takes longer than a short per-call timeout allows; a
+                # 1-second call limit must not make the server unconnectable.
+                setup = max(conn.timeout, _CONNECT_TIMEOUT)
+                await asyncio.wait_for(stack.enter_async_context(client), setup)
                 conn.client = client
-                conn.listed = await asyncio.wait_for(self._list(client), conn.timeout)
+                conn.listed = await asyncio.wait_for(self._list(client), setup)
                 approved = conn.spec.get("tools") or {}
                 conn.report = pins.compare(approved, conn.listed)
                 conn.registered, conn.rejected = bridge.register(conn, self)

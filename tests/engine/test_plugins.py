@@ -253,7 +253,95 @@ def test_mcp_servers_become_pending(plugins):
     enable()
     spec = mcp_config.servers()["example-echo"]
     assert spec["tools"] == {} and spec["command"] == ["/usr/bin/true"]
+    assert spec["enabled"] is False                     # not even started until approved + enabled
     assert state.load()["example"]["mcp_added"] == ["example-echo"]
+    # Enabling the plugin again keeps its own server; it is not a clash.
+    assert admin.enable("example", yes=True, out=lambda s: None)
+
+
+# -- self-review findings (#245) -----------------------------------------------------------
+
+def test_sys_exit_in_plugin_code_disables_only_that_plugin(plugins):
+    install(plugins)
+    make(plugins, "exiter", "from kravein.registry import skill\n"
+         "@skill()\ndef exiter_ok() -> str:\n    '''x'''\n    return 'x'\n"
+         "import sys\nsys.exit(3)\n", {"exiter_ok": "SAFE"})
+    admin.enable("example", yes=True, out=lambda s: None)
+    admin.enable("exiter", yes=True, out=lambda s: None)
+    registry.load_skills(force=True)                        # must not raise SystemExit
+    status = loader.status()
+    assert status["exiter"]["state"] == "error" and "SystemExit" in status["exiter"]["error"]
+    assert registry.get_skill("exiter_ok") is None and registry.get_skill("example_lookup") is not None
+    assert not [m for m in sys.modules if m.startswith("kravein_plugins.exiter.")]
+
+
+@pytest.mark.parametrize("tool", ["mcp__outreach__send_message", "plugin_x", "a__b", "mcp_send"])
+def test_reserved_and_double_underscore_names_are_refused(plugins, tool):
+    folder = plugins / "names"
+    folder.mkdir()
+    (folder / "plugin.json").write_text(json.dumps({"name": "names", "tools": {tool: "SAFE"}}))
+    with pytest.raises(manifest.ManifestError, match="bad tool name"):
+        manifest.read_manifest(folder)
+
+
+def test_plugin_code_cannot_register_a_tool_after_it_loaded():
+    def late() -> str:
+        """Late."""
+        return "x"
+
+    late.__module__ = "kravein_plugins.timer.t"
+    with pytest.raises(ValueError, match="only define tools while it loads"):
+        registry.skill(name="late_tool")(late)
+    assert registry.get_skill("late_tool") is None
+
+
+def test_the_manifest_comes_from_the_hashed_bytes(plugins, monkeypatch):
+    folder = install(plugins)
+    admin.enable("example", yes=True, out=lambda s: None)
+    good = manifest.read_files(folder)
+    data = json.loads((folder / "plugin.json").read_text())
+    data["tools"]["example_post"] = "SAFE"                  # lower the floor after hashing
+    (folder / "plugin.json").write_text(json.dumps(data))
+    monkeypatch.setattr(manifest, "read_files", lambda f: dict(good))
+    loader.load_enabled(force=True)
+    assert registry.get_skill("example_post").danger == Danger.GUARDED
+
+
+def test_compiled_files_are_refused(plugins):
+    folder = install(plugins)
+    (folder / "tools" / "__pycache__").mkdir()
+    (folder / "tools" / "__pycache__" / "helper.cpython-314.pyc").write_bytes(b"\x00")
+    with pytest.raises(manifest.ManifestError, match="compiled files"):
+        admin.enable("example", yes=True, out=lambda s: None)
+
+
+def test_enable_shows_what_each_mcp_server_is_given_and_refuses_a_clash(plugins):
+    from kravein.mcp import config as mcp_config
+
+    folder = install(plugins)
+    (folder / "mcp.json").write_text(json.dumps({"servers": {"echo": {
+        "command": ["/usr/bin/true"],
+        "env": {"PATH": "inherit", "TOKEN": "key:anthropic_api_key", "MODE": "fast"}}}}))
+    shown = []
+    admin.enable("example", yes=True, out=shown.append)
+    text = "\n".join(shown)
+    assert "env TOKEN: the secret 'anthropic_api_key'" in text and "env PATH: copied" in text
+    assert "not sandboxed" in text
+    mcp_config.add_server("other-echo", command=["/usr/bin/true"])
+    shutil.copytree(EXAMPLE, plugins / "other")
+    (plugins / "other" / "plugin.json").write_text(
+        (plugins / "other" / "plugin.json").read_text().replace('"example"', '"other"'))
+    with pytest.raises(ValueError, match="already exists and was not added by this plugin"):
+        admin.enable("other", yes=True, out=lambda s: None)
+
+
+def test_a_relative_write_from_the_workspace_into_plugins_is_blocked(plugins):
+    workspace = Path(config.DATA_DIR) / "workspace"
+    workspace.mkdir(parents=True)
+    for command in ("python3 -c \"open('../plugins/x/tools/a.py','w')\"",
+                    "cp evil.py ../plugins/example/tools/"):
+        verdict = safety.classify_command(command, cwd=workspace)
+        assert verdict.blocked and verdict.danger == Danger.CRITICAL, command
 
 
 # -- the agent cannot enable or write ------------------------------------------------------

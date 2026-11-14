@@ -16,6 +16,24 @@ from . import config, pins
 from .manager import Manager
 
 
+def server_access(spec: dict[str, Any]) -> list[str]:
+    """What a server is given: every env var and where its value comes from,
+    the bearer key, the sandbox. A `key:` value is named, never printed."""
+    out = []
+    for var, value in sorted((spec.get("env") or {}).items()):
+        value = str(value)
+        if value == "inherit":
+            out.append(f"env {var}: copied from Kravein's own environment")
+        elif value.startswith("key:"):
+            out.append(f"env {var}: the secret '{value[4:]}' from api_keys.json")
+        else:
+            out.append(f"env {var}: the literal value {value[:60]!r}")
+    if spec.get("auth_key"):
+        out.append(f"sends the secret '{spec['auth_key']}' as its bearer token")
+    out.append("sandboxed (no network)" if spec.get("sandbox") else "not sandboxed")
+    return out
+
+
 def describe_tool(defn: dict[str, Any], old: dict[str, Any] | None = None) -> str:
     clean = pins.sanitized(defn)
     hints = defn.get("_hints") or {}
@@ -68,6 +86,9 @@ def approve(name: str, *, classes: dict[str, str] | None = None, inward: set[str
         if not pending and not removed:
             out(f"'{name}': every listed tool is already approved and unchanged.")
             return []
+        out(f"MCP server '{name}' gets:")
+        for line in server_access(spec):
+            out(f"  {line}")
         out(f"MCP server '{name}' wants these tools approved:")
         for tool, wanted in scopes.items():
             props = ((conn.listed.get(tool) or {}).get("input_schema") or {}).get("properties", {}) or {}
