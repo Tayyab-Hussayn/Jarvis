@@ -1,0 +1,1753 @@
+[
+ {
+  "description": "Click something on the page, found by its visible text or label. If the description matches several elements this reports them rather than guessing — pass index to choose one.",
+  "name": "browser_click",
+  "parameters": {
+   "properties": {
+    "description": {
+     "description": "Visible text, label, placeholder or title of the element.",
+     "type": "string"
+    },
+    "index": {
+     "description": "1-based choice when several elements match. Default: 0.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "description"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Open a URL in Kravein's browser. This is a separate browser from your own, with its own profile and its own logins. Starting it the first time takes a few seconds.",
+  "name": "browser_open",
+  "parameters": {
+   "properties": {
+    "new_tab": {
+     "description": "Open in a new tab instead of reusing the current one. Default: False.",
+     "type": "boolean"
+    },
+    "url": {
+     "description": "Address to open. A bare domain gets https:// added.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "url"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Close Kravein's browser entirely. Your own browser is unaffected.",
+  "name": "browser_quit",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read the visible text of the current page, or report whether the browser is running and which tabs are open.",
+  "name": "browser_read",
+  "parameters": {
+   "properties": {
+    "max_chars": {
+     "description": "Truncate beyond this many characters. Default: 3000.",
+     "type": "integer"
+    },
+    "status": {
+     "description": "True to report the browser and its numbered tabs instead of page text. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Scroll the current page.",
+  "name": "browser_scroll",
+  "parameters": {
+   "properties": {
+    "amount": {
+     "description": "Pixels to scroll. Default: 600.",
+     "type": "integer"
+    },
+    "direction": {
+     "description": "up or down. Default: 'down'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search inside the site already open, using that site's own search box. This is what \"search YouTube for X\" or \"find X on this site\" means: it types into the page's search field and submits, staying on the site. It does not touch the address bar and does not go to a search engine. The field is found structurally rather than by name, so this works on any site without being told what its search box is called.",
+  "name": "browser_search_site",
+  "parameters": {
+   "properties": {
+    "query": {
+     "description": "What to search for on the current site.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search the whole web with a search engine, leaving the current page. This navigates away to a search engine. To search *within* a site that is already open — YouTube, a shop, a wiki, a docs site — use `browser_search_site` instead, which uses that site's own search box.",
+  "name": "browser_search_web",
+  "parameters": {
+   "properties": {
+    "engine": {
+     "description": "duckduckgo (default), google or bing. Default: ''.",
+     "type": "string"
+    },
+    "query": {
+     "description": "What to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Switch to, or close, a tab in Kravein's browser. Tab numbers come from browser_read with status=True.",
+  "name": "browser_tab",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "switch (needs index) or close.",
+     "enum": [
+      "switch",
+      "close"
+     ],
+     "type": "string"
+    },
+    "index": {
+     "description": "1-based tab number. For close, omit to close the current tab.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Type into a field on the page, found by its label or placeholder.",
+  "name": "browser_type",
+  "parameters": {
+   "properties": {
+    "description": {
+     "description": "Label, placeholder or nearby text of the field.",
+     "type": "string"
+    },
+    "submit": {
+     "description": "Press Enter afterwards. Default: False.",
+     "type": "boolean"
+    },
+    "text": {
+     "description": "What to type.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "description",
+    "text"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Explain what a command would do and how risky it is, without running it.",
+  "name": "check_command",
+  "parameters": {
+   "properties": {
+    "command": {
+     "description": "The command line to analyse.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "command"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Check for pending system, AUR and Flatpak updates.",
+  "name": "check_updates",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find a UI element by description and click it. Takes a screenshot, asks the vision model where the element is, then moves the pointer there and clicks.",
+  "name": "click_on_screen",
+  "parameters": {
+   "properties": {
+    "description": {
+     "description": "What to click, e.g. 'the blue Sign In button'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "description"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read the clipboard, or put text on it.",
+  "name": "clipboard",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "read or write. Default: 'read'.",
+     "enum": [
+      "read",
+      "write"
+     ],
+     "type": "string"
+    },
+    "text": {
+     "description": "For write: what to copy.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Close an application's windows. By default this asks the window manager to close the window, so the app can prompt to save work. Use force to kill the client outright when it ignores a polite close.",
+  "name": "close_app",
+  "parameters": {
+   "properties": {
+    "app_name": {
+     "description": "Which application's windows to close.",
+     "type": "string"
+    },
+    "force": {
+     "description": "Kill the client instead of asking it to close. Default: False.",
+     "type": "boolean"
+    },
+    "workspace": {
+     "description": "Only close windows on this workspace. Use it whenever the app could have windows open on more than one. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "app_name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Check or stop a background command started by run_command. status shows running or finished, the exit code, the runtime and the end of the output. stop kills the command and everything it started. Use the job id that run_command returned when it started the command in the background or moved it there after a timeout.",
+  "name": "command_job",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "status (default) to look, stop to kill it. Default: 'status'.",
+     "enum": [
+      "status",
+      "stop"
+     ],
+     "type": "string"
+    },
+    "job_id": {
+     "description": "The job id, like 'job-1a2b3c'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "job_id"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Start, stop, restart, enable or disable a systemd unit.",
+  "name": "control_service",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "start, stop, restart, reload, enable or disable.",
+     "type": "string"
+    },
+    "name": {
+     "description": "Unit name, e.g. 'ydotool.service'.",
+     "type": "string"
+    },
+    "system_scope": {
+     "description": "Act on the system manager instead of the user one. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "name",
+    "action"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Copy a file or directory.",
+  "name": "copy_path",
+  "parameters": {
+   "properties": {
+    "destination": {
+     "description": "Where to copy it.",
+     "type": "string"
+    },
+    "source": {
+     "description": "What to copy.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "source",
+    "destination"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Create a directory, including any missing parents.",
+  "name": "create_directory",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "Directory to create.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Delete a file or directory. Moves it to the trash unless told otherwise.",
+  "name": "delete_path",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "What to delete.",
+     "type": "string"
+    },
+    "permanent": {
+     "description": "Bypass the trash and remove it irrecoverably. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Delete a routine and everything it tracks. The history log survives.",
+  "name": "delete_routine",
+  "parameters": {
+   "properties": {
+    "routine_id": {
+     "description": "Which routine, e.g. \"r1\".",
+     "type": "string"
+    }
+   },
+   "required": [
+    "routine_id"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show metadata for a file or directory: size, permissions, type, dates.",
+  "name": "describe_file",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "The file or directory to describe.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show what is taking up space in a directory.",
+  "name": "directory_size",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "Directory to measure. Default: 'home'.",
+     "type": "string"
+    },
+    "top": {
+     "description": "How many of the largest entries to list. Default: 10.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show disk usage for a filesystem, plus the largest mounts.",
+  "name": "disk_usage",
+  "parameters": {
+   "properties": {
+    "path": {
+     "description": "A path on the filesystem to report. Default: '/'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Replace exact text inside an existing text file and show the diff. Use this to change part of a file; use write_file only for new files or full rewrites. You must read_file the file first, and read it again if it changed since. An edit is refused when old_text is not found or appears more than once (unless replace_all is true) - include more surrounding lines to make it unique. For several changes to one file pass edits: they are applied in order and either all succeed or nothing is written.",
+  "name": "edit_file",
+  "parameters": {
+   "properties": {
+    "edits": {
+     "description": "Several changes in order, each an object with old_text, new_text and optionally replace_all. Use instead of old_text/new_text.",
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "new_text": {
+     "description": "Replacement text (may be empty to delete old_text). Default: ''.",
+     "type": "string"
+    },
+    "old_text": {
+     "description": "Exact text to replace, including whitespace and newlines. Leave empty when you pass edits. Default: ''.",
+     "type": "string"
+    },
+    "path": {
+     "description": "The file to edit.",
+     "type": "string"
+    },
+    "replace_all": {
+     "description": "Replace every occurrence of old_text instead of requiring it to be unique. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Describe the host: distro, compositor, audio stack and available tools. Useful when a skill is unavailable and you need to know why.",
+  "name": "environment_report",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Drive the file manager, or open something in its default application.",
+  "name": "file_manager",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "open a directory (default home; also how to navigate); show a file highlighted in its folder; status (which manager is used); open_path (file, folder or URL in its default app). Default: 'open'.",
+     "enum": [
+      "open",
+      "show",
+      "status",
+      "open_path"
+     ],
+     "type": "string"
+    },
+    "new_window": {
+     "description": "For open: use a new window instead of an existing one.",
+     "type": "boolean"
+    },
+    "path": {
+     "description": "The directory (open, default home), file (show) or file/folder/URL (open_path).",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search for files by name, newest first, and optionally by their contents.",
+  "name": "find_files",
+  "parameters": {
+   "properties": {
+    "content": {
+     "description": "Also require this text to appear inside the file. Default: ''.",
+     "type": "string"
+    },
+    "max_results": {
+     "description": "Maximum matches to return (1-500). Default: 50.",
+     "type": "integer"
+    },
+    "name": {
+     "description": "Filename or glob pattern, e.g. '*.pdf' or 'report'.",
+     "type": "string"
+    },
+    "path": {
+     "description": "Directory to search under. Default: 'home'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find running processes by name and show their PIDs.",
+  "name": "find_process",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "Process name or fragment to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Remove a wrong or outdated name from the learned app list. Kravein remembers what each spoken app name opened after a verified launch. Use this when a remembered name opens the wrong thing: all names for that app are dropped and the next open searches the system again.",
+  "name": "forget_app",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "The spoken name to forget, e.g. 'anti gravity'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show how much disk space each Steam library is using.",
+  "name": "game_storage",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Slow, continuous, hands-free scrolling: start it, stop it, change its speed, or check it. Works on a page open in Kravein's browser, or on a native window such as the Spotify app or a document viewer. It keeps going until you say stop, it reaches the end, or the time limit runs out. Scrolling a native window parks the pointer over that window, because wheel events go wherever the pointer is. It stops by itself if you move the mouse or focus something else.",
+  "name": "gentle_scroll",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "start (default; uses target, direction, seconds); stop; speed (needs speed); status. Default: 'start'.",
+     "enum": [
+      "start",
+      "stop",
+      "speed",
+      "status"
+     ],
+     "type": "string"
+    },
+    "direction": {
+     "description": "down or up. Default: 'down'.",
+     "type": "string"
+    },
+    "seconds": {
+     "description": "Stop automatically after this long. 0 uses the default limit. Default: 0.",
+     "type": "integer"
+    },
+    "speed": {
+     "description": "How fast. A number where 1 is gentle, up to 10, or a word like slow, gentle, medium or fast. Default: ''.",
+     "type": "string"
+    },
+    "target": {
+     "description": "What to scroll. \"browser\" for the current page, or an app name or window title such as \"spotify\". Leave empty for the focused window. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Install packages. Requires confirmation, then hands back the command. Installing needs root, which the assistant deliberately does not hold, so this returns the exact command for you to run.",
+  "name": "install_package",
+  "parameters": {
+   "properties": {
+    "from_aur": {
+     "description": "Use the AUR helper instead of the official repositories. Default: False.",
+     "type": "boolean"
+    },
+    "package_names": {
+     "description": "Packages to install.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "package_names"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Terminate a process by PID or name. Asks for confirmation first.",
+  "name": "kill_process",
+  "parameters": {
+   "properties": {
+    "force": {
+     "description": "Send SIGKILL instead of SIGTERM. Default: False.",
+     "type": "boolean"
+    },
+    "target": {
+     "description": "A numeric PID, or a process name to match.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "target"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Launch a game by name through Steam or Legendary.",
+  "name": "launch_game",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "The game's name, or part of it.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List installed applications, optionally filtered by category.",
+  "name": "list_apps",
+  "parameters": {
+   "properties": {
+    "category": {
+     "description": "A freedesktop category, e.g. 'Development', 'Graphics'. Default: ''.",
+     "type": "string"
+    },
+    "limit": {
+     "description": "Maximum results. Default: 60.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List the contents of a directory.",
+  "name": "list_files",
+  "parameters": {
+   "properties": {
+    "limit": {
+     "description": "Maximum entries to return. Default: 200.",
+     "type": "integer"
+    },
+    "long_format": {
+     "description": "Show permissions, owner and modification time. Default: False.",
+     "type": "boolean"
+    },
+    "path": {
+     "description": "Directory path, or a shortcut like 'home', 'desktop', 'downloads'. Default: 'home'.",
+     "type": "string"
+    },
+    "show_hidden": {
+     "description": "Include dotfiles. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List installed games from Steam and, if present, Heroic/Legendary.",
+  "name": "list_games",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List scheduled jobs and reminders, what they recently did, or whether the scheduler is running.",
+  "name": "list_jobs",
+  "parameters": {
+   "properties": {
+    "include_finished": {
+     "description": "For jobs: also show jobs that already ran or failed. Default: False.",
+     "type": "boolean"
+    },
+    "limit": {
+     "description": "For history: how many entries to show.",
+     "type": "integer"
+    },
+    "view": {
+     "description": "jobs (default) = the list; history = what jobs recently did, including failures; status = whether jobs will actually fire and where they are stored. Default: 'jobs'.",
+     "enum": [
+      "jobs",
+      "history",
+      "status"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List packages nothing depends on any more.",
+  "name": "list_orphan_packages",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List running processes.",
+  "name": "list_processes",
+  "parameters": {
+   "properties": {
+    "filter_name": {
+     "description": "Only show processes whose name contains this text. Default: ''.",
+     "type": "string"
+    },
+    "limit": {
+     "description": "How many to show. Default: 15.",
+     "type": "integer"
+    },
+    "sort_by": {
+     "description": "'cpu', 'memory' or 'name'. Default: 'cpu'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List systemd services.",
+  "name": "list_services",
+  "parameters": {
+   "properties": {
+    "failed_only": {
+     "description": "Only show units that have failed. Default: False.",
+     "type": "boolean"
+    },
+    "system_scope": {
+     "description": "List system units instead of user units. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List open terminal windows, so one can be chosen to type into.",
+  "name": "list_terminals",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "List every open window grouped by workspace (with each window's exact id and, for terminals, the shell's working directory), or describe the focused window, or list the workspaces.",
+  "name": "list_windows",
+  "parameters": {
+   "properties": {
+    "as_json": {
+     "description": "For windows: return a JSON list of {id, title, app, pid, workspace, focused, cwd} instead of text. Default: False.",
+     "type": "boolean"
+    },
+    "view": {
+     "description": "windows (default), focused (just the window with focus) or workspaces (the workspace list). Default: 'windows'.",
+     "enum": [
+      "windows",
+      "focused",
+      "workspaces"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Capture the screen and describe what is on it. This is the screen-awareness feature: it takes a screenshot, sends it to the vision model and answers a question about what is visible.",
+  "name": "look_at_screen",
+  "parameters": {
+   "properties": {
+    "active_window": {
+     "description": "Only look at the focused window. Default: False.",
+     "type": "boolean"
+    },
+    "question": {
+     "description": "What to ask about the screen. Defaults to a description. Default: ''.",
+     "type": "string"
+    },
+    "region": {
+     "description": "Select a region interactively first. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Cancel, pause/resume, or edit a scheduled job. To create one use schedule_job.",
+  "name": "manage_job",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "cancel (empty job_id cancels EVERY pending job, asks first); pause (needs job_id); edit (needs job_id; changes only the fields given).",
+     "enum": [
+      "cancel",
+      "pause",
+      "edit"
+     ],
+     "type": "string"
+    },
+    "job_id": {
+     "description": "Which job, e.g. \"j3\".",
+     "type": "string"
+    },
+    "prompt": {
+     "description": "For edit: new message or task.",
+     "type": "string"
+    },
+    "repeat": {
+     "description": "For edit: new repeat rule.",
+     "type": "string"
+    },
+    "resume": {
+     "description": "For pause: True to resume a paused job instead.",
+     "type": "boolean"
+    },
+    "title": {
+     "description": "For edit: new heading.",
+     "type": "string"
+    },
+    "when": {
+     "description": "For edit: new time, e.g. '10m' or '5pm'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Click or move the mouse pointer.",
+  "name": "mouse",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "click (at the pointer: button, count) or move (needs x and y). Default: 'click'.",
+     "enum": [
+      "click",
+      "move"
+     ],
+     "type": "string"
+    },
+    "button": {
+     "description": "For click: 'left', 'right' or 'middle'.",
+     "type": "string"
+    },
+    "count": {
+     "description": "For click: number of clicks; 2 for a double-click.",
+     "type": "integer"
+    },
+    "relative": {
+     "description": "For move: move by this offset instead of to this position.",
+     "type": "boolean"
+    },
+    "x": {
+     "description": "For move: X coordinate in pixels.",
+     "type": "integer"
+    },
+    "y": {
+     "description": "For move: Y coordinate in pixels.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Move or rename a file or directory.",
+  "name": "move_path",
+  "parameters": {
+   "properties": {
+    "destination": {
+     "description": "Where to move it. A directory keeps the original name.",
+     "type": "string"
+    },
+    "source": {
+     "description": "What to move.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "source",
+    "destination"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show network interfaces, addresses and the active connection.",
+  "name": "network_status",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Launch an application by name. Focuses it if it is already running. With a workspace it starts a new instance there and, by default, takes the user to that workspace with the new window focused.",
+  "name": "open_app",
+  "parameters": {
+   "properties": {
+    "app_name": {
+     "description": "What to open, e.g. 'firefox', 'terminal', 'file manager'.",
+     "type": "string"
+    },
+    "focus": {
+     "description": "With a workspace: true (default) switches the user there and focuses the new window; false launches in the background and leaves the current workspace and focus alone. Default: True.",
+     "type": "boolean"
+    },
+    "workspace": {
+     "description": "Open a new instance on this workspace (the number shown on the bar, or an existing workspace name). Leave empty to open or focus normally. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "app_name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Open a new terminal window, optionally running a command in it. The command is typed into the new terminal rather than passed on its command line, so the shell stays open afterwards and the user can keep working in it.",
+  "name": "open_terminal",
+  "parameters": {
+   "properties": {
+    "command": {
+     "description": "Optional command to run once the terminal is open. Default: ''.",
+     "type": "string"
+    },
+    "terminal": {
+     "description": "Which terminal emulator. Defaults to the first available. Default: ''.",
+     "type": "string"
+    },
+    "workspace": {
+     "description": "Switch to this workspace before opening. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Sort loose files in a directory into subfolders.",
+  "name": "organize_directory",
+  "parameters": {
+   "properties": {
+    "mode": {
+     "description": "'by_type' groups by file kind; 'by_date' groups by year-month. Default: 'by_type'.",
+     "type": "string"
+    },
+    "path": {
+     "description": "Directory to organise. Default: 'downloads'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show details about a package, installed or not.",
+  "name": "package_info",
+  "parameters": {
+   "properties": {
+    "package": {
+     "description": "Package name.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "package"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Press a key or key combination.",
+  "name": "press_keys",
+  "parameters": {
+   "properties": {
+    "keys": {
+     "description": "A key name or combination, e.g. 'enter', 'ctrl+c', 'super+1'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "keys"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Suggest a next step to the owner and wait for their decision. Nothing runs now. Use it for anything major (deleting, installing, spending, sending) and for useful follow-ups. The owner approves or declines in the app or by voice.",
+  "name": "propose",
+  "parameters": {
+   "properties": {
+    "agent": {
+     "description": "For delegate: the sub-agent that does it, for example system-ops. Default: ''.",
+     "type": "string"
+    },
+    "kind": {
+     "description": "delegate (a sub-agent does it after approval), note (advice only) or capability (a missing tool or weakness you noticed; advice only). A sub-agent may use only note or capability. Default: 'delegate'.",
+     "type": "string"
+    },
+    "reasons": {
+     "description": "Two or three concrete reasons (\"do this, not that, because ...\").",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "risk": {
+     "description": "low or major. Use major for deleting, installing, spending or sending. Default: 'low'.",
+     "type": "string"
+    },
+    "task": {
+     "description": "For delegate: the whole task, self-contained. Default: ''.",
+     "type": "string"
+    },
+    "title": {
+     "description": "One short line, what you suggest.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "title",
+    "reasons"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show what the assistant has recently done. Every skill call, shell command and confirmation decision is recorded.",
+  "name": "read_audit_log",
+  "parameters": {
+   "properties": {
+    "event_filter": {
+     "description": "Only show events starting with this prefix, e.g. 'shell', 'safety' or 'skill'. Default: ''.",
+     "type": "string"
+    },
+    "limit": {
+     "description": "How many entries to show. Default: 25.",
+     "type": "integer"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read a text file; every line is prefixed with its line number. Read a file with this before editing it with edit_file or overwriting it with write_file. For a long file read it in pieces with start_line.",
+  "name": "read_file",
+  "parameters": {
+   "properties": {
+    "max_lines": {
+     "description": "Maximum lines to return. Default: 200.",
+     "type": "integer"
+    },
+    "path": {
+     "description": "File to read.",
+     "type": "string"
+    },
+    "start_line": {
+     "description": "1-indexed line to start from; use the value the previous read printed after 'continue with start_line='. Default: 1.",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "path"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Read the systemd journal.",
+  "name": "read_logs",
+  "parameters": {
+   "properties": {
+    "lines": {
+     "description": "How many recent lines to return. Default: 40.",
+     "type": "integer"
+    },
+    "since": {
+     "description": "A time expression, e.g. '1 hour ago' or 'today'. Default: ''.",
+     "type": "string"
+    },
+    "unit": {
+     "description": "Limit to one unit, e.g. 'NetworkManager'. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Rename a file or folder, keeping it in the same directory. This changes the file on disk; an open file manager will reflect it.",
+  "name": "rename_path",
+  "parameters": {
+   "properties": {
+    "new_name": {
+     "description": "The new name — just the name, not a full path.",
+     "type": "string"
+    },
+    "path": {
+     "description": "The file or folder to rename.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "new_name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find the exact executable behind a program name, before running it. Use this before typing or running a program whose exact command you are not sure of (\"antigravity cli\", \"the claude tool\"). Matches ignore case, spaces and hyphens, and look in PATH, ~/.local/bin, /opt/*/bin, desktop entries and the learned app list. It never guesses: with no exact match it lists the closest candidates for you to choose from.",
+  "name": "resolve_command",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "The program name as the owner said it, e.g. 'antigravity'.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Create a daily routine, or pause/resume one. Steps are added with routine_step; deleting uses delete_routine.",
+  "name": "routine",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "add (needs name); pause (needs routine_id; resume=True resumes).",
+     "enum": [
+      "add",
+      "pause"
+     ],
+     "type": "string"
+    },
+    "day_start": {
+     "description": "For add: when the routine's day rolls over, HH:MM local (default 04:00).",
+     "type": "string"
+    },
+    "days": {
+     "description": "For add: which weekdays it runs; empty for every day.",
+     "type": "string"
+    },
+    "name": {
+     "description": "For add: what to call it, e.g. \"Morning\".",
+     "type": "string"
+    },
+    "resume": {
+     "description": "For pause: True to resume a paused routine instead.",
+     "type": "boolean"
+    },
+    "routine_id": {
+     "description": "For pause: which routine, e.g. \"r1\".",
+     "type": "string"
+    },
+    "timezone": {
+     "description": "For add: IANA timezone; empty for the machine's.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "action"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show today's routines (what is done, what is next, the score), or how recent days went.",
+  "name": "routine_status",
+  "parameters": {
+   "properties": {
+    "history": {
+     "description": "True to show past days instead: score, what was missed, streak. Default: False.",
+     "type": "boolean"
+    },
+    "limit": {
+     "description": "With history: how many days back (default 14).",
+     "type": "integer"
+    },
+    "routine_id": {
+     "description": "Limit to one routine, e.g. \"r1\". Leave empty for all. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Work on one step (habit) of a routine: add, edit, delete, mark done, or skip it.",
+  "name": "routine_step",
+  "parameters": {
+   "properties": {
+    "action": {
+     "description": "add (needs label, plus at, or after_step + after_minutes, never both); edit, delete, complete, skip (need step_id; edit changes only the fields given).",
+     "enum": [
+      "add",
+      "edit",
+      "delete",
+      "complete",
+      "skip"
+     ],
+     "type": "string"
+    },
+    "after_minutes": {
+     "description": "For add: minutes after after_step was actually done.",
+     "type": "integer"
+    },
+    "after_step": {
+     "description": "For add: step this one follows.",
+     "type": "string"
+    },
+    "at": {
+     "description": "Fixed time HH:MM local (add, edit).",
+     "type": "string"
+    },
+    "insist": {
+     "description": "For add: keep nagging until done.",
+     "type": "boolean"
+    },
+    "label": {
+     "description": "For add: name of the habit; for edit: its new name.",
+     "type": "string"
+    },
+    "messages": {
+     "description": "Reminder wording variants (add, edit).",
+     "type": "string"
+    },
+    "nag_every_minutes": {
+     "description": "For add: minutes between nags.",
+     "type": "integer"
+    },
+    "nag_max": {
+     "description": "For add: most nags.",
+     "type": "integer"
+    },
+    "points": {
+     "description": "Score value of the step (add, edit).",
+     "type": "integer"
+    },
+    "requires": {
+     "description": "For add: step that must be confirmed done before this one unlocks.",
+     "type": "string"
+    },
+    "routine_id": {
+     "description": "Which routine, e.g. \"r1\".",
+     "type": "string"
+    },
+    "step_id": {
+     "description": "Which step, e.g. \"s2\" (edit, delete, complete, skip).",
+     "type": "string"
+    },
+    "window_minutes": {
+     "description": "How long the step stays open after it is due (add, edit).",
+     "type": "integer"
+    }
+   },
+   "required": [
+    "action",
+    "routine_id"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Run a shell command and return its output. The command is risk-classified first. Read-only commands run straight away; anything that deletes, kills, installs or needs root asks you to confirm. Outright dangerous patterns are refused. The working directory persists between calls: after 'cd build' the next command starts in build, and every result ends with '[cwd: ...]'. Output longer than a few thousand characters is kept in a file; the result shows the start and end and names the file to open with read_file or search_text. A command that has not finished at its timeout keeps running as a background job; check it with command_status and stop it with stop_command.",
+  "name": "run_command",
+  "parameters": {
+   "properties": {
+    "background": {
+     "description": "Start the command and return a job id at once, without waiting. Use for servers, watchers, builds and anything that takes minutes; at most 3 can run at a time. Default: False.",
+     "type": "boolean"
+    },
+    "command": {
+     "description": "The command line to run.",
+     "type": "string"
+    },
+    "timeout_seconds": {
+     "description": "Wait this long for the result (1-600). Then the command moves to a background job instead of being killed. Default: 60.",
+     "type": "integer"
+    },
+    "working_directory": {
+     "description": "Directory to run it in. Defaults to the directory of the previous command, or your home at the start. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "command"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Schedule something to happen later, once or on a repeating schedule. Fires even if Kravein is closed, because a systemd timer drives it.",
+  "name": "schedule_job",
+  "parameters": {
+   "properties": {
+    "kind": {
+     "description": "\"notify\" to just show a message — use this for reminders. \"agent\" to actually run the request with tools when it fires. Default: 'notify'.",
+     "type": "string"
+    },
+    "prompt": {
+     "description": "For kind=notify, the message to show. For kind=agent, the request to run — write it exactly as the user would say it.",
+     "type": "string"
+    },
+    "repeat": {
+     "description": "A 5-field cron expression for a recurring job, e.g. \"0 9 * * *\" for every day at 9am, \"0 9 * * 1\" for Mondays. Default: ''.",
+     "type": "string"
+    },
+    "speak": {
+     "description": "Also say it out loud when it fires. Default: False.",
+     "type": "boolean"
+    },
+    "title": {
+     "description": "Heading on the notification. Default: 'Kravein'.",
+     "type": "string"
+    },
+    "when": {
+     "description": "An absolute ISO 8601 timestamp, e.g. \"2026-09-07T17:00\". Resolve any relative phrasing yourself — \"tomorrow\", \"next Tuesday\", \"in two weeks\" — using the current date and time given in the context, and pass the resulting absolute timestamp. A plain duration (\"20m\", \"1h30m\", \"2d\") is also accepted. Leave empty when using repeat. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "prompt"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Report screen dimensions and capture capability, or whether keyboard/mouse input can be synthesised.",
+  "name": "screen_info",
+  "parameters": {
+   "properties": {
+    "topic": {
+     "description": "screen (default) for size and capture, or input for typing/mouse capability. Default: 'screen'.",
+     "enum": [
+      "screen",
+      "input"
+     ],
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Scroll the mouse wheel.",
+  "name": "scroll",
+  "parameters": {
+   "properties": {
+    "amount": {
+     "description": "How many wheel steps. Default: 3.",
+     "type": "integer"
+    },
+    "direction": {
+     "description": "'up', 'down', 'left' or 'right'. Default: 'down'.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find installed applications matching a name or description.",
+  "name": "search_apps",
+  "parameters": {
+   "properties": {
+    "limit": {
+     "description": "Maximum results. Default: 8.",
+     "type": "integer"
+    },
+    "query": {
+     "description": "What to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search the Arch repositories for installable packages.",
+  "name": "search_packages",
+  "parameters": {
+   "properties": {
+    "limit": {
+     "description": "Maximum results. Default: 12.",
+     "type": "integer"
+    },
+    "query": {
+     "description": "What to search for.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Search inside file contents under a directory (like grep -rn / rg). Output is capped and paged; narrow it with glob or a more specific directory, or continue with offset. To find files by name use find_files.",
+  "name": "search_text",
+  "parameters": {
+   "properties": {
+    "context_lines": {
+     "description": "Lines of context to show around each match (0-10). Default: 0.",
+     "type": "integer"
+    },
+    "directory": {
+     "description": "Directory to search under. Default: 'home'.",
+     "type": "string"
+    },
+    "glob": {
+     "description": "Only search files whose name matches, e.g. '*.py'. Default: ''.",
+     "type": "string"
+    },
+    "max_results": {
+     "description": "Maximum results per page (1-200): matching lines, or files for the files and count outputs. Default: 40.",
+     "type": "integer"
+    },
+    "offset": {
+     "description": "Skip this many results first; use the value the previous page printed after 'continue with offset='. Default: 0.",
+     "type": "integer"
+    },
+    "output": {
+     "description": "'content' lists matching lines (default), 'files' lists only the files that match, 'count' gives the number of matches per file. Default: 'content'.",
+     "enum": [
+      "content",
+      "files",
+      "count"
+     ],
+     "type": "string"
+    },
+    "query": {
+     "description": "Text to look for (case-insensitive). Plain text unless regex is true.",
+     "type": "string"
+    },
+    "regex": {
+     "description": "Treat query as a regular expression. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "query"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Show the status of one systemd unit.",
+  "name": "service_status",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "Unit name, e.g. 'ydotool.service'.",
+     "type": "string"
+    },
+    "system_scope": {
+     "description": "Query the system manager instead of the user one. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Report overall machine health: CPU, memory, disk, uptime and load.",
+  "name": "system_status",
+  "parameters": {
+   "properties": {
+    "detailed": {
+     "description": "Include per-core CPU, temperatures and network counters. Default: False.",
+     "type": "boolean"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Capture the screen to a PNG file.",
+  "name": "take_screenshot",
+  "parameters": {
+   "properties": {
+    "active_window": {
+     "description": "Capture only the focused window. Default: False.",
+     "type": "boolean"
+    },
+    "region": {
+     "description": "Interactively select a region with the mouse. Default: False.",
+     "type": "boolean"
+    },
+    "save_path": {
+     "description": "Where to save it. Defaults to the cache directory. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Type a command into an already-open terminal window and run it. Use `run_command` instead when you only need the output — this exists for commands that must run in a terminal the user can watch.",
+  "name": "type_into_terminal",
+  "parameters": {
+   "properties": {
+    "command": {
+     "description": "The command line to type.",
+     "type": "string"
+    },
+    "press_enter": {
+     "description": "Press Return after typing. Set false to leave it staged. Default: True.",
+     "type": "boolean"
+    },
+    "query": {
+     "description": "Which terminal — app name or part of its title. Omit for the focused window. Default: ''.",
+     "type": "string"
+    },
+    "workspace": {
+     "description": "Only consider terminals on this workspace. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "command"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Type text into whatever currently has keyboard focus.",
+  "name": "type_text",
+  "parameters": {
+   "properties": {
+    "delay_ms": {
+     "description": "Milliseconds between keystrokes. Default: 12.",
+     "type": "integer"
+    },
+    "text": {
+     "description": "The literal text to type.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "text"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Undo the file changes a run made: restore what it edited, moved or deleted, remove what it created. Files only. Packages, services, messages and anything outside the file tools cannot be undone. The owner confirms on a card that lists every path. A file edited again after the run is skipped and listed; only set force when the owner asks to overwrite those too (a second card asks again).",
+  "name": "undo_changes",
+  "parameters": {
+   "properties": {
+    "force": {
+     "description": "Also overwrite files that changed after the run. Only when the owner asked for it. Default: False.",
+     "type": "boolean"
+    },
+    "task": {
+     "description": "The run or task id (shown as \"undo available: <id>\"). Empty means this run's own changes, else the newest run. Default: ''.",
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Trigger updates for installed games. Steam updates its own titles on launch, so this opens the downloads page; Legendary can be driven directly.",
+  "name": "update_games",
+  "parameters": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Keep a todo plan for a task of three or more steps; replaces the whole plan. Send every item each time, not only the changes. Exactly one item may be in_progress. Mark an item completed only when a tool result shows it is done. An empty list clears the plan.",
+  "name": "update_plan",
+  "parameters": {
+   "properties": {
+    "items": {
+     "description": "The whole plan, in order. Each item is {content: short step description, status: pending | in_progress | completed}.",
+     "items": {
+      "properties": {
+       "content": {
+        "type": "string"
+       },
+       "status": {
+        "enum": [
+         "pending",
+         "in_progress",
+         "completed"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "content",
+       "status"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "items"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find where a command lives on PATH.",
+  "name": "which_command",
+  "parameters": {
+   "properties": {
+    "name": {
+     "description": "Command name.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "name"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Find which package provides a file or command.",
+  "name": "which_package_owns",
+  "parameters": {
+   "properties": {
+    "target": {
+     "description": "A command name or absolute file path.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "target"
+   ],
+   "type": "object"
+  }
+ },
+ {
+  "description": "Create or overwrite a text file. Overwriting an existing file needs a read_file of it first; prefer edit_file for changing part of a file.",
+  "name": "write_file",
+  "parameters": {
+   "properties": {
+    "append": {
+     "description": "Append instead of replacing the file. Default: False.",
+     "type": "boolean"
+    },
+    "content": {
+     "description": "Text to write.",
+     "type": "string"
+    },
+    "path": {
+     "description": "Destination file.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "path",
+    "content"
+   ],
+   "type": "object"
+  }
+ }
+]
