@@ -15,6 +15,7 @@ import signal
 import subprocess
 import threading
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -179,6 +180,10 @@ def spawn(
     return proc.pid
 
 
+class SandboxUnavailable(RuntimeError):
+    """bwrap is missing or cannot create a sandbox on this machine."""
+
+
 def start_group(
     command: str,
     *,
@@ -187,8 +192,15 @@ def start_group(
     stderr_path: str | os.PathLike,
     env: dict[str, str] | None = None,
     audit_event: str = "shell.user_command",
+    sandbox: bool = False,
+    hide_secrets: bool = True,
 ) -> subprocess.Popen:
     """Start ``command`` through the shell as the leader of its own process group.
+
+    ``sandbox=True`` runs it under bubblewrap (see :mod:`.sandbox`). If the
+    sandbox cannot be built this raises ``SandboxUnavailable``: there is no
+    fallback to an unsandboxed run, ever - the caller was promised that nothing
+    would change.
 
     The environment carries a random ``KRAVEIN_GROUP_TAG``. After the leader is
     reaped its pid (the group id) can be recycled, so a bare ``killpg`` could hit
@@ -205,16 +217,29 @@ def start_group(
       without losing what it already printed.
     * stdin is /dev/null so nothing can prompt for a password on the terminal.
     """
-    audit.record(audit_event, command=command, cwd=str(cwd) if cwd else None, shell=True)
+    audit.record(audit_event, command=command, cwd=str(cwd) if cwd else None, shell=True,
+                 sandbox=sandbox)
     tag = secrets.token_hex(8)
+    argv: list[str] | str = command
+    if sandbox:
+        from . import sandbox as sandbox_mod
+
+        state = sandbox_mod.status()
+        if not state.available:
+            raise SandboxUnavailable(state.reason)
+        workdir = Path(cwd) if cwd else Path.cwd()
+        bad = sandbox_mod.check_cwd(workdir)
+        if bad:
+            raise SandboxUnavailable(f"{workdir} cannot be the working directory: {bad}")
+        argv = sandbox_mod.build_argv(command, workdir, tag, state.path, hide_secrets)
     fds = []
     try:
         for path in (stdout_path, stderr_path):
             # 0600: the output of a command can hold anything the owner can read.
             fds.append(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))
         proc = subprocess.Popen(
-            command,
-            shell=True,
+            argv,
+            shell=not sandbox,
             cwd=str(cwd) if cwd else None,
             env=_clean_env({**(env or {}), "KRAVEIN_GROUP_TAG": tag}),
             stdin=subprocess.DEVNULL,
@@ -240,15 +265,20 @@ def wait(proc: subprocess.Popen, timeout: float | None) -> int | None:
 
 
 def _survivors(proc: subprocess.Popen) -> list[int]:
-    """Pids still in ``proc``'s group that carry its tag (leader excluded).
+    """Pids that carry ``proc``'s tag (leader excluded): its descendants, wherever they went.
 
     /proc is the only way to see children that outlived their shell
-    (``server &``): they are reparented to init, so no Popen knows them.
+    (``server &``): they are reparented to init, so no Popen knows them. The
+    match is on the random tag in their environment and not on the process
+    group, because a descendant can leave the group - ``setsid server`` does,
+    and so does everything inside a sandbox (``bwrap --new-session``) - and
+    would then be invisible to ``killpg`` and to the "is it still running"
+    check. The tag is 64 random bits per command, so a stranger cannot match.
     """
     tag = getattr(proc, "kravein_tag", "")
     if not tag:
         return []
-    needle = b"KRAVEIN_GROUP_TAG=" + tag.encode()
+    needle = b"KRAVEIN_GROUP_TAG=" + tag.encode() + b"\0"
     found = []
     try:
         entries = os.listdir("/proc")
@@ -259,9 +289,8 @@ def _survivors(proc: subprocess.Popen) -> list[int]:
             continue
         try:
             with open(f"/proc/{entry}/stat", "rb") as handle:
-                fields = handle.read().rsplit(b")", 1)[1].split()
-            # fields: state ppid pgrp ...; zombies are already dead.
-            if fields[0] == b"Z" or int(fields[2]) != proc.pid:
+                state = handle.read().rsplit(b")", 1)[1].split()[0]
+            if state == b"Z":          # a zombie is already dead
                 continue
             with open(f"/proc/{entry}/environ", "rb") as handle:
                 if needle in handle.read():
@@ -271,24 +300,53 @@ def _survivors(proc: subprocess.Popen) -> list[int]:
     return found
 
 
+def _pgid_exists(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def group_alive(proc: subprocess.Popen) -> bool:
-    """True while the leader runs or any tagged member of its group does."""
-    return proc.poll() is None or bool(_survivors(proc))
+    """True while the leader runs, any process still in its group does, or any
+    tagged descendant that left the group does.
+
+    Once the leader is reaped its pid is the group id, and a group id cannot be
+    recycled while the group has a member - so "the group still exists" is a
+    sound test as long as it is first asked right after the leader exits (the
+    job watcher does) and re-asked while it stays true. The moment it is seen
+    gone it is remembered (``kravein_gone``) and never signalled again, because
+    from then on the number may belong to a stranger. This also keeps the
+    check cheap for finished jobs: no /proc scan once they are known dead.
+    ``env -i server &`` has the group but not the tag; ``setsid server`` and
+    everything inside a sandbox have the tag but not the group; this sees both.
+    """
+    if proc.poll() is None:
+        return True
+    if getattr(proc, "kravein_gone", False):
+        return False
+    alive = _pgid_exists(proc.pid) or bool(_survivors(proc))
+    if not alive:
+        proc.kravein_gone = True
+    return alive
 
 
 def kill_group(proc: subprocess.Popen, grace: float = 2.0) -> bool:
-    """TERM the whole process group of ``proc``, then KILL what is left.
+    """TERM the whole process group of ``proc`` and its tagged descendants, then KILL.
 
-    While the leader is unreaped its pid is still the group id, so ``killpg``
-    is safe. Once the leader is gone the pgid may have been recycled for a
-    stranger, so survivors are found by their tag and signalled one by one.
-    Returns whether a signal was sent.
+    Group signals are sent only while the group is known to exist (leader
+    alive, or observed alive since it exited); tagged descendants outside it
+    are signalled one by one. Returns whether a signal was sent.
     """
     pgid = proc.pid  # start_new_session makes the leader's pid the group id
 
     def signal_all(sig: int) -> bool:
         sent = False
-        if proc.poll() is None:
+        if proc.poll() is None or (not getattr(proc, "kravein_gone", False)
+                                   and _pgid_exists(pgid)):
             try:
                 os.killpg(pgid, sig)
                 sent = True
