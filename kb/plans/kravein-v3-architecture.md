@@ -4,7 +4,30 @@ owner: orchestrator
 updated: 2026-11-14
 ---
 
-> Plan of record for Kravein v3 (proposal v4, from the architecture advisor). Owner decisions D1–D23 are still open: until the owner rules, task packets follow the recommendation in section 19, except changes that remove an existing feature (D2, D3, D7), which wait for the owner.
+> Plan of record for Kravein v3 (proposal v4, from the architecture advisor).
+>
+> **Owner rulings (2026-11-14). These override section 19 and anything in the body that conflicts:**
+> - **D4: grants apply whether or not the owner is present.** An action the owner marked
+>   "Always allow" is never asked again, in attended and unattended (triggered) runs alike, so
+>   there is no per-grant unattended flag. The other rules still hold:
+>   - grants exist only for `GUARDED` actions; `DESTRUCTIVE` and `CRITICAL` always ask
+>     (owner, 2026-11-13);
+>   - the code-computed scope, caps, expiry, revocation and audit;
+>   - the taint rule (§13.4), which is prompt-injection protection, not a presence check.
+>     Changing the taint rule needs a separate owner ruling.
+> - **D9: no hooks system for now.** Build one later only if a concrete need appears. Plugins
+>   and MCP register tools through the registry without hooks.
+> - **D10: code plugins are allowed and must be easy, plug-and-play.**
+>   - A plugin is a folder (`plugin.json` + `tools/*.py` with ordinary `@skill` functions,
+>     optional SKILL.md / profiles / `mcp.json`).
+>   - The owner enables it once with one action (CLI or UI). The card shows the file list. The
+>     enable pins a hash, and a changed hash disables the plugin until it is re-enabled.
+>   - There is no heavier machinery: no marketplace, no sandboxing framework, no hooks.
+>   - Plugin tools still call `safety.enforce` for state changes, and the `skill.unenforced`
+>     tripwire covers them.
+> - All other decisions (D1–D3, D5–D8, D11–D23) are still open. Packets follow the
+>   recommendation in section 19, except changes that remove an existing feature (D2, D3, D7),
+>   which wait for the owner.
 
 # Kravein — architecture proposal (v4: "one brain, many hands")
 
