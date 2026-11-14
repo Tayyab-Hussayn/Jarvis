@@ -596,6 +596,33 @@ def build_parser() -> argparse.ArgumentParser:
     models_cmd.add_argument("target", nargs="?", default="",
                             help="probe: provider:model (makes real, paid calls)")
 
+    # MCP servers (#243): every change here is an owner action; no skill can do it.
+    mcp_cmd = sub.add_parser("mcp", help="MCP servers: add, list, approve, enable, disable, remove")
+    mcp_sub = mcp_cmd.add_subparsers(dest="mcp_action", required=True)
+    mcp_add = mcp_sub.add_parser("add", help="add a server (its tools stay off until approved)")
+    mcp_add.add_argument("name")
+    where = mcp_add.add_mutually_exclusive_group(required=True)
+    where.add_argument("--command", help="stdio server command line")
+    where.add_argument("--url", help="Streamable HTTP endpoint")
+    mcp_add.add_argument("--env", action="append", default=[],
+                         help="NAME=inherit | NAME=key:<api_keys.json name> | NAME=value (repeatable)")
+    mcp_add.add_argument("--auth-key", default="", help="api_keys.json name sent as a Bearer token")
+    mcp_add.add_argument("--sandbox", action="store_true", help="run a stdio server in the bwrap sandbox (no network)")
+    mcp_add.add_argument("--timeout", type=float, default=60.0)
+    mcp_sub.add_parser("list", help="servers, approved tools, and live changes")
+    mcp_approve = mcp_sub.add_parser("approve", help="connect and approve new or changed tools")
+    mcp_approve.add_argument("name")
+    mcp_approve.add_argument("--class", dest="classes", action="append", default=[],
+                             help="TOOL=SAFE|GUARDED|DESTRUCTIVE (default GUARDED; repeatable)")
+    mcp_approve.add_argument("--inward", action="append", default=[],
+                             help="TOOL that does not act outside this machine (default: outward)")
+    mcp_approve.add_argument("--scope", action="append", default=[],
+                             help="TOOL=arg1,arg2: what an Always-allow grant is bound to "
+                                  "(default: every argument, the narrowest)")
+    mcp_approve.add_argument("--yes", action="store_true", help="do not ask for the final yes")
+    for verb in ("enable", "disable", "remove"):
+        mcp_sub.add_parser(verb).add_argument("name")
+
     daemon = sub.add_parser("daemon", help="run as a background service")
     daemon.add_argument("--socket", default="", help="override the socket path")
 
@@ -710,6 +737,55 @@ def _pick_lan_host(
     return addresses[0], []
 
 
+def _mcp_command(args: Any) -> int:
+    """``kravein mcp ...``: the only way MCP servers are added or approved."""
+    import shlex
+
+    from .mcp import admin, config as mcp_config
+
+    action = args.mcp_action
+    try:
+        if action == "add":
+            spec = mcp_config.add_server(
+                args.name, command=shlex.split(args.command) if args.command else None,
+                url=args.url or "", env=admin.parse_env(args.env), auth_key=args.auth_key,
+                sandbox=args.sandbox, timeout=args.timeout)
+            print(green(f"Added '{args.name}' ({spec['transport']}). Its tools are off until "
+                        f"you run: kravein mcp approve {args.name}"))
+            return 0
+        if action == "list":
+            from .mcp.manager import Manager
+
+            manager = Manager()
+            try:
+                manager.ensure_started(wait=15)
+                print(admin.list_text(manager))
+            finally:
+                manager.shutdown()
+            return 0
+        if action == "approve":
+            classes = dict(item.partition("=")[::2] for item in args.classes)
+            scopes = {tool: [a.strip() for a in argstr.split(",")]
+                      for tool, argstr in (item.partition("=")[::2] for item in args.scope)}
+            done = admin.approve(args.name, classes=classes, inward=set(args.inward),
+                                 scopes=scopes, yes=args.yes)
+            if done:
+                print(green(f"Approved {len(done)} tool(s): {', '.join(done)}"))
+            return 0
+        if action in ("enable", "disable"):
+            mcp_config.set_enabled(args.name, action == "enable")
+            print(f"'{args.name}' {action}d.")
+            return 0
+        if action == "remove":
+            mcp_config.remove_server(args.name)
+            print(f"'{args.name}' removed.")
+            return 0
+    except (ValueError, RuntimeError) as exc:
+        print(red(str(exc)), file=sys.stderr)
+        return 2
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -799,6 +875,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "doctor":
         return doctor()
+
+    if command == "mcp":
+        return _mcp_command(args)
 
     if command == "models":
         from . import usage
@@ -950,6 +1029,16 @@ def doctor() -> int:
         for line in block.splitlines():
             colour = red if ("NOT FOUND" in line or "NOT SET" in line) else dim
             print(colour(f"  {line}"))
+
+    # MCP servers (#243): config-level status only; doctor never spawns one.
+    print(bold("\nMCP servers"))
+    try:
+        from .mcp import admin as mcp_admin
+
+        for line in mcp_admin.doctor_lines():
+            print((red if "MISSING KEY" in line else dim)(f"  {line}"))
+    except Exception as exc:
+        print(red(f"  could not read the MCP config ({type(exc).__name__})"))
 
     # Role chains and the model catalog (#234). Warnings, not problems: a
     # hand-edited role or an old price still works, it is just unverified.

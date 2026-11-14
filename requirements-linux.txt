@@ -30,6 +30,14 @@ google-genai>=1.0
 # breaking SDK changes land on a major bump.
 anthropic>=2.8,<3
 
+# --- MCP client (#243) ----------------------------------------------------
+# The official SDK, pinned exactly: the spec went stateless on 2026-07-28 and
+# the SDK's API moved between v1 and v2, so an upgrade is a reviewed change.
+# Client only (servers are spawned by platform/shell.py, never by the SDK).
+# Adds mcp-types, jsonschema (+referencing, rpds-py, specifications), pyjwt and
+# sse-starlette; httpx2, pydantic, starlette, uvicorn, cryptography were here.
+mcp==2.3.0
+
 # --- Voice --------------------------------------------------------------
 # edge-tts is the original's own TTS engine (voice en-US-GuyNeural). Only the
 # playback changed: mpv instead of the Windows winmm MCI calls.
