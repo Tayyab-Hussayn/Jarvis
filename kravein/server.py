@@ -302,6 +302,108 @@ def create_app(token: str | None = None) -> Any:
         principal = f"device:{device}" if device else "browser"
         return {"states": app.state.sessions.tracker(principal).snapshot()}
 
+    # -- models: per-role chains + spend (v3 phase 0d) ------------------------
+    #
+    # Only `usage.*` touches settings.json here (set_role_chain validates, then
+    # writes under config's lock). The catalog is whitelisted field by field so
+    # a stray key in settings.json can never reach the browser. Probing costs
+    # money, so it stays a CLI action: nothing here calls usage.probe.
+
+    _CATALOG_FIELDS = ("as_of", "price", "context", "max_tools", "tool_calling",
+                       "verified_at", "streaming", "opaque_replay")
+
+    def _public_catalog() -> dict[str, Any]:
+        from . import usage
+
+        out: dict[str, Any] = {}
+        for key, entry in usage.catalog().items():
+            row = {f: entry.get(f) for f in _CATALOG_FIELDS if f in entry}
+            if row.get("tool_calling") not in usage.TOOL_STATES:
+                row["tool_calling"] = "untested"
+            probe = entry.get("probe")
+            if isinstance(probe, dict):
+                row["probe"] = {f: probe.get(f) for f in ("ok", "at", "step", "error", "latency_ms")
+                                if f in probe}
+            out[key] = row
+        return out
+
+    def _known_roles() -> list[str]:
+        from . import llm
+        from .agents import state as agent_state
+
+        roles = list(llm.ROLES)
+        try:
+            for a in agent_state.agent_list().get("agents", []):
+                if a.get("role") == "sub":
+                    roles.append(f"worker:{a['name']}")
+        except Exception:
+            pass                      # a broken profile must not break the pane
+        configured = config.get("models.roles") or {}
+        for name in (configured if isinstance(configured, dict) else {}):
+            if str(name) not in roles:
+                roles.append(str(name))   # shown so a stale one can be removed
+        return roles
+
+    @app.get("/api/models", dependencies=auth)
+    def api_models() -> dict[str, Any]:
+        from . import llm, usage
+
+        facade = llm.client()
+        configured = config.get("models.roles") or {}
+        chains = {
+            str(r): [str(e) for e in c]
+            for r, c in (configured.items() if isinstance(configured, dict) else [])
+            if isinstance(c, list)
+        }
+        return {
+            "catalog": _public_catalog(),
+            "roles": _known_roles(),
+            "chains": chains,
+            "in_use": usage.models_in_use(facade),
+            "warnings": usage.doctor_warnings(facade),
+            "agent_roles": [r for r in _known_roles() if usage.is_agent_role(r)],
+        }
+
+    @app.put("/api/models/roles/{role:path}", dependencies=auth)
+    async def api_models_role(role: str, request: Request) -> Any:
+        from . import llm, usage
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict) or not isinstance(body.get("chain"), list):
+            return JSONResponse({"detail": "Expected {\"chain\": [\"provider:model\", ...]}"},
+                                status_code=400)
+        chain = body["chain"]
+        if not llm.valid_role(role):
+            return JSONResponse({"detail": f"unknown role '{role}'", "reasons": [f"unknown role '{role}'"]},
+                                status_code=400)
+        if chain:
+            reasons = usage.validate_role_setting(role, chain)
+            if reasons:
+                return JSONResponse({"detail": "; ".join(reasons), "reasons": reasons},
+                                    status_code=400)
+        try:
+            usage.set_role_chain(role, chain or None)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc), "reasons": [str(exc)]}, status_code=400)
+        audit.record("web.models_role_set", role=role, chain=[str(e) for e in chain], by="web")
+        return {"ok": True, "role": role, "chain": [str(e).strip() for e in chain]}
+
+    @app.get("/api/usage", dependencies=auth)
+    def api_usage(days: str = "7") -> Any:
+        from . import usage
+
+        try:
+            n = float(days)
+        except ValueError:
+            n = -1.0
+        if not (0 < n <= 365):
+            return JSONResponse({"detail": "days must be a number between 0 and 365"},
+                                status_code=400)
+        return {"days": n, "rows": usage.summary(n)}
+
     # -- background sub-agent tasks (contract for the web client) -------------
     #
     #   GET  /api/tasks?status=&id=   {"tasks": [{id, agent, task, status, step,

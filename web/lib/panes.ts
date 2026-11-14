@@ -19,7 +19,8 @@ export type ModuleId =
   | "brain"
   | "activity"
   | "settings"
-  | "proposals";
+  | "proposals"
+  | "models";
 
 export interface ModuleInfo {
   id: ModuleId;
@@ -43,6 +44,7 @@ export const MODULES: ModuleInfo[] = [
   { id: "schedule", label: "Jobs", icon: "schedule", aliases: ["jobs", "scheduled"] },
   { id: "phones", label: "Phones", icon: "phones", aliases: ["android", "pair"] },
   { id: "proposals", label: "Proposals", icon: "proposals", aliases: ["suggestions"] },
+  { id: "models", label: "Models", icon: "models", aliases: ["spend", "usage", "cost"] },
   { id: "brain", label: "Memory", icon: "brain", aliases: ["memory", "brain"] },
   { id: "activity", label: "Audit", icon: "activity", aliases: ["audit", "activity", "log"] },
   { id: "settings", label: "Settings", icon: "settings", aliases: ["policy", "confirmation"] },

@@ -86,6 +86,11 @@ Spec: `kb/design/kravein-v2-ui.md`. No sidebar: HUD bar, constellation, transmis
 
 
 
+## Models pane + spend (#238, v3 phase 0d)
+- **API (all token-gated, `server.py`):** `GET /api/models` → `{catalog (whitelisted fields), roles (llm.ROLES + worker:<sub-agent> + stale configured ones), agent_roles, chains, in_use, warnings}` · `PUT /api/models/roles/{role:path}` body `{chain:[...]}`; `[]` removes the role; 400 with `{detail, reasons}` for a bad role/body/`validate_role_setting` failure; audit `web.models_role_set` · `GET /api/usage?days=N` (0 < N ≤ 365, else 400) → `{days, rows}` from `usage.summary`. Only `usage.*` writes settings; probing is CLI-only (costs money).
+- **UI:** `components/ModelsView.tsx` (dock module `models`, aliases spend/usage/cost) · pure logic `lib/models.ts` (`pickerOptions`: for an agent role only slot 0 is restricted to `verified`, disabled options carry the reason; chain edit helpers; `parseUsage` keeps unknown cost as `null` → "—", never 0). No optimistic state: a draft is saved only on a 200, `busy` is cleared in `finally`. Tests `lib/models.test.ts`, `tests/web/test_models_api.py`.
+- `npm test` (`node --test lib/`) fails on Node 22.23 (directory arg); run `node --test lib/*.test.ts`.
+
 ## Gotchas
 - **`backdrop-filter` needs the unprefixed property alone in the source.** Writing both `backdrop-filter` and `-webkit-backdrop-filter` made the CSS minifier (lightningcss) emit only the `-webkit-` form, which Chrome reports as `none`: no glass blur anywhere. Write `backdrop-filter` only; check the built CSS (`grep -o 'backdrop-filter:[^;}]*' out/_next/static/chunks/*.css`) or `getComputedStyle(el).backdropFilter`.
 - **Phone width (<640px, Android WebView):** the dock becomes a bottom bar, panes become bottom sheets above it and the constellation becomes `AgentStrip`. Touch targets are enforced by one `@media (max-width: 639px)` rule in `globals.css` (min 40px on buttons/inputs), not per component. `layout.tsx` sets `interactiveWidget: "resizes-content"` so the on-screen keyboard shrinks the layout instead of covering the composer. Desktop is unchanged above the breakpoint.

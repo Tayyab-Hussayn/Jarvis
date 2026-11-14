@@ -31,6 +31,7 @@ import { FilesView } from "@/components/FilesView";
 import { HabitsView } from "@/components/HabitsView";
 import { JobsView } from "@/components/JobsView";
 import { Palette, type PaletteCommand } from "@/components/Palette";
+import { ModelsView } from "@/components/ModelsView";
 import { PhonesView } from "@/components/PhonesView";
 import { ProposalsView } from "@/components/ProposalsView";
 import { ScreenView } from "@/components/ScreenView";
@@ -322,6 +323,7 @@ export default function Page() {
       habits: <HabitsView run={run} routineEvents={routineEvents} />,
       schedule: <JobsView run={run} jobEvents={jobEvents} />,
       phones: <PhonesView />,
+      models: <ModelsView />,
       brain: <BrainView run={run} />,
       activity: <ActivityView />,
       settings: <SettingsView policy={policy} />,
