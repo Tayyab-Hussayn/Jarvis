@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Any
 
-from . import audit, config, registry
+from . import audit, config, registry, runtime
 from .agent import Agent, make_agent
 from .llm import client
 from .platform import detect
@@ -356,7 +356,7 @@ class Repl:
                 continue
 
             try:
-                turn = self.agent.ask(line)
+                turn = runtime.ask(self.agent, line, trigger="repl")
             except KeyboardInterrupt:
                 print(dim("\n  interrupted"))
                 continue
@@ -814,7 +814,7 @@ def main(argv: list[str] | None = None) -> int:
 
         confirmer = _auto_yes if args.yes else terminal_confirmer
         agent = make_agent(source="cli-ask", confirmer=confirmer)
-        turn = agent.ask(" ".join(args.text))
+        turn = runtime.ask(agent, " ".join(args.text), trigger="ask")
         if turn.reply:
             print(turn.reply)
         if turn.error:

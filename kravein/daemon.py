@@ -89,12 +89,12 @@ class _Server(socketserver.ThreadingUnixStreamServer):
     def _agent_for(self, session: str) -> Agent:
         with self._agents_lock:
             if session not in self._agents:
-                self._agents[session] = Agent(
-                    source=f"daemon:{session}",
-                    # No TTY, so no confirmer: destructive calls need an
-                    # explicit confirm flag in the request instead.
-                    confirmer=None,
-                )
+                from . import runtime
+
+                # No TTY, so no confirmer: the read-mostly unattended profile,
+                # and a card parks the run (#247) unless the request carries
+                # the client's explicit confirm flag.
+                self._agents[session] = runtime.unattended_agent(source=f"daemon:{session}")
             return self._agents[session]
 
     def dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -152,17 +152,25 @@ class _Server(socketserver.ThreadingUnixStreamServer):
             session = str(request.get("session", "default"))
             agent = self._agent_for(session)
 
-            # A caller can pre-approve destructive work for this one request.
+            # A caller can pre-approve destructive work for this one request
+            # (the client's explicit flag, never the model's). Otherwise the
+            # run is unattended: a card parks it for the owner (#247).
+            from . import runtime
+
             if request.get("confirm"):
                 agent.confirmer = _preapproved
+                turn = runtime.submit(runtime.Run(source=agent.source, text=text, agent=agent,
+                                                  attended=True, trigger="daemon:confirmed"))
             else:
-                agent.confirmer = None
-
-            turn = agent.ask(text)
+                turn = runtime.submit(runtime.Run(source=agent.source, text=text, agent=agent,
+                                                  attended=False, trigger="daemon"))
             return {
-                "ok": turn.ok,
+                "ok": turn.status in ("done", "partial"),
                 "reply": turn.reply,
-                "error": turn.error,
+                "error": turn.error or ("" if turn.status in ("done", "partial")
+                                        else f"the run ended {turn.status}"),
+                "status": turn.status,
+                "run": turn.run_id,
                 "tools": turn.tool_calls,
                 "iterations": turn.iterations,
             }
@@ -202,6 +210,9 @@ def serve(socket_path: str | None = None) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     server = _Server(path)
+    from . import runtime
+
+    runtime.start()           # runs left mid-step by a dead process end `failed`
     skills = len(registry.all_skills())
     audit.record("daemon.start", socket=str(path), skills=skills)
     print(f"Kravein daemon listening on {path} ({skills} skills).")

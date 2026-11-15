@@ -789,6 +789,8 @@ def dispatch(
     call = safety.CallContext(
         tool=entry.name, scope=_scope_values(entry, cleaned),
         outward=entry.outward, origin=entry.origin,
+        args=json.dumps({k: v for k, v in cleaned.items() if k not in _INJECTED_PARAMS},
+                        sort_keys=True, default=str),
     )
 
     with audit.action(entry.name, params, source=source) as ctx:

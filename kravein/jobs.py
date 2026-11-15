@@ -621,55 +621,35 @@ def run_job(job: dict[str, Any]) -> tuple[bool, str, str]:
         return proposals.run_daily_review(job)
 
     try:
-        from .agent import Agent
+        from . import runtime
     except Exception as exc:
-        return False, "", f"could not load the agent: {exc}"
+        return False, "", f"could not load the runtime: {exc}"
 
-    # A refused confirmation does not make the *turn* fail — the agent
-    # answers, explaining it could not do the thing. That reads as success,
-    # which is the wrong signal for a job the user is not watching: the whole
-    # point is that they find out it did not happen. Watch the tool results
-    # for a refusal and report it as a failure.
-    refusals: list[str] = []
-
-    def watch(kind: str, text: str, data: dict) -> None:
-        if kind != "tool_result":
-            return
-        lowered = (text or "").lower()
-        if "no way to ask" in lowered or "needs confirmation" in lowered:
-            refusals.append(str(data.get("name") or "a tool"))
-
+    # Unattended (#247): the read-mostly unattended profile, and a card parks
+    # the run for the owner instead of failing it. Nothing approves itself.
+    # Owner ruling D4: the job creator's GUARDED grants still apply; a job made
+    # by a tainted run starts tainted (#237). The outcome is the run's status,
+    # decided in code, not a guess from the words in a tool result.
+    taint = job.get("taint")
     try:
-        # A scheduled turn runs unattended, so it gets the daemon's policy:
-        # no confirmer at all. `safety.enforce()` then refuses anything
-        # destructive instead of approving it. A job must never be able to
-        # authorise its own dangerous action just because nobody is watching.
-        agent = Agent(
-            source=f"schedule:{job.get('id', '?')}",
-            confirmer=None,
-            observer=watch,
-        )
-        # Owner ruling D4: the job's creator's GUARDED grants apply here too.
-        # Without a grant the action is still refused (no confirmer). A job
-        # created in a tainted run starts tainted (#237).
-        agent.grant_principal = str(job.get("principal") or "")
-        taint = job.get("taint")
-        agent.initial_taint = frozenset(str(s) for s in taint) if isinstance(taint, list) else frozenset()
-        turn = agent.ask(prompt)
+        turn = runtime.submit(runtime.Run(
+            source=f"schedule:{job.get('id', '?')}", text=prompt, attended=False,
+            trigger=f"job:{job.get('id', '?')}",
+            grant_principal=str(job.get("principal") or ""),
+            taint=tuple(str(s) for s in taint) if isinstance(taint, list) else (),
+        ))
     except Exception as exc:
         return False, "", f"{type(exc).__name__}: {exc}"
 
-    if turn.error:
-        return False, turn.reply or "", turn.error
-
-    if refusals:
-        which = ", ".join(sorted(set(refusals)))
+    if turn.status in ("done", "partial"):
+        return True, turn.reply or "(no reply)", ""
+    if turn.status == "waiting_approval":
+        what = ((turn.parked or {}).get("action") or "an action")[:200]
         return False, turn.reply or "", (
-            f"needed confirmation for {which} and nobody was there to give it, "
-            f"so nothing was changed. {(turn.reply or '')[:200]}"
+            f"waiting for your approval: {what}. Nothing was changed; approve it in "
+            "Proposals and the job carries on."
         )
-
-    return True, turn.reply or "(no reply)", ""
+    return False, turn.reply or "", turn.error or f"the run ended {turn.status}"
 
 
 def deliver(job: dict[str, Any], text: str, *, failed: bool = False) -> None:
