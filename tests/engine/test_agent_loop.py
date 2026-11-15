@@ -71,8 +71,8 @@ def test_agent_stops_at_the_iteration_budget():
     )
     agent, _ = _agent_with([looping], confirmer=lambda *_: True)
     turn = agent.ask("loop forever")
-    assert not turn.ok
-    assert "Stopped after" in turn.error
+    # #249: the cap degrades to a wrap-up answer instead of a hard error.
+    assert turn.ok and turn.budget_exhausted and turn.reply
 
 
 def test_agent_reset_clears_history():

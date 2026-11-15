@@ -157,10 +157,11 @@ def test_the_model_sees_its_plan_on_the_next_round():
 
 # -- the budget ------------------------------------------------------------------
 
-def test_top_level_budget_still_ends_with_the_old_error(monkeypatch):
+def test_top_level_budget_now_degrades_to_a_wrap_up(monkeypatch):
+    # #249: the top-level loop no longer ends in "Stopped after N tool rounds".
     agent, _ = _agent_with([call("update_plan", items=ITEMS)], profile="system-ops", max_rounds=2)
     turn = agent.ask("go")
-    assert "Stopped after 2 tool rounds" in turn.error and not turn.budget_exhausted
+    assert not turn.error and turn.budget_exhausted == "used all 2 tool rounds" and turn.reply
 
 
 def test_defaults():

@@ -387,7 +387,9 @@ def test_escalation_offers_only_delegate_after_n_rounds(audit_file, monkeypatch,
     # The model named another tool anyway: refused in dispatch, not just hidden.
     tool_msgs = [m["content"] for m in agent.messages if m["role"] == "tool"]
     assert "not available to this agent" in tool_msgs[3]
-    assert _zz_skills["quick"] == 3
+    # #249: the 3rd identical call was stopped by the loop guard, not run.
+    assert tool_msgs[2].startswith("Not run: you already called zz_quick")
+    assert _zz_skills["quick"] == 2
     assert [r for r in records(audit_file) if r["event"] == "agent.escalated"]
     assert turn.reply == "done"                                            # a reply still ends it
 
