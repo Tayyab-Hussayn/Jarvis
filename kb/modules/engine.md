@@ -7,7 +7,7 @@ updated: 2026-11-14
 # engine
 
 ## Code map
-- `agent.py` loop, cancel, tool routing hooks · `llm.py`/`cline.py` providers, failover, breaker, model roles + `Reply.usage` (#228), `EndpointProvider` + `AnthropicProvider` (#231) · `mcp/` MCP client: config, pins, manager, bridge, admin, transport (#243) · `plugins/` plugin loader: manifest, state, loader, admin (#245) · `usage.py` per-call usage ledger + `kravein usage` report (#228), model catalog / probe / role validation / doctor checks + `kravein models` (#234) · `registry.py` `@skill` + `dispatch` · `safety.py` enforce, denial memory · `audit.py` · `config.py` · `toolselect.py`
+- `runtime.py` the one entry point: `submit`/`ask`, Agent factories, runs table, Parker/resume (#247) · `agent.py` loop, cancel, tool routing hooks · `llm.py`/`cline.py` providers, failover, breaker, model roles + `Reply.usage` (#228), `EndpointProvider` + `AnthropicProvider` (#231) · `mcp/` MCP client: config, pins, manager, bridge, admin, transport (#243) · `plugins/` plugin loader: manifest, state, loader, admin (#245) · `usage.py` per-call usage ledger + `kravein usage` report (#228), model catalog / probe / role validation / doctor checks + `kravein models` (#234) · `registry.py` `@skill` + `dispatch` · `safety.py` enforce, denial memory · `audit.py` · `config.py` · `toolselect.py`
 - `jobs.py`/`routines.py` scheduler (tick via `python -m kravein.jobs tick`) · `voice.py`/`live.py` (audio source/sink: `SoundDevice*`, `NetworkAudio`) · `whatsapp_service.py` · `cli.py`/`daemon.py` · `discovery.py` (address pick/watch + mDNS) · `agents/` (#132: `profile.py` SKILL.md loader + `AgentProfile`, `history.py` SQLite per-(profile, thread) history; `delegate.py` the `delegate` skill (#138); `tasks.py` background sub-agent tasks (#158) · `proposals.py` proposals queue + `propose`/`decide_proposal` + daily review (#143); `state.py` agent-state tracker + `/api/agents` list (#146: one `StateTracker` per principal in `SessionStore.tracker()`, fed by the agent observer — kind `agent_state` phases turn_start/llm_start/turn_end from `Agent.ask`, `delegate_end` from `delegate`, plus `tool`/`tool_result` and `Session.on_wait` for cards; frames `{"t":"agent_state", agent, state idle|thinking|working|waiting|done|failed|declined, task?, tool?, delegation?, since, report?{outcome,summary}}` go only to that principal's sessions; `GET /api/agents`, `GET /api/agents/state` -> `{states:[...]}`; snapshot also in the ws prelude on connect/resume; delegate outcomes partial->failed, needs-approval->declined, the report keeps the real outcome; tool_call/tool_result/thinking frames carry `agent`/`delegation` for sub-agent work); `orchestrator/` + `system-ops/` profiles; `_example/` fixture profile) · `service.py` (`kravein start|stop|restart|status|pair|phones|open|logs`: `systemctl --user` on `kravein-web.service` + the server's HTTP API with the owner token, TLS pinned to the on-disk cert)
 
 ## Verify
@@ -56,6 +56,29 @@ updated: 2026-11-14
 The example in `tests/engine/fixtures/plugins/example/` is a complete plugin.
 
 ## Public interfaces
+- Runtime, durable runs, parked approvals (#247, v3 phase 2a), `kravein/runtime.py`:
+  - **One entry point.** `submit(Run(source, text, principal, profile, attended, trigger, thread_id, confirmer, observer, stop, agent, allowed, grant_principal, taint)) -> Turn`, with `Turn.run_id`, `Turn.status` and `Turn.parked` set.
+    - `ask(agent, text, stop, trigger=, allowed=)` is the per-turn call for a session's own agent. The server's three turn paths, the CLI REPL / `ask` and local voice use it; jobs, the daemon and the daily review use `submit`.
+    - **Factories** (the only `Agent(...)` constructions; an AST test fails on any other): `new_agent(**kw)`, `session_agent` (the old `make_agent` with the `agents.orchestrator` switch), `voice_agent`, `unattended_agent` (profile `orchestrator-unattended`, no confirmer). `agent.make_agent` / `make_voice_agent` / `one_shot` are thin wrappers; delegate children and `models probe` call `new_agent`.
+  - **`runs` table** (agents.db): `id, source, principal, grant_owner, profile, profile_spec (the exact profile, JSON), attended, trigger, status, pid, created/started/ended, text, taint, steps (tool names, ≤40), result, error, parked (JSON), transcript (parked runs), proposal, executed_key`.
+    - Status from code: parked → `waiting_approval`; cancelled; error → `failed`; `DECLINED_REPLY` → `declined`; `budget_exhausted` → `partial`; else `done`.
+    - `get`, `listing`, `fail_orphans()` (a `running` run whose pid is not a live kravein process → `failed`, never re-run), `sweep()` (declined / expired / older than `agents.approval_ttl_hours` (24) → `declined`, and the proposal → `expired`), `start()` (once per hosting process: server lifespan, daemon).
+  - **Profile `orchestrator-unattended`:** read-mostly. Status, disk, network, battery, processes/services/logs, file reads, list_jobs, routine_status, recall, weather, web_search, fetch_page, list_windows/apps, phone_status, send_notification, speak, update_plan, propose, run_command. No schedule/manage_job, no delegate, no writes.
+  - **Park.** An unattended run's confirmer is a `Parker` (`attended()` False, always answers no).
+    - The first card it sees is recorded from `safety.current_call()` (`CallContext.args` = the call's exact arguments, set by `dispatch`) and `safety.current_card()` (`{danger, no_auto, targets}`, set by `enforce` while a confirmer is asked). The record holds skill, args, action, detail, danger, no_auto, targets, requested_at, tool_call_id, idem_key.
+    - `end_turn_check` stops the run. The transcript is stored, and `proposals.create(kind="approval", task=<run id>, risk="major")` files the approval. If the queue refuses, the run ends `failed`, honestly.
+    - A GUARDED grant answers before any confirmer (D4).
+  - **Resume.** `resume(run_id, owner_confirmer=None, decided_by=)` runs once:
+    - The claim is one `UPDATE … WHERE status='waiting_approval'` (+ `executed_key`). A double approval, a restart or a race returns `None`.
+    - It rebuilds the agent from `profile_spec` (never a profile by name, which could widen the tools) and the stored transcript (signatures restored).
+    - It replays `dispatch(skill, args)` under `ResumeConfirmer(parked, fallback)`, which approves exactly one card with the same tool, args, action and danger, **never** CRITICAL or `no_auto`. Anything else goes to the owner's live confirmer or parks again.
+    - The skill re-runs `safety`, so a hard refusal or a changed target refuses. The real result goes into the transcript, the run continues once (`CONTINUE_PROMPT`), and the proposal is finished.
+  - **Proposals:**
+    - kind `approval` (`proposals.RUNTIME_KINDS`) is filed only by the runtime, and `propose` refuses it;
+    - `decide` → `runtime.proposal_decided` (a decline ends the run);
+    - `decide_proposal` resumes in-session under that session's confirmer; the server's decide endpoint resumes off-loop with the principal's live session confirmer (or parks again).
+  - **Jobs:** `run_job` → `submit(Run(attended=False, trigger=job:<id>, grant_principal, taint))`. ok = `done`/`partial`; `waiting_approval` → "waiting for your approval: …". The substring refusal detector is gone (tested).
+  - **Daemon:** sessions use `unattended_agent`; a request's explicit `confirm: true` keeps the old pre-approved path (attended run); otherwise the request parks. The reply carries `status` and `run`.
 - Plugins (#245, v3 phase 1c; D10 easy, D9 no hooks), `kravein/plugins/`:
   - **`manifest.py`**:
     - `plugins_dir()` = `DATA_DIR/plugins`; `read_manifest` (strict; every tool declared with a danger in SAFE..CRITICAL).

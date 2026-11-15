@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import audit, config
+from . import audit, config, runtime
 from .agent import Agent, _normalize_observer, make_agent
 from .platform import mic, stt, tts
 from .safety import Confirmer
@@ -474,7 +474,7 @@ class VoiceSession:
 
                 self._emit("thinking", command)
                 try:
-                    turn = self.agent.ask(command)
+                    turn = runtime.ask(self.agent, command, trigger="voice")
                 except Exception as exc:
                     self._emit("error", str(exc))
                     self.say("Something went wrong handling that.", blocking=True)

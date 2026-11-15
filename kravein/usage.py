@@ -476,11 +476,11 @@ def _probe_surface() -> tuple[str, list[dict[str, Any]]]:
     """The orchestrator profile's real system prompt and ``tools[]``, so the
     probe measures what an agent turn sends ("benchmark with the real tool
     schema", hard-won-llm-agent)."""
-    from .agent import ORCHESTRATOR, Agent
-    from . import registry
+    from .agent import ORCHESTRATOR
+    from . import registry, runtime
 
     registry.load_skills()
-    agent = Agent(source="probe", profile=ORCHESTRATOR)
+    agent = runtime.new_agent(source="probe", profile=ORCHESTRATOR)
     return agent.system_prompt(), registry.tool_declarations(names=agent._allowed)
 
 

@@ -504,7 +504,7 @@ def test_jobs_carry_the_creators_owner_and_taint(monkeypatch):
         def __init__(self, **kw):
             pass
 
-        def ask(self, prompt):
+        def ask(self, prompt, stop=None, **kw):     # the Runtime passes the stop flag (#247)
             captured.update(principal=self.grant_principal, taint=set(self.initial_taint))
             from kravein.agent import Turn
             return Turn(reply="done")

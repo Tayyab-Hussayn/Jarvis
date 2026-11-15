@@ -28,6 +28,7 @@ forbidden no matter what the browser answers.
 # misread as a required query parameter and the route 422s.
 
 import asyncio
+import functools
 import collections
 import contextlib
 import ipaddress
@@ -36,7 +37,7 @@ import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from . import audit, config, discovery, events, phone, registry, safety, webauth
+from . import audit, config, discovery, events, phone, registry, runtime, safety, webauth
 from .agent import Agent, make_agent
 from .agents import proposals, tasks
 from .agents.history import principal_thread_id
@@ -116,6 +117,7 @@ def create_app(token: str | None = None) -> Any:
         tasks.manager.reset()
         with contextlib.suppress(Exception):
             tasks.manager.fail_orphans()
+        runtime.start()   # #247: runs left mid-step by a dead process end `failed`
         tasks.configure(_TaskHost(_app.state.sessions))
         try:
             yield
@@ -282,6 +284,15 @@ def create_app(token: str | None = None) -> Any:
             ]
             if candidates:
                 _run_approved(candidates[-1], p)
+        if p.get("status") == "approved" and p.get("kind") == "approval":
+            # A parked run (#247): resume it once, off the event loop. Any other
+            # card it raises goes to this owner's live session, or parks again.
+            live = [h for h in app.state.sessions.items()
+                    if h.principal == principal and h.client is not None]
+            confirm = live[-1].session.confirm if live else None
+            asyncio.get_running_loop().run_in_executor(
+                None, functools.partial(runtime.resume, p["task"], owner_confirmer=confirm,
+                                        decided_by=label))
         return {"proposal": proposals.get(pid) or p}
 
     # -- agents (the v2 UI's constellation) -----------------------------------
@@ -804,7 +815,7 @@ def create_app(token: str | None = None) -> Any:
             stop_turn.clear()
             session.emit("turn_start", id=turn_id)
             try:
-                turn = await asyncio.to_thread(agent.ask, text, stop_turn)
+                turn = await asyncio.to_thread(runtime.ask, agent, text, stop_turn, trigger="chat")
                 session.emit(
                     "turn_end", id=turn_id,
                     iterations=turn.iterations,
@@ -1401,7 +1412,8 @@ def _run_approved(held: Any, p: dict) -> bool:
         # it must block until the real report (a background handle is not one).
         held.agent.delegate_wait = True
         try:
-            turn = await asyncio.to_thread(held.agent.ask, text, held.stop_turn)
+            turn = await asyncio.to_thread(runtime.ask, held.agent, text, held.stop_turn,
+                                          trigger=f"proposal:{pid}")
             proposals.finish(
                 pid, not turn.error and not turn.cancelled, turn.reply or turn.error or ""
             )
@@ -1471,7 +1483,8 @@ def _run_report_turn(held: Any, rows: list) -> bool:
         session.emit("turn_start", id=turn_id)
         try:
             turn = await asyncio.to_thread(
-                held.agent.ask, text, held.stop_turn, allowed=frozenset({"task_status"}))
+                runtime.ask, held.agent, text, held.stop_turn, allowed=frozenset({"task_status"}),
+                trigger="task-report")
             session.emit(
                 "turn_end", id=turn_id, iterations=turn.iterations,
                 tool_calls=turn.tool_calls, error=turn.error, cancelled=turn.cancelled,

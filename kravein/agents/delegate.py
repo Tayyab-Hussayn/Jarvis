@@ -250,7 +250,7 @@ def run_child(name: str, task: str, context: str, parent: Parent, did: str,
     """
     try:
         sub_profile = load_profile(name)
-        from ..agent import Agent
+        from ..runtime import new_agent   # every Agent is built by the Runtime (#247)
 
         limit = sub_profile.report_max_chars or int(config.get("agents.report_max_chars", 1500))
         if timeout is None:
@@ -291,7 +291,7 @@ def run_child(name: str, task: str, context: str, parent: Parent, did: str,
                 data["call_id"] = f"{did}:{data['call_id']}"
             sink(kind, f"[{name}] {text}" if text else "", data)
 
-        child = Agent(
+        child = new_agent(
             source=parent.source,
             profile=sub_profile,
             thread_id=f"d:{parent.thread_id}" if parent.thread_id else None,

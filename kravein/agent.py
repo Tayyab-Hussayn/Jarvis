@@ -133,6 +133,11 @@ class Turn:
     # Why a delegated run ran out of rounds or tokens ("" = it did not). Set only
     # when `Agent.partial_on_budget` is on; the top-level loop still sets `error`.
     budget_exhausted: str = ""
+    # Set by runtime.Runtime.submit (#247): the durable run and its outcome
+    # (done|partial|failed|declined|cancelled|waiting_approval), from code.
+    run_id: str = ""
+    status: str = ""
+    parked: dict | None = None
 
     @property
     def ok(self) -> bool:
@@ -997,44 +1002,29 @@ class Agent:
 
 
 def one_shot(text: str, *, source: str = "cli", confirmer: Confirmer | None = None) -> str:
-    """Run a single request with no persistent history."""
-    agent = Agent(source=source, confirmer=confirmer)
-    turn = agent.ask(text)
+    """Run a single request with no persistent history (through the Runtime)."""
+    from . import runtime
+
+    turn = runtime.submit(runtime.Run(source=source, text=text, confirmer=confirmer,
+                                      attended=confirmer is not None, trigger="one-shot"))
     return turn.reply or turn.error
 
 
 def make_agent(*, source: str, thread_id: str | None = None, **kwargs: Any) -> Agent:
-    """The Agent for a transport the owner talks to (web, voice, CLI).
+    """The Agent for a transport the owner talks to: see ``runtime.session_agent``
+    (#247 moved every Agent construction into the Runtime)."""
+    from . import runtime
 
-    ``agents.orchestrator`` (default off) switches these to the Orchestrator
-    profile. Off, this is exactly ``Agent(source=...)`` as before. Jobs, the
-    daemon and WhatsApp do not use it: unattended runs keep their old shape.
-    """
-    if config.get("agents.orchestrator", False):
-        try:
-            return Agent(source=source, thread_id=thread_id, profile=ORCHESTRATOR, **kwargs)
-        except ProfileError as exc:
-            # A broken profile must not take the assistant down; fall back to
-            # the all-tools agent and say so.
-            audit.record("agent.orchestrator_unavailable", error=str(exc))
-    return Agent(source=source, thread_id=thread_id, **kwargs)
+    return runtime.session_agent(source=source, thread_id=thread_id, **kwargs)
 
 
 def make_voice_agent(*, observer: Observer | None, thread_id: str | None) -> Agent | None:
     """The Orchestrator context a Live voice session runs as, or ``None``.
 
     Gemini Live is the model, so this agent never calls ``ask``: it supplies the
-    system prompt, the tool set (``_allowed``), the ``delegate`` context and the
-    persistent thread. ``None`` (switch off, or a broken profile) means the
-    session keeps its old all-tools behaviour exactly. ``observer`` is passed
-    by the transport so voice activity reaches the state tracker without
-    emitting the text UI per-turn ``tool_call`` frames.
+    system prompt, the tool set, the ``delegate`` context and the persistent
+    thread. See ``runtime.voice_agent``.
     """
-    if not config.get("agents.orchestrator", False):
-        return None
-    try:
-        return Agent(source="voice-live", observer=observer, thread_id=thread_id,
-                     profile=ORCHESTRATOR)
-    except Exception as exc:                  # voice must still start, as before
-        audit.record("agent.orchestrator_unavailable", error=str(exc), at="voice")
-        return None
+    from . import runtime
+
+    return runtime.voice_agent(observer=observer, thread_id=thread_id)

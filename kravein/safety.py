@@ -670,6 +670,16 @@ def classify_command(
         )
         return verdict
 
+    # The agents database (#247) holds parked actions and their approvals: a
+    # command that rewrites it could forge what waits for the owner.
+    if "agents.db" in text and not _plain_read(text) and any(
+            _mentions_file(text, Path(config.STATE_DIR) / n)
+            for n in ("agents.db", "agents.db-wal", "agents.db-shm", "agents.db-journal")):
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = "Kravein's agents database holds runs waiting for the owner"
+        return verdict
+
     if "mcp.json" in text and _mentions_mcp_config(text) and not _plain_read(text):
         verdict.blocked = True
         verdict.danger = Danger.CRITICAL
@@ -1878,6 +1888,9 @@ class CallContext:
     scope: tuple[tuple[str, str], ...]   # (arg name, canonical JSON value), sorted
     outward: bool = False
     origin: str = ""                     # "mcp:<server>" / "plugin:<id>"; "" = core
+    # The call's own arguments as canonical JSON (#247): what a parked approval
+    # replays, exactly, when the owner approves it later.
+    args: str = "{}"
 
 
 def _call_stack() -> list[CallContext]:
@@ -1906,6 +1919,11 @@ class call_context:
 def current_call() -> CallContext | None:
     stack = _call_stack()
     return stack[-1] if stack else None
+
+
+def current_card() -> dict | None:
+    """While a confirmer is being asked: ``{danger, no_auto, targets}``."""
+    return getattr(_local, "card", None)
 
 
 def _memory() -> TurnMemory:
@@ -2647,6 +2665,10 @@ def enforce(
         grant_signature(offered_grant) if offered_grant is not None else "")
     _local.always_signature = offered
     _local.always_grant = offered_grant
+    # What the card is, for a confirmer that must decide by more than the
+    # text (#247: a resumed parked run must never answer a secret read or an
+    # owner-only card on the owner's behalf).
+    _local.card = {"danger": verdict.danger, "no_auto": verdict.no_auto, "targets": sorted(keys)}
     try:
         answer = confirmer(action_desc, detail, verdict.danger)
         # A str answer counts only if it is exactly "always"; any other string
@@ -2662,6 +2684,7 @@ def enforce(
     finally:
         _local.always_signature = ""
         _local.always_grant = None
+        _local.card = None
 
     audit.record(
         "safety.confirm_result",

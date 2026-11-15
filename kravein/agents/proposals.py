@@ -45,7 +45,10 @@ ORCHESTRATOR = "orchestrator"
 # safety.AUTO_SOURCES plus the phone's UI. NOT jobs, daemon or WhatsApp.
 OWNER_SOURCES = frozenset({"web", "web-panel", "phone", "voice", "voice-live", "cli", "cli-ask"})
 
-KINDS = ("delegate", "note", "capability")
+KINDS = ("delegate", "note", "capability", "approval")
+# `approval` (#247): an action an unattended run parked, waiting for the owner.
+# Filed only by kravein.runtime; `propose` can never create one.
+RUNTIME_KINDS = ("approval",)
 # Advice only: approving closes it, nothing starts. `capability` is a sub-agent
 # telling the owner about a missing tool or weakness.
 ADVICE_KINDS = ("note", "capability")
@@ -163,10 +166,14 @@ def sweep_expired(now: float | None = None) -> int:
     """Expire pending and never-started approved proposals past the TTL."""
     now = time.time() if now is None else now
     cutoff = now - _ttl_seconds()
+    # A parked action (#247) waits a day, not a week: the world it was asked in
+    # moves on. Same TTL as kravein.runtime, so the pane and the run agree.
+    approval_cutoff = now - max(60.0, float(config.get("agents.approval_ttl_hours", 24) or 24) * 3600.0)
     with _write_lock, closing(_connect()) as conn:
         ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM proposals WHERE status IN ('pending','approved') AND created_at < ?",
-            (cutoff,),
+            "SELECT id FROM proposals WHERE status IN ('pending','approved') AND "
+            "((kind != 'approval' AND created_at < ?) OR (kind = 'approval' AND created_at < ?))",
+            (cutoff, approval_cutoff),
         )]
         for pid in ids:
             conn.execute(
@@ -177,6 +184,11 @@ def sweep_expired(now: float | None = None) -> int:
     for pid in ids:
         audit.record("proposal.expired", id=pid)
         announce(pid)
+        p = get(pid)
+        if p is not None and p.get("kind") == "approval":
+            from .. import runtime
+
+            runtime.proposal_decided(p)          # its parked run ends `declined`
     return len(ids)
 
 
@@ -215,6 +227,10 @@ def create(
             raise ValueError(f"a delegate proposal needs agent, one of: {', '.join(names)}")
         if not task:
             raise ValueError("a delegate proposal needs a task")
+    elif kind == "approval":
+        if not task:
+            raise ValueError("an approval needs its run id")
+        agent = ""
     else:
         agent, task = "", ""
 
@@ -263,6 +279,12 @@ def decide(pid: str, decision: str, *, source: str, by: str = "") -> tuple[dict[
     p = get(pid) or {}
     if changed:
         audit.record("proposal.decided", id=pid, decision=new, by=by or source)
+        if p.get("kind") == "approval":
+            # A decline ends the parked run now; an approval is resumed by the
+            # caller, under the owner's own confirmer (kravein.runtime.resume).
+            from .. import runtime
+
+            runtime.proposal_decided(p)
         if new == "approved" and p.get("kind") in ADVICE_KINDS:
             # Advice only: nothing to run, so approving it just closes it.
             _transition(pid, ("approved",), "done", result="Acknowledged.")
@@ -404,6 +426,12 @@ def propose(
         risk: low or major. Use major for deleting, installing, spending or sending.
     """
     origin = ""
+    if (kind or "").strip().lower() in RUNTIME_KINDS:
+        # An approval is Kravein recording a parked action, never the model's
+        # own: a model filing one would be asking the owner to approve
+        # something no run actually stopped on.
+        audit.record("propose.refused", reason="runtime kind", kind=kind, source=_source)
+        return "Not proposed: kind 'approval' is filed only by Kravein when a run waits for you."
     if not _is_orchestrator(_context, "propose"):
         origin = _subagent_name(_context, "propose")
         if not origin:
@@ -479,7 +507,9 @@ def decide_proposal(id: str, decision: str, _source: str = "", _context: Any = N
         if current is None:
             return f"No proposal #{id}."
         what = (f"{current.get('agent')}: {current.get('task')}"
-                if current.get("kind") == "delegate" else "advice only")
+                if current.get("kind") == "delegate" else
+                "runs the action a background run is waiting on"
+                if current.get("kind") == "approval" else "advice only")
         verdict = Verdict(
             danger=Danger.CRITICAL,
             reasons=["starts work the Orchestrator proposed; only the owner may approve it"],
@@ -506,6 +536,16 @@ def decide_proposal(id: str, decision: str, _source: str = "", _context: Any = N
     if p.get("kind") == "note" or p.get("status") != "approved":
         return (f"Proposal #{p['id']} {p.get('status')}." if changed else
                 f"Proposal #{p['id']} was already {p.get('status')}; nothing more to do.")
+    if p.get("kind") == "approval":
+        # Resume the parked run here, under this session's confirmer: the
+        # action itself is re-checked by safety when it is replayed.
+        from .. import runtime
+        from ..safety import get_confirmer
+
+        turn = runtime.resume(p["task"], owner_confirmer=get_confirmer(), decided_by=_source)
+        if turn is None:
+            return f"Proposal #{p['id']}: that run was already handled or has expired."
+        return f"Approved; the run continued and ended {turn.status}. {turn.reply or turn.error}".strip()
     if claim(p["id"]) is None:
         return f"Proposal #{p['id']} was already started."
     # Run it here, on this thread and under this session's confirmer: exactly
@@ -568,18 +608,19 @@ def run_daily_review(job: dict[str, Any]) -> tuple[bool, str, str]:
     No confirmer, source ``schedule:<id>``: it can propose but not decide, and
     ``dispatch(allowed=)`` refuses any other tool the model tries.
     """
-    from ..agent import Agent
+    from .. import runtime
 
     started = time.time()
     source = f"schedule:{job.get('id', '?')}"
     try:
         base = load_profile(ORCHESTRATOR)
         profile = dataclasses.replace(base, tools=REVIEW_TOOLS)
-        turn = Agent(source=source, confirmer=None, profile=profile).ask(REVIEW_PROMPT)
+        turn = runtime.submit(runtime.Run(source=source, text=REVIEW_PROMPT, profile=profile,
+                                          attended=False, trigger=f"review:{job.get('id', '?')}"))
     except Exception as exc:
         return False, "", f"{type(exc).__name__}: {exc}"
-    if turn.error:
-        return False, turn.reply or "", turn.error
+    if turn.status not in ("done", "partial"):
+        return False, turn.reply or "", turn.error or f"the review ended {turn.status}"
     made = [p for p in listing() if p.get("created_by") == source and p["created_at"] >= int(started)]
     text = (f"Daily review: {len(made)} proposal(s) waiting for you."
             if made else f"Daily review: nothing needs attention. {turn.reply or ''}".strip())
