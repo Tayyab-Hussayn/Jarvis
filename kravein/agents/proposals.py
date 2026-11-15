@@ -166,10 +166,14 @@ def sweep_expired(now: float | None = None) -> int:
     """Expire pending and never-started approved proposals past the TTL."""
     now = time.time() if now is None else now
     cutoff = now - _ttl_seconds()
+    # A parked action (#247) waits a day, not a week: the world it was asked in
+    # moves on. Same TTL as kravein.runtime, so the pane and the run agree.
+    approval_cutoff = now - max(60.0, float(config.get("agents.approval_ttl_hours", 24) or 24) * 3600.0)
     with _write_lock, closing(_connect()) as conn:
         ids = [r["id"] for r in conn.execute(
-            "SELECT id FROM proposals WHERE status IN ('pending','approved') AND created_at < ?",
-            (cutoff,),
+            "SELECT id FROM proposals WHERE status IN ('pending','approved') AND "
+            "((kind != 'approval' AND created_at < ?) OR (kind = 'approval' AND created_at < ?))",
+            (cutoff, approval_cutoff),
         )]
         for pid in ids:
             conn.execute(
@@ -180,6 +184,11 @@ def sweep_expired(now: float | None = None) -> int:
     for pid in ids:
         audit.record("proposal.expired", id=pid)
         announce(pid)
+        p = get(pid)
+        if p is not None and p.get("kind") == "approval":
+            from .. import runtime
+
+            runtime.proposal_decided(p)          # its parked run ends `declined`
     return len(ids)
 
 

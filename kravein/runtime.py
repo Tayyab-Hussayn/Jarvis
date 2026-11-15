@@ -271,9 +271,12 @@ class ResumeConfirmer:
         ctx = safety.current_call()
         card = safety.current_card() or {}
         p = self.parked
+        # Targets too, not just the text: two windows can share a title, and an
+        # implicit target (the focused window) can change while the text stays.
         same = (not self.used and ctx is not None and ctx.tool == p["skill"]
                 and ctx.args == p["args"] and action == p["action"]
-                and safety.Danger(danger).name == p["danger"])
+                and safety.Danger(danger).name == p["danger"]
+                and sorted(card.get("targets") or []) == sorted(p.get("targets") or []))
         if same and safety.Danger(danger) < safety.Danger.CRITICAL and not card.get("no_auto"):
             self.used = True
             audit.record("run.resume_approved", skill=p["skill"], action=action[:300])
@@ -485,15 +488,28 @@ def resume(rid: str, *, owner_confirmer: Any = None, decided_by: str = ""):
     sweep()
     with closing(_connect()) as conn:
         row = conn.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
-    if row is None or row["status"] != "waiting_approval":
+    # (exactly-once rests on the status claim below; `executed_key` records
+    # which parked step a claim was for, for the audit and the run listing.)
+    if row is None:
+        return None
+    # Only the owner's decision unlocks a park: the run's own approval must be
+    # `approved`, whoever calls this (defence in depth for the one call that
+    # lets an unattended action run).
+    p = proposals.get(row["proposal"]) if row["proposal"] else None
+    if p is None or p.get("status") != "approved":
+        audit.record("run.resume_refused", run=rid, proposal=(p or {}).get("status", "none"))
         return None
     parked = json.loads(row["parked"] or "{}")
-    if not parked:
+    if row["status"] != "waiting_approval" or not parked:
+        # Approved but nothing can run (expired, declined, already resumed):
+        # close the approval so the owner does not see "approved" forever.
+        _finish_proposal(row["proposal"], False,
+                         "Nothing ran: the waiting action had already been handled or expired.")
         return None
     # Exactly once: one conditional UPDATE wins; the key records what ran.
     if not _claim(rid, "waiting_approval", "running", pid=os.getpid(),
                   executed_key=parked["idem_key"], started=time.time()):
-        audit.record("run.resume_lost_claim", run=rid)
+        audit.record("run.resume_lost_claim", run=rid)   # another caller runs it
         return None
     audit.record("run.resumed", run=rid, by=decided_by, skill=parked["skill"])
     run = Run(source=row["source"], text=row["text"], principal=row["principal"],
@@ -519,7 +535,11 @@ def resume(rid: str, *, owner_confirmer: Any = None, decided_by: str = ""):
         from . import registry
         from .safety import TurnMemory, confirmer_scope
 
-        with confirmer_scope(replay, TurnMemory(), principal=run.principal or None,
+        # The replay carries the run's taint (its job, its transcript), so an
+        # outward grant stays suspended exactly as it was when the run parked.
+        memory = TurnMemory()
+        memory.taint.update(agent._transcript_taint())
+        with confirmer_scope(replay, memory, principal=run.principal or None,
                              grant_principal=run.grant_principal or None):
             result = registry.dispatch(parked["skill"], json.loads(parked["args"]),
                                        source=run.source, allowed=agent._allowed, context=agent)

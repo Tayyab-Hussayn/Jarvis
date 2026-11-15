@@ -670,6 +670,16 @@ def classify_command(
         )
         return verdict
 
+    # The agents database (#247) holds parked actions and their approvals: a
+    # command that rewrites it could forge what waits for the owner.
+    if "agents.db" in text and not _plain_read(text) and any(
+            _mentions_file(text, Path(config.STATE_DIR) / n)
+            for n in ("agents.db", "agents.db-wal", "agents.db-shm", "agents.db-journal")):
+        verdict.blocked = True
+        verdict.danger = Danger.CRITICAL
+        verdict.block_reason = "Kravein's agents database holds runs waiting for the owner"
+        return verdict
+
     if "mcp.json" in text and _mentions_mcp_config(text) and not _plain_read(text):
         verdict.blocked = True
         verdict.danger = Danger.CRITICAL

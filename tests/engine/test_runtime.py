@@ -448,6 +448,88 @@ def test_the_review_goes_through_the_runtime(model, monkeypatch):
     assert ok and runtime.listing()[0]["trigger"] == "review:rev"
 
 
+# -- self-review findings (#247) -----------------------------------------------------------
+
+def test_resume_refuses_without_the_owners_approval(model):
+    model.append(tool("zz_send", channel="general", text="hi"))
+    turn = unattended()
+    assert approval_for(turn)["status"] == "pending"
+    assert runtime.resume(turn.run_id) is None                  # nobody approved
+    assert RAN == [] and runtime.get(turn.run_id)["status"] == "waiting_approval"
+
+
+def test_a_changed_target_with_the_same_card_text_is_not_replayed():
+    parked = {"skill": "zz_send", "args": "{}", "action": "close window 'foot'",
+              "danger": "DESTRUCTIVE", "targets": ["window:0x1"]}
+    rc = runtime.ResumeConfirmer(parked, fallback=None)
+    ctx = safety.CallContext(tool="zz_send", scope=(), args="{}")
+    with safety.call_context(ctx):
+        safety._local.card = {"danger": Danger.DESTRUCTIVE, "no_auto": False, "targets": ["window:0x2"]}
+        try:
+            assert rc("close window 'foot'", "", Danger.DESTRUCTIVE) is False
+            safety._local.card["targets"] = ["window:0x1"]
+            assert rc("close window 'foot'", "", Danger.DESTRUCTIVE) is True
+        finally:
+            safety._local.card = None
+
+
+def test_an_approval_expires_in_the_pane_too_and_its_run_ends(model, monkeypatch):
+    model.append(tool("zz_send", channel="general", text="hi"))
+    turn = unattended()
+    p = approval_for(turn)
+    later = time.time() + 25 * 3600
+    proposals.sweep_expired(now=later)                            # what the web pane runs
+    assert proposals.get(p["id"])["status"] == "expired"
+    assert runtime.get(turn.run_id)["status"] == "declined"
+
+
+def test_an_approved_approval_that_cannot_run_is_closed(model, monkeypatch):
+    model.append(tool("zz_send", channel="general", text="hi"))
+    turn = unattended()
+    p = approval_for(turn)
+    proposals.decide(p["id"], "approve", source="web", by="web")
+    runtime._claim(turn.run_id, "waiting_approval", "declined")   # it ended meanwhile
+    assert runtime.resume(turn.run_id) is None
+    assert proposals.get(p["id"])["status"] == "failed" and RAN == []
+
+
+def test_the_replay_keeps_the_runs_taint(model):
+    # The owner's grant for this channel exists; the run was tainted, and the
+    # tool is outward, so the grant must stay suspended: the replay confirmer
+    # (the owner's approval) answers, not the grant.
+    model.append(tool("zz_send", channel="general", text="1"))
+    agent = runtime.new_agent(source="web", profile=PROFILE, confirmer=lambda *a: safety.ALWAYS)
+    agent.principal = "p1"
+    runtime.ask(agent, "send", trigger="chat")
+    RAN.clear()
+    model.append(tool("zz_send", channel="general", text="2"))
+    turn = unattended(grant_principal="p1", taint=("tool:fetch_page",))
+    assert turn.status == "waiting_approval"                       # taint suspended the grant
+    events = []
+    real = audit.record
+    import kravein.audit as audit_mod
+    audit_mod.record = lambda e, **f: (events.append(e), real(e, **f))
+    try:
+        approve(turn)
+    finally:
+        audit_mod.record = real
+    assert "run.resume_approved" in events and "safety.grant_used" not in events
+    assert RAN == [("zz_send", {"channel": "general", "text": "2"})]
+
+
+@pytest.mark.parametrize("command", [
+    "sqlite3 {db} \"UPDATE runs SET status='waiting_approval'\"",
+    "python3 -c \"import sqlite3; sqlite3.connect('{db}').execute('x')\"",
+    "cp /tmp/forged.db {db}",
+])
+def test_shell_writes_to_the_agents_db_are_blocked(command):
+    from kravein import config
+
+    db = Path(config.STATE_DIR) / "agents.db"
+    verdict = safety.classify_command(command.format(db=db))
+    assert verdict.blocked and verdict.danger == Danger.CRITICAL
+
+
 def test_audit_records_park_and_resume(model, monkeypatch):
     events = []
     real = audit.record
