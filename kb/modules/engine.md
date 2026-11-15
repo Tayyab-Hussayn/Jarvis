@@ -56,6 +56,9 @@ updated: 2026-11-14
 The example in `tests/engine/fixtures/plugins/example/` is a complete plugin.
 
 ## Public interfaces
+- Clearing + parallel SAFE (#251, v3 2b-2):
+  - **Clearing.** `Agent._clear_tool_results()` runs before every model call after the first and at turn start. Over `llm.history_token_budget` it stubs the oldest tool results (newest `llm.keep_tool_results`=4 kept) to "[earlier X result cleared …: gist… full text in the audit log]". It keeps `tool_call_id`/`name`/`untrusted`, marks the message `cleared`, and audits `agent.tool_results_cleared`. The summariser (`_trim_history`) runs only at a turn boundary, after clearing.
+  - **Parallel.** A round of ≥2 calls that are all SAFE, allowed and available, and not in category `agents`/`tools`, runs on ≤`PARALLEL_MAX` (4) `kravein-tool` threads (`llm.parallel_safe_tools`, default on). Workers re-enter `confirmer_scope` with the same TurnMemory, the principals, a lock-serialised copy of the confirmer (`None` for unattended) and the audit context. Results and messages are recorded in call order; `untrusted` comes from the skill entry; the loop guard is locked (`_GUARD_LOCK`); the declined/park stop is re-checked after the round. Anything else runs serially, as before.
 - Degrade + loop guard (#249, v3 2b-1):
   - The top-level round cap / token budget no longer errors. `_wrap_up` runs for every run (a plain owner answer at the top level, the Reporting format for delegated runs), with a fallback reply if it says nothing; `turn.budget_exhausted` is set, so the runtime records `partial`.
   - `Agent.LOOP_GUARD_LIMIT` (3): the 3rd call with the same tool and the same canonical-JSON arguments in one `_ask` is not dispatched. It returns "Not run: you already called …" and audits `agent.loop_guard`. Failed calls count; the count resets per request (`tests/engine/test_loop_guard.py`).

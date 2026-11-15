@@ -23,6 +23,7 @@ from .llm import LLMError, ToolCall, client
 from .platform import detect
 from .safety import (
     Confirmer,
+    Danger,
     TurnMemory,
     confirmer_scope,
     current_memory,
@@ -165,6 +166,7 @@ _SUMMARY_INPUT_MAX_CHARS = 24000
 _TRIM_TARGET = 0.6
 
 
+_GUARD_LOCK = threading.Lock()   # the loop guard counts from parallel workers (#251)
 _REPORT_MARK = re.compile(r"\[task (t[0-9a-z]+) report\]")
 
 
@@ -515,14 +517,52 @@ class Agent:
                     audit.record("agent.history_save_failed", error=str(exc))
         audit.record("agent.reset", source=self.source)
 
-    def _trim_history(self) -> None:
-        """Keep the history inside the token budget.
+    def _clear_tool_results(self) -> int:
+        """Compaction step one (#251): stub the oldest tool results.
 
-        The oldest whole turns are folded into the rolling summary; if the
-        summary call fails the same turns are simply dropped. A cut is only
+        Over the token budget, each tool result older than the newest
+        ``llm.keep_tool_results`` (4) becomes a one-line stub: tool name, a
+        short gist, and where the full text is. The message itself stays, with
+        its ``tool_call_id``/``name`` (so no provider sees an orphaned call) and
+        its ``untrusted`` mark (the content it came from still shaped the run).
+        No model call: safe in the middle of a tool loop. Returns how many.
+        """
+        budget = int(config.get("llm.history_token_budget", 24000))
+        if budget <= 0:
+            return 0
+        used = sum(estimate_tokens(m) for m in self.messages) + len(self.summary) // 4
+        if used <= budget:
+            return 0
+        keep = max(0, int(config.get("llm.keep_tool_results", 4)))
+        tool_idx = [i for i, m in enumerate(self.messages) if m.get("role") == "tool"]
+        candidates = [i for i in tool_idx[:len(tool_idx) - keep] if not self.messages[i].get("cleared")]
+        cleared = 0
+        for i in candidates:
+            if used <= budget:
+                break
+            m = self.messages[i]
+            before = estimate_tokens(m)
+            gist = " ".join(str(m.get("content") or "").split())[:80]
+            m["content"] = (f"[earlier {m.get('name', 'tool')} result cleared to save space: "
+                            f"{gist}… the full text is in the audit log]")
+            m["cleared"] = True
+            used -= before - estimate_tokens(m)
+            cleared += 1
+        if cleared:
+            audit.record("agent.tool_results_cleared", source=self.source, cleared=cleared,
+                         tokens_after=used)
+        return cleared
+
+    def _trim_history(self) -> None:
+        """Keep the history inside the token budget, at a turn boundary only.
+
+        Old tool results are cleared first (no model call). Only if that is not
+        enough are the oldest whole turns folded into the rolling summary; if
+        the summary call fails the same turns are simply dropped. A cut is only
         ever made at a user message, so a tool call is never separated from
         its result, and the current turn (the last user message) is never cut.
         """
+        self._clear_tool_results()
         budget = int(config.get("llm.history_token_budget", 24000))
         cap = self.max_history
         sizes = [estimate_tokens(m) for m in self.messages]
@@ -818,6 +858,10 @@ class Agent:
                             "sub-agent, or answer now with what you have."
                         )
 
+                    # Mid-turn compaction is clearing only (#251): never a
+                    # summariser call in the middle of a tool loop.
+                    if iteration > 1:
+                        self._clear_tool_results()
                     try:
                         if not escalated:
                             tools = self._current_tools(text, tools)
@@ -868,7 +912,25 @@ class Agent:
                         self._emit("thinking", reply.text)
 
                     declined = False
-                    for call in reply.tool_calls:
+                    # An all-SAFE round runs in parallel (#251); results are
+                    # still recorded below in call order, on this thread.
+                    parallel = None
+                    if not cancelled() and self._parallel_ok(reply.tool_calls, round_allowed):
+                        self._round_allowed = round_allowed
+                        parallel = self._run_parallel(reply.tool_calls)
+                    for idx, call in enumerate(reply.tool_calls):
+                        if parallel is not None:
+                            result, taint = parallel[idx]
+                            turn.tool_calls.append(call.name)
+                            message = {
+                                "role": "tool", "name": call.name,
+                                "tool_call_id": call.id or call.name,
+                                "content": self._cap_result(call.name, result),
+                            }
+                            if taint:
+                                message["untrusted"] = taint
+                            self.messages.append(message)
+                            continue
                         if declined:
                             self.messages.append({
                                 "role": "tool",
@@ -910,6 +972,11 @@ class Agent:
                             declined or retried_declined_target()
                             or (self.end_turn_check is not None and bool(self.end_turn_check()))
                         )
+                    if parallel is not None:
+                        # Same stop rules as the serial path, checked once the
+                        # round is in (a run-time card declined, a park).
+                        declined = retried_declined_target() or (
+                            self.end_turn_check is not None and bool(self.end_turn_check()))
 
                     if declined:
                         # The owner said no. Another round would only let the
@@ -984,6 +1051,78 @@ class Agent:
         return turn
 
     LOOP_GUARD_LIMIT = 3     # the 3rd identical call in one run is refused
+    PARALLEL_MAX = 4         # workers for an all-SAFE round (#251)
+    _SERIAL_CATEGORIES = frozenset({"agents", "tools"})   # delegate, plan, more_tools: never parallel
+
+    def _parallel_ok(self, calls: list[ToolCall], allowed: "frozenset[str] | None") -> bool:
+        """Only a round of several SAFE calls the round allows, none of which
+        changes the run's own state (delegate, plans, routing), runs in
+        parallel. Anything else stays serial, exactly as before."""
+        if len(calls) < 2 or not bool(config.get("llm.parallel_safe_tools", True)):
+            return False
+        for call in calls:
+            entry = registry.get_skill(call.name)
+            if entry is None or entry.danger != Danger.SAFE or entry.category in self._SERIAL_CATEGORIES:
+                return False
+            if registry.is_plugin(entry):
+                return False          # plugin code is not known to be thread-safe
+            if allowed is not None and entry.name not in allowed:
+                return False
+            if not entry.available()[0]:
+                return False
+        return True
+
+    def _run_parallel(self, calls: list[ToolCall]) -> list[tuple[str, list[str]]]:
+        """Run SAFE calls on a small pool; ``[(result, taint)]`` in call order.
+
+        Safety state is thread-local, so each worker re-enters the caller's
+        scope: the SAME TurnMemory (denials, taint, the declined flag), the
+        same principals and audit context, and the caller's confirmer, which a
+        lock serialises (a SAFE skill can still raise a card at run time, e.g.
+        a secret read; two cards never race). An unattended run keeps no
+        confirmer at all, so it still refuses as it did.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        from .safety import _current_principal, _grant_principal, _deny, get_confirmer
+
+        memory = current_memory()
+        parent = get_confirmer()
+        principal, grant_owner = _current_principal(), _grant_principal()
+        fields = dict(getattr(audit._ctx, "fields", {}) or {})
+        lock = threading.Lock()
+
+        if parent is _deny:
+            confirmer = None
+        else:
+            def confirmer(action: str, detail: str, danger: Any) -> Any:
+                with lock:
+                    # enforce checked the denial memory before taking this lock;
+                    # a worker that waited while the owner declined the same
+                    # target must not ask again (serially it would be refused).
+                    from .safety import current_card
+
+                    card = current_card() or {}
+                    if set(card.get("targets") or ()) & memory.targets:
+                        memory.retried_declined = True
+                        return False
+                    return parent(action, detail, danger)
+            if hasattr(parent, "attended"):
+                confirmer.attended = parent.attended  # type: ignore[attr-defined]
+
+        def work(call: ToolCall) -> tuple[str, list[str]]:
+            with confirmer_scope(confirmer, memory, principal=principal,
+                                 grant_principal=grant_owner or None), audit.context(**fields):
+                result = self._run_tool(call)
+            entry = registry.get_skill(call.name)
+            taint = ([entry.origin or f"tool:{entry.name}"]
+                     if entry is not None and entry.untrusted_output else [])
+            return result, taint
+
+        audit.record("agent.parallel_round", source=self.source, tools=[c.name for c in calls])
+        with ThreadPoolExecutor(max_workers=min(self.PARALLEL_MAX, len(calls)),
+                                thread_name_prefix="kravein-tool") as pool:
+            return list(pool.map(work, calls))
 
     def _run_tool(self, call: ToolCall) -> str:
         """Execute one tool call and return its textual result."""
@@ -1002,15 +1141,18 @@ class Agent:
         allowed_now = self._round_allowed if self._round_allowed is not None else self._allowed
         key = (call.name, json.dumps(call.arguments, sort_keys=True, default=str))
         # A tool this round does not allow is refused by dispatch (the profile
-        # rule); the guard only counts calls that could actually run.
-        if allowed_now is None or call.name in allowed_now:
-            counts[key] = counts.get(key, 0) + 1
-        if counts.get(key, 0) >= self.LOOP_GUARD_LIMIT and (
+        # rule); the guard only counts calls that could actually run. Locked:
+        # parallel SAFE calls (#251) count from several threads.
+        with _GUARD_LOCK:
+            if allowed_now is None or call.name in allowed_now:
+                counts[key] = counts.get(key, 0) + 1
+            seen = counts.get(key, 0)
+        if seen >= self.LOOP_GUARD_LIMIT and (
                 allowed_now is None or call.name in allowed_now):
             audit.record("agent.loop_guard", source=self.source, tool=call.name,
-                         count=counts[key])
+                         count=seen)
             result = (f"Not run: you already called {call.name} with these exact arguments "
-                      f"{counts[key] - 1} times in this request. Use the result you have, "
+                      f"{seen - 1} times in this request. Use the result you have, "
                       "or change your approach (other arguments or another tool).")
             self._emit("tool_result", result, name=call.name, call_id=call_id, result=result)
             return result
