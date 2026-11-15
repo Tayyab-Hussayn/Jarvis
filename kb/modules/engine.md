@@ -56,6 +56,9 @@ updated: 2026-11-14
 The example in `tests/engine/fixtures/plugins/example/` is a complete plugin.
 
 ## Public interfaces
+- Degrade + loop guard (#249, v3 2b-1):
+  - The top-level round cap / token budget no longer errors. `_wrap_up` runs for every run (a plain owner answer at the top level, the Reporting format for delegated runs), with a fallback reply if it says nothing; `turn.budget_exhausted` is set, so the runtime records `partial`.
+  - `Agent.LOOP_GUARD_LIMIT` (3): the 3rd call with the same tool and the same canonical-JSON arguments in one `_ask` is not dispatched. It returns "Not run: you already called …" and audits `agent.loop_guard`. Failed calls count; the count resets per request (`tests/engine/test_loop_guard.py`).
 - Runtime, durable runs, parked approvals (#247, v3 phase 2a), `kravein/runtime.py`:
   - **One entry point.** `submit(Run(source, text, principal, profile, attended, trigger, thread_id, confirmer, observer, stop, agent, allowed, grant_principal, taint)) -> Turn`, with `Turn.run_id`, `Turn.status` and `Turn.parked` set.
     - `ask(agent, text, stop, trigger=, allowed=)` is the per-turn call for a session's own agent. The server's three turn paths, the CLI REPL / `ask` and local voice use it; jobs, the daemon and the daily review use `submit`.

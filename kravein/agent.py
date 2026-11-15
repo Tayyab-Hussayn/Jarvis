@@ -730,6 +730,7 @@ class Agent:
         escalated = False
         self._stop = stop
         self._round_allowed = None
+        self._call_counts = {}       # loop guard: per run, never across requests
         # Lets `decide_proposal` tell "proposed earlier" from "proposed this turn".
         self.turn_no = getattr(self, "turn_no", 0) + 1
         self.turn_text = text
@@ -927,19 +928,12 @@ class Agent:
                     if cancelled():
                         return give_up("after_tools")
 
-                # Budget exhausted.
-                if self.partial_on_budget:
-                    return self._wrap_up(
-                        turn, system,
-                        exhausted or f"used all {max_iterations} tool rounds",
-                    )
-                turn.error = (
-                    f"Stopped after {max_iterations} tool rounds without a final "
-                    "answer. The request may be too broad — try narrowing it."
+                # Budget exhausted: degrade, never hard-fail (#249). Top-level
+                # and delegated runs both end with a wrap-up answer; the run
+                # is `partial` (runtime reads `budget_exhausted`).
+                return self._wrap_up(
+                    turn, system, exhausted or f"used all {max_iterations} tool rounds",
                 )
-                self._emit("error", turn.error)
-                audit.record("agent.budget_exhausted", source=self.source)
-                return turn
 
     def _wrap_up(self, turn: Turn, system: str, reason: str) -> Turn:
         """A delegated run out of budget: one tool-less call for a partial report.
@@ -950,13 +944,21 @@ class Agent:
         """
         turn.budget_exhausted = reason
         audit.record("agent.budget_exhausted", source=self.source, reason=reason,
-                     iterations=turn.iterations, wrap_up=True)
-        note = (
-            f"[context] You have {reason}. Do not call any tool. Write your final "
-            "report now, in the Reporting format, with OUTCOME: partial. Say what "
-            "you did (with the evidence a tool result gave), keep your PLAN with "
-            "each item's real status, and list under LEFT what still has to be done."
-        )
+                     iterations=turn.iterations, wrap_up=True, depth=self.depth)
+        if self.partial_on_budget:
+            note = (
+                f"[context] You have {reason}. Do not call any tool. Write your final "
+                "report now, in the Reporting format, with OUTCOME: partial. Say what "
+                "you did (with the evidence a tool result gave), keep your PLAN with "
+                "each item's real status, and list under LEFT what still has to be done."
+            )
+        else:
+            # The agent the owner talks to: a plain answer, not a sub-agent report.
+            note = (
+                f"[context] You have {reason} on this request. Do not call any tool. "
+                "Answer the owner now: say plainly what you found or did so far (with "
+                "the evidence a tool result gave) and what is still left, in a few lines."
+            )
         try:
             kwargs = {"prefer": self.profile.model} if (
                 self.profile is not None and self.profile.model) else {}
@@ -969,11 +971,19 @@ class Agent:
         except Exception as exc:                      # LLMError or anything else
             audit.record("agent.wrap_up_failed", source=self.source, error=str(exc))
             text = ""
+        if not text and not self.partial_on_budget:
+            # The owner still gets an answer, never a bare error (a delegated
+            # run's report is built by run_child from its plan instead).
+            text = (f"I {reason} and stopped before finishing. "
+                    f"Tools I used: {', '.join(dict.fromkeys(turn.tool_calls)) or 'none'}. "
+                    "Ask me to continue, or narrow the request.")
         if text:
             turn.reply = text
             self.messages.append({"role": "assistant", "content": text})
             self._emit("answer", text)
         return turn
+
+    LOOP_GUARD_LIMIT = 3     # the 3rd identical call in one run is refused
 
     def _run_tool(self, call: ToolCall) -> str:
         """Execute one tool call and return its textual result."""
@@ -983,6 +993,27 @@ class Agent:
             "tool", f"{call.name}({args_text})",
             name=call.name, args=call.arguments, call_id=call_id,
         )
+
+        # Loop guard (#249), in code: the same tool with the same arguments a
+        # third time in one run does not run again. Failed calls count too.
+        counts = getattr(self, "_call_counts", None)
+        if counts is None:
+            counts = self._call_counts = {}
+        allowed_now = self._round_allowed if self._round_allowed is not None else self._allowed
+        key = (call.name, json.dumps(call.arguments, sort_keys=True, default=str))
+        # A tool this round does not allow is refused by dispatch (the profile
+        # rule); the guard only counts calls that could actually run.
+        if allowed_now is None or call.name in allowed_now:
+            counts[key] = counts.get(key, 0) + 1
+        if counts.get(key, 0) >= self.LOOP_GUARD_LIMIT and (
+                allowed_now is None or call.name in allowed_now):
+            audit.record("agent.loop_guard", source=self.source, tool=call.name,
+                         count=counts[key])
+            result = (f"Not run: you already called {call.name} with these exact arguments "
+                      f"{counts[key] - 1} times in this request. Use the result you have, "
+                      "or change your approach (other arguments or another tool).")
+            self._emit("tool_result", result, name=call.name, call_id=call_id, result=result)
+            return result
 
         result = registry.dispatch(
             call.name,
